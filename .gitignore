@@ -2,7 +2,6 @@ __pycache__
 *.egg-info
 .idea
 examples
-data/
 *.mp4
 *.png
 *.pyc
@@ -17,7 +16,6 @@ old_runs
 .DS_Store
 env37
 MUJOCO_LOG.TXT
-logs/
 checkpoints/*
 backup_data
 !checkpoints/rex_extract_2_saved*
