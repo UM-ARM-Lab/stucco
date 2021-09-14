@@ -1161,17 +1161,17 @@ class FloatingGripperEnv(PlanarArmEnv):
             z = 0.075
             xs = [0.3, 0.8]
             ys = [-0.3, 0.3]
-            objId = p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            objId = p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                basePosition=[xs[0], ys[0], z])
             self.movable.append(objId)
-            objId = p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            objId = p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                basePosition=[xs[1], ys[1], z])
             self.movable.append(objId)
 
-            objId = p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=True,
+            objId = p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=True,
                                basePosition=[xs[1], ys[0], z])
             self.immovable.append(objId)
-            objId = p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=True,
+            objId = p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=True,
                                basePosition=[xs[0], ys[1], z])
             self.immovable.append(objId)
         elif self.level == Levels.MOVEABLE_CANS:
@@ -1179,27 +1179,27 @@ class FloatingGripperEnv(PlanarArmEnv):
             z = 0.075 * scale
             xs = [0.3, 0.7]
             ys = [-0.2, 0.2]
-            self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                            basePosition=[xs[0], ys[0], z], globalScaling=scale))
-            self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                            basePosition=[xs[1], ys[1], z], globalScaling=scale))
-            self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                            basePosition=[xs[1], ys[0], z], globalScaling=scale))
-            self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                            basePosition=[xs[0], ys[1], z], globalScaling=scale))
-            self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [xs[1] + 0.48, 0., z],
+            self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [xs[1] + 0.48, 0., z],
                                              p.getQuaternionFromEuler([0, 0, np.pi / 2]), useFixedBase=True,
                                              globalScaling=0.5))
-            self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [xs[0], ys[0] - 0.43, z],
+            self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [xs[0], ys[0] - 0.43, z],
                                              p.getQuaternionFromEuler([0, 0, 0]), useFixedBase=True,
                                              globalScaling=0.5))
         elif self.level in [Levels.STRAIGHT_LINE, Levels.WALL_BEHIND]:
             scale = 1.0
             z = 0.075 * scale
-            self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+            self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                            basePosition=[0.5, 0, z]))
             if self.level == Levels.WALL_BEHIND:
-                self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [0.21, 0., z],
+                self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [0.21, 0., z],
                                                  p.getQuaternionFromEuler([0, 0, -np.pi / 2]), useFixedBase=True,
                                                  globalScaling=0.5))
         elif self.level in [Levels.NCB_C, Levels.NCB_S, Levels.NCB_T]:
@@ -1207,24 +1207,24 @@ class FloatingGripperEnv(PlanarArmEnv):
             z = 0.075 * scale
             y = 0
             width = 0.85
-            self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [-0.3, 0, z],
+            self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [-0.3, 0, z],
                                              p.getQuaternionFromEuler([0, 0, -np.pi / 2]), useFixedBase=True,
                                              globalScaling=0.5))
-            self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [0.5, -width / 2, z],
+            self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [0.5, -width / 2, z],
                                              p.getQuaternionFromEuler([0, 0, 0]), useFixedBase=True,
                                              globalScaling=0.5))
-            self.immovable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "wall.urdf"), [0.5, width / 2, z],
+            self.immovable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "wall.urdf"), [0.5, width / 2, z],
                                              p.getQuaternionFromEuler([0, 0, 0]), useFixedBase=True,
                                              globalScaling=0.5))
             if self.level == Levels.NCB_C:
-                self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "tester.urdf"), useFixedBase=False,
+                self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "tester.urdf"), useFixedBase=False,
                                                basePosition=[0.7, y, z]))
             elif self.level == Levels.NCB_S:
-                self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "block_tall.urdf"), useFixedBase=False,
+                self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "block_tall.urdf"), useFixedBase=False,
                                                basePosition=[0.7, y, z]))
                 p.changeVisualShape(self.movable[-1], -1, rgbaColor=DEFAULT_MOVABLE_RGBA)
             elif self.level == Levels.NCB_T:
-                self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "topple_cylinder.urdf"), useFixedBase=False,
+                self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "topple_cylinder.urdf"), useFixedBase=False,
                                                basePosition=[0.7, y, z + 0.02],
                                                baseOrientation=p.getQuaternionFromEuler([0, np.pi / 2, np.pi / 2])))
         elif self.level is Levels.RANDOM:
@@ -1253,7 +1253,7 @@ class FloatingGripperEnv(PlanarArmEnv):
                         orientation = p.getQuaternionFromEuler([0, 0, yaw])
                     position = [random.uniform(-bound, bound), random.uniform(-bound, bound), z]
                     # even if immovable have to initialize as having movable base to enable collision checks
-                    obj = p.loadURDF(os.path.join(cfg.ROOT_DIR, obj_type), useFixedBase=False,
+                    obj = p.loadURDF(os.path.join(cfg.URDF_DIR, obj_type), useFixedBase=False,
                                      globalScaling=global_scale * 0.7 if obj_type == "wall.urdf" else global_scale,
                                      basePosition=position,
                                      baseOrientation=orientation)
@@ -1286,7 +1286,7 @@ class FloatingGripperEnv(PlanarArmEnv):
                     # recreate object and make it fixed base
                     pose = p.getBasePositionAndOrientation(obj)
                     p.removeBody(obj)
-                    obj = p.loadURDF(os.path.join(cfg.ROOT_DIR, obj_type), useFixedBase=True,
+                    obj = p.loadURDF(os.path.join(cfg.URDF_DIR, obj_type), useFixedBase=True,
                                      globalScaling=global_scale * 0.7 if obj_type == "wall.urdf" else global_scale,
                                      basePosition=pose[0],
                                      baseOrientation=pose[1])
@@ -1315,7 +1315,7 @@ class FloatingGripperEnv(PlanarArmEnv):
                 self._adjust_mass_and_visual(self.movable[-1], 1.8)
                 self.movable.append(make_cylinder(0.15 * 1.2, h * 1.2, [s, -s, z], [0, 0, 0]))
                 self._adjust_mass_and_visual(self.movable[-1], 1)
-                self.movable.append(p.loadURDF(os.path.join(cfg.ROOT_DIR, "topple_cylinder.urdf"), useFixedBase=False,
+                self.movable.append(p.loadURDF(os.path.join(cfg.URDF_DIR, "topple_cylinder.urdf"), useFixedBase=False,
                                                basePosition=[-s, -s, z + 0.02],
                                                baseOrientation=p.getQuaternionFromEuler([0, np.pi / 2, np.pi / 2])))
                 self._adjust_mass_and_visual(self.movable[-1], 1)
@@ -1371,7 +1371,7 @@ class FloatingGripperEnv(PlanarArmEnv):
         self.endEffectorOrientation = p.getQuaternionFromEuler([0, np.pi / 2, 0])
 
         # use a floating gripper
-        self.gripperId = p.loadURDF(os.path.join(cfg.ROOT_DIR, "panda_gripper.urdf"), self.init,
+        self.gripperId = p.loadURDF(os.path.join(cfg.URDF_DIR, "panda_gripper.urdf"), self.init,
                                     self.endEffectorOrientation)
         p.changeDynamics(self.gripperId, PandaJustGripperID.FINGER_A, lateralFriction=2)
         p.changeDynamics(self.gripperId, PandaJustGripperID.FINGER_B, lateralFriction=2)

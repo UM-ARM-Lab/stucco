@@ -1,8 +1,9 @@
 import os
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../tampc'))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../stucco'))
 DATA_DIR = os.path.join(ROOT_DIR, 'data')
 VIDEO_DIR = os.path.join(ROOT_DIR, 'videos')
+URDF_DIR = os.path.join(ROOT_DIR, 'urdf')
 
 PIC_SAVE_DIR = os.path.expanduser('~/Downloads/temp/pics')
 
