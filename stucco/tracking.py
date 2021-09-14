@@ -7,6 +7,7 @@ import abc
 import enum
 import math
 from torch.distributions.multivariate_normal import MultivariateNormal
+import matplotlib.pyplot as plt
 from arm_pytorch_utilities import tensor_utils, optim, serialization, linalg, draw
 from stucco.detection import ContactDetector
 from stucco.filters.ukf import EnvConditionedUKF
@@ -17,18 +18,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ContactParameters:
+    max_pos_move_per_action: float
+    length: float = 0.1
+    penetration_length: float = 0.01
+    hard_assignment_threshold: float = 0.4  # for soft assignment, probability threshold for belonging to same component
+    intersection_tolerance: float = 0.002  # how much intersection into the robot's surface we ignore
+
+
+# deprecated, testing out variants of the algorithm
+@dataclass
+class HardContactParameters:
     state_to_pos: typing.Callable[[torch.tensor], torch.tensor]
     pos_to_state: typing.Callable[[torch.tensor], torch.tensor]
     control_similarity: typing.Callable[[torch.tensor, torch.tensor], float]
     state_to_reaction: typing.Callable[[torch.tensor], torch.tensor]
-    max_pos_move_per_action: float
-    length: float = 0.1
     weight_multiplier: float = 0.1
     ignore_below_weight: float = 0.2
-    hard_assignment_threshold: float = 0.2  # for soft assignment, probability threshold for belonging to same component
-    intersection_tolerance: float = 0.002  # how much intersection into the robot's surface we ignore
-    # approx_robot_radius: float = 0.1
-    # min_friction_cossim: float = 0.3  # (0,1) where 0 means very high friction and 1 means no friction
 
 
 class MeasurementType(enum.Enum):
@@ -45,25 +50,26 @@ def approx_conic_similarity(a_norm, a_origin, b_norm, b_origin):
 
 class ContactObject(serialization.Serializable):
     def __init__(self, empty_local_model: typing.Optional[typing.Any], params: ContactParameters,
+                 hard_params: HardContactParameters,
                  assume_linear_scaling=True):
         # points on this object that are tracked
         self.points = None
         self.actions = None
 
         self.dynamics = empty_local_model
-        self.state_to_pos = params.state_to_pos
-        self.pos_to_state = params.pos_to_state
+        self.state_to_pos = hard_params.state_to_pos
+        self.pos_to_state = hard_params.pos_to_state
 
         self.assume_linear_scaling = assume_linear_scaling
 
         self.p = params
+        self.hp = hard_params
         self.length_parameter = params.length
-        self.u_similarity = params.control_similarity
+        self.u_similarity = hard_params.control_similarity
         self.n_x = 2  # state is center point
         self.n_y = 2  # observe robot position
         self.n_u = 2
 
-        # TODO move this in to params
         self.cluster_close_to_ratio = 0.5
 
     @property
@@ -117,7 +123,6 @@ class ContactObject(serialization.Serializable):
 
     def move_all_points(self, dpos):
         self.points += dpos
-        # TODO may need to change the training input points for dynamics to be self.points - self.mu
 
     def merge_objects(self, other_objects):
         self.points = torch.cat([self.points] + [obj.points for obj in other_objects])
@@ -253,8 +258,9 @@ class ContactObject(serialization.Serializable):
 
 
 class ContactUKF(ContactObject):
-    def __init__(self, empty_local_model: typing.Optional[typing.Any], params: ContactParameters, **kwargs):
-        super(ContactUKF, self).__init__(empty_local_model, params, **kwargs)
+    def __init__(self, empty_local_model: typing.Optional[typing.Any], params: ContactParameters,
+                 hard_params: HardContactParameters, **kwargs):
+        super(ContactUKF, self).__init__(empty_local_model, params, hard_params, **kwargs)
         # process and observation noise, respectively
         self.device = optim.get_device()
         self.sigma = 0.0001
@@ -268,7 +274,7 @@ class ContactUKF(ContactObject):
         # prior gaussian of position
         self.mu_bar = None
         self.cov_bar = None
-        self.weight_multiplier = params.weight_multiplier / (self.sigma * self.n_x)
+        self.weight_multiplier = hard_params.weight_multiplier / (self.sigma * self.n_x)
 
     @property
     def center_point(self):
@@ -343,14 +349,12 @@ class ContactUKF(ContactObject):
         return super(ContactUKF, self).add_transition(pt, u, dpt)
 
 
-import matplotlib.pyplot as plt
-
-
 class ContactPF(ContactObject):
-    def __init__(self, empty_local_model: typing.Optional[typing.Any], params: ContactParameters, n_particles=500,
+    def __init__(self, empty_local_model: typing.Optional[typing.Any], params: ContactParameters,
+                 hard_params: HardContactParameters, n_particles=500,
                  n_eff_threshold=1.,
                  **kwargs):
-        super(ContactPF, self).__init__(empty_local_model, params, **kwargs)
+        super(ContactPF, self).__init__(empty_local_model, params, hard_params, **kwargs)
         self.device = optim.get_device()
 
         self.n_particles = n_particles
@@ -371,7 +375,7 @@ class ContactPF(ContactObject):
                                                       torch.eye(self.n_x,
                                                                 device=self.device) * self.dynamics_noise_spread)
 
-        self.weight_multiplier = 2 * params.weight_multiplier / (self.dynamics_noise_spread * self.n_x)
+        self.weight_multiplier = 2 * hard_params.weight_multiplier / (self.dynamics_noise_spread * self.n_x)
         # don't care about weight for now
 
         self.plot = False
@@ -422,11 +426,9 @@ class ContactPF(ContactObject):
         return weight_exp
 
     def state_dict(self) -> dict:
-        # TODO
         pass
 
     def load_state_dict(self, state: dict) -> bool:
-        # TODO
         pass
 
     def filter_update(self, measurement, environment, observed_movement=True):
@@ -587,7 +589,7 @@ class ContactSet(serialization.Serializable):
         self.visualizer = visualizer
 
     @abc.abstractmethod
-    def update(self, x, u, dx, contact_detector: ContactDetector, reaction, info=None, visualizer=None):
+    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
         """Update contact set with observed transition"""
 
     @abc.abstractmethod
@@ -602,8 +604,10 @@ class ContactSet(serialization.Serializable):
 
 
 class ContactSetHard(ContactSet):
-    def __init__(self, *args, contact_object_factory: typing.Callable[[], ContactObject] = None, **kwargs):
+    def __init__(self, *args, hard_params: HardContactParameters,
+                 contact_object_factory: typing.Callable[[], ContactObject] = None, **kwargs):
         super(ContactSetHard, self).__init__(*args, **kwargs)
+        self.hp = hard_params
         self._obj: typing.List[ContactObject] = []
         # cached center of all points
         self.center_points = None
@@ -686,7 +690,7 @@ class ContactSetHard(ContactSet):
 
         center_points, points, actions = contact_data
         # norm across spacial dimension, sum across each object
-        d = (center_points - self.p.state_to_pos(goal_x)).norm(dim=-1)
+        d = (center_points - self.hp.state_to_pos(goal_x)).norm(dim=-1)
         # modify by weight of contact object existing
         weights = torch.tensor([c.weight for c in self._obj], dtype=d.dtype, device=d.device)
         return (1 / d * weights.view(-1, 1)).sum(dim=0)
@@ -705,21 +709,26 @@ class ContactSetHard(ContactSet):
                 continue
             # we're using the x before contact because our estimate of the object points haven't moved yet
             clustered, _ = cc.clusters_to_object(pt.view(1, -1), u.view(1, -1), self.p.length,
-                                                 self.p.control_similarity)
+                                                 self.hp.control_similarity)
             if clustered[0]:
                 res_c.append(cc)
                 res_i.append(i)
 
         return res_c, res_i
 
-    def update(self, x, u, dx, contact_detector: ContactDetector, reaction, info=None, visualizer=None):
+    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
         """Returns updated contact object"""
-        environment = {'robot': self.p.state_to_pos(x), 'control': u, 'dx': dx, 'dobj': self.p.state_to_pos(dx)}
+        environment = {'robot': x, 'dx': dx, 'dobj': dx}
         if info is not None:
+            u = info['u']
+            r = info['reaction']
+            unit_reaction = r / r.norm()
             # debugging info
             environment['obj'] = info.get(InfoKeys.OBJ_POSES, None)
-            # TODO have a better way of selecting 2-D / 3-D
-            environment['dobj'] = info[InfoKeys.DEE_IN_CONTACT][:2]
+            environment['control'] = u
+        else:
+            u = torch.zeros_like(x)
+            unit_reaction = torch.zeros_like(x)
 
         cur_pt = contact_detector.get_last_contact_location()
         if cur_pt is None:
@@ -745,7 +754,6 @@ class ContactSetHard(ContactSet):
         if len(cc) > 1:
             c = self.merge_objects(ii)
         # update c with observation (only this one; other UFKs didn't receive an observation)
-        unit_reaction = reaction / reaction.norm()
         # also do prediction
         for ci in self._obj:
             if ci is not c:
@@ -859,7 +867,6 @@ class ContactSetSoft(ContactSet):
         return self._distance_to_probability(dd)
 
     def get_posterior_points(self):
-        # TODO cluster then take center of biggest cluster?
         return self.map_particle
 
     def _partition_points(self, adjacent):
@@ -873,7 +880,7 @@ class ContactSetSoft(ContactSet):
                 i += 1
                 continue
             this_group = adjacent[i].clone()
-            # TODO should use some graph clique finding algorithm; for simplicity for now just look at 1 depth
+            # TODO should use some connected component finding algo; for simplicity for now just look at 1 depth
             for j in range(N):
                 if this_group[j]:
                     this_group |= adjacent[j]
@@ -925,7 +932,7 @@ class ContactSetSoft(ContactSet):
         self.sampled_configs[adjacent] += dx
         return adjacent
 
-    def update_particles(self, adjacent, config=None):
+    def update_particles(self, config=None):
         """Update the weight of each particle corresponding to their ability to explain the observation"""
         if self.pts is None:
             return
@@ -954,8 +961,8 @@ class ContactSetSoft(ContactSet):
         # prevent every particle going to 0
         obs_weights -= obs_weights.max()
         # convert to probability
-        self.penetration_sigma = 1 / (self.p.length * 0.1)
-        obs_weights = self._distance_to_probability(obs_weights, sigma=self.penetration_sigma)
+        penetration_sigma = 1 / self.p.penetration_length
+        obs_weights = self._distance_to_probability(obs_weights, sigma=penetration_sigma)
 
         min_weight = 1e-15
         self.weights = self.weights * obs_weights
@@ -1014,28 +1021,29 @@ class ContactSetSoft(ContactSet):
             self.sampled_pts[i, bad_pts] = self.sampled_pts[i, good_pts][closest_idx]
             self.sampled_configs[i, bad_pts] = self.sampled_configs[i, good_pts][closest_idx]
 
-    def update(self, x, u, dx, contact_detector: ContactDetector, reaction, info=None, visualizer=None):
-        environment = {'robot': self.p.state_to_pos(x), 'control': u, 'dx': dx, 'dobj': self.p.state_to_pos(dx)}
+    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
         d = self.device
         dtype = contact_detector.dtype
-        # debugging info
+        x, dx = tensor_utils.ensure_tensor(d, dtype, x, dx)
+
         if info is not None:
-            # debugging info
-            environment['obj'] = info.get(InfoKeys.OBJ_POSES, None)
-            # TODO have a better way of selecting 2-D / 3-D
-            environment['dobj'] = tensor_utils.ensure_tensor(d, dtype, info[InfoKeys.DEE_IN_CONTACT][:2])
+            u = info['u']
+        else:
+            u = torch.zeros_like(x)
+
         cur_pt = contact_detector.get_last_contact_location(visualizer=visualizer)
-        cur_config = tensor_utils.ensure_tensor(d, dtype, self.p.state_to_pos(x + dx))
+        cur_config = tensor_utils.ensure_tensor(d, dtype, x + dx)
         if cur_pt is None:
             # step without contact, eliminate particles that conflict with this config in freespace
-            self.update_particles(None, cur_config)
+            self.update_particles(cur_config)
             return None, None
 
+        # TODO factor this out as dynamics
         # where contact point would be without this movement
         z = cur_pt[2]
         cur_pt = cur_pt[:2]
-        prev_pt = cur_pt - environment['dobj']
-        prev_config = cur_config - environment['dobj']
+        prev_pt = cur_pt - dx
+        prev_config = cur_config - dx
 
         if visualizer is not None:
             visualizer.draw_point(f'c', prev_pt.cpu(), height=z.item(), color=(0, 0, 1))
@@ -1055,9 +1063,9 @@ class ContactSetSoft(ContactSet):
                 [self.sampled_configs, prev_config.view(1, -1).repeat(self.n_particles, 1, 1)], dim=1)
 
         # classic alternation of predict and update steps
-        adjacent = self.predict_particles(environment['dobj'])
+        self.predict_particles(dx)
         # check all configs against all points
-        self.update_particles(adjacent, None)
+        self.update_particles(None)
 
         return True, True
 

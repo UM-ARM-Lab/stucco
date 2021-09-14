@@ -13,6 +13,7 @@ from arm_pytorch_utilities import tensor_utils
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
 from stucco.cluster_baseline import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco.env.env import InfoKeys
 from stucco.evaluation import object_robot_penetration_score
 from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
     SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed
@@ -173,12 +174,10 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
         skip_update = (u is None) or (len(self.x_history) < 2) or (
                 (self.u_history[-1] is None) or (len(self.u_history[-1]) > 2))
         if not skip_update:
-            prev_u = torch.tensor(self.u_history[-1][:2])
-            self.contact_set.update(self.x_history[-2], prev_u,
-                                    self.x_history[-1] - self.x_history[-2],
-                                    self.contact_detector, torch.tensor(info['reaction']),
-                                    info=info,
-                                    visualizer=visualizer)
+            x = self.x_history[-2][:2]
+            dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+            info['u'] = torch.tensor(self.u_history[-1][:2])
+            self.contact_set.update(x, dx, self.contact_detector, info=info, visualizer=visualizer)
 
         self.u_history.append(u)
         return u, skip_update

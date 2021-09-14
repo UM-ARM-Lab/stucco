@@ -48,9 +48,10 @@ class RetrievalController(Controller):
 
         if self.contact_detector.in_contact():
             self.remaining_random_actions = self.max_walk_length
-            self.contact_set.update(self.x_history[-2], torch.tensor(self.u_history[-1]),
-                                    self.x_history[-1] - self.x_history[-2],
-                                    self.contact_detector, torch.tensor(info['reaction']), info=info)
+            x = self.x_history[-2][:2]
+            dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+            info['u'] = torch.tensor(self.u_history[-1][:2])
+            self.contact_set.update(x, dx, self.contact_detector, info=info)
 
         if self.remaining_random_actions > 0:
             u = np.random.uniform(low=self.u_min, high=self.u_max, size=self.nu)
@@ -117,9 +118,10 @@ class OursRetrievalPredeterminedController(RetrievalPredeterminedController):
         if self.contact_detector.in_contact():
             self.contact_indices.append(self.i)
 
-        self.contact_set.update(self.x_history[-2], torch.tensor(self.u_history[-1]),
-                                self.x_history[-1] - self.x_history[-2],
-                                self.contact_detector, torch.tensor(info['reaction']), info=info)
+        x = self.x_history[-2][:2]
+        dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+        info['u'] = torch.tensor(self.u_history[-1])
+        self.contact_set.update(x, dx, self.contact_detector, info=info)
 
 
 def rot_2d_mat_to_angle(T):
@@ -265,9 +267,10 @@ class HardTrackingIterator:
 
 
 class OurHardTrackingMethod(OurTrackingMethod):
-    def __init__(self, env, contact_params):
+    def __init__(self, env, contact_params, hard_contact_params):
         self.contact_params = contact_params
-        self._contact_set = tracking.ContactSetHard(self.contact_params,
+        self.hard_contact_params = hard_contact_params
+        self._contact_set = tracking.ContactSetHard(self.contact_params, hard_params=hard_contact_params,
                                                     contact_object_factory=self.create_contact_object)
         super(OurHardTrackingMethod, self).__init__(env)
 
@@ -279,7 +282,7 @@ class OurHardTrackingMethod(OurTrackingMethod):
         return HardTrackingIterator(iter(self.contact_set))
 
     def create_contact_object(self):
-        return tracking.ContactUKF(None, self.contact_params)
+        return tracking.ContactUKF(None, self.contact_params, self.hard_contact_params)
 
 
 class SklearnPredeterminedController(RetrievalPredeterminedController):
@@ -398,10 +401,10 @@ class KeyboardController(Controller):
 
     @abc.abstractmethod
     def update(self, obs, info):
-        # obs == self.x_history[-1]
-        self.contact_set.update(self.x_history[-2], torch.tensor(self.u_history[-1]),
-                                self.x_history[-1] - self.x_history[-2],
-                                self.contact_detector, torch.tensor(info['reaction']), info=info)
+        x = self.x_history[-2][:2]
+        dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+        info['u'] = torch.tensor(self.u_history[-1])
+        self.contact_set.update(x, dx, self.contact_detector, info=info)
 
     def command(self, obs, info=None):
         self.x_history.append(obs)

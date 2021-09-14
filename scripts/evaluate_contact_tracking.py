@@ -15,6 +15,7 @@ import re
 import matplotlib.pyplot as plt
 import typing
 
+from arm_pytorch_utilities import tensor_utils
 from sklearn.cluster import KMeans, DBSCAN, Birch
 
 from stucco.defines import NO_CONTACT_ID, RunKey, CONTACT_RES_FILE, RUN_AMBIGUITY, CONTACT_ID, CONTACT_POINT_CACHE
@@ -51,7 +52,7 @@ class OurMethodFactory:
         self.p: typing.Optional[tracking.ContactParameters] = None
 
     @abc.abstractmethod
-    def create_contact_set(self, contact_params) -> tracking.ContactSet:
+    def create_contact_set(self, contact_params, hard_contact_params) -> tracking.ContactSet:
         """Create a contact set"""
 
     @abc.abstractmethod
@@ -68,12 +69,13 @@ class OurMethodFactory:
         self.env_class = env_class
         # TODO select getter based on env class
         contact_params = ArmGetter.contact_parameters(env_class, **self.env_kwargs)
+        hard_contact_params = ArmGetter.hard_contact_parameters(env_class, **self.env_kwargs)
         self.p = contact_params
         d = get_device()
         dtype = torch.float32
         contact_detector.to(device=d, dtype=dtype)
 
-        contact_set = self.create_contact_set(contact_params)
+        contact_set = self.create_contact_set(contact_params, hard_contact_params)
         labels = np.zeros(len(X) - 1)
         x = torch.from_numpy(X).to(device=d, dtype=dtype)
         u = torch.from_numpy(U).to(device=d, dtype=dtype)
@@ -84,6 +86,7 @@ class OurMethodFactory:
         for i in range(len(X) - 1):
             this_info = {
                 InfoKeys.OBJ_POSES: {obj_id: obj_pose[i] for obj_id, obj_pose in info[InfoKeys.OBJ_POSES].items()},
+                'u': u[i],
             }
             for key in [InfoKeys.DEE_IN_CONTACT, InfoKeys.HIGH_FREQ_REACTION_F, InfoKeys.HIGH_FREQ_REACTION_T,
                         InfoKeys.HIGH_FREQ_EE_POSE]:
@@ -94,8 +97,10 @@ class OurMethodFactory:
             pose = (this_info[InfoKeys.HIGH_FREQ_EE_POSE][-1][:3], this_info[InfoKeys.HIGH_FREQ_EE_POSE][-1][3:])
             contact_detector.clear()
             contact_detector.observe_residual(ee_force_torque, pose)
-            c, cc = contact_set.update(x[i], u[i], env_class.state_difference(x[i + 1], x[i]).reshape(-1),
-                                       contact_detector, r[i + 1], this_info)
+
+            xx = x[i][:2]
+            dx = tensor_utils.ensure_tensor(d, dtype, info[InfoKeys.DEE_IN_CONTACT][:2])
+            c, cc = contact_set.update(xx, dx, contact_detector, this_info)
 
             if c is None:
                 labels[i] = NO_CONTACT_ID
@@ -131,11 +136,12 @@ class OurMethodHard(OurMethodFactory):
                 labels[labels == other_c.id] = c.id
         return this_obj_id
 
-    def create_contact_set(self, contact_params) -> tracking.ContactSet:
+    def create_contact_set(self, contact_params, hard_contact_params) -> tracking.ContactSet:
         def create_contact_object():
-            return self.contact_object_class(None, contact_params)
+            return self.contact_object_class(None, contact_params, hard_contact_params)
 
-        return tracking.ContactSetHard(contact_params, contact_object_factory=create_contact_object,
+        return tracking.ContactSetHard(contact_params, hard_params=hard_contact_params,
+                                       contact_object_factory=create_contact_object,
                                        device=get_device())
 
     def get_contact_point_results(self, contact_set: tracking.ContactSetHard) -> typing.Tuple[
@@ -158,7 +164,7 @@ class OurMethodSoft(OurMethodFactory):
             self._dist_calc = arm.ArmPointToConfig(self.env)
         return self._dist_calc(configs, pts)
 
-    def create_contact_set(self, contact_params) -> tracking.ContactSet:
+    def create_contact_set(self, contact_params, hard_contact_params) -> tracking.ContactSet:
         return tracking.ContactSetSoft(self._pt_to_config_dist, contact_params, device=get_device())
 
     def update_labels_single_res(self, labels, i, latest_obj_id, *update_return):

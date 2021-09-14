@@ -11,6 +11,6 @@ setup(
     description='',
     test_suite='pytest',
     tests_require=[
-        'pytest', 'pybullet', 'pynput'
+        'pytest', 'pybullet', 'pynput', 'trimesh'
     ], install_requires=['matplotlib', 'numpy', 'scipy', 'scikit-learn', 'torch']
 )

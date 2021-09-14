@@ -88,12 +88,13 @@ class GreedyControllerWithRandomWalkOnContact(controller.Controller):
 def collect_tracking(level, seed_offset=0, trials=50, trial_length=300, force_gui=True, plot_contact_set=False):
     env = ArmGetter.env(level=level, mode=p.GUI if force_gui else p.DIRECT)
     contact_params = ArmGetter.contact_parameters(env)
+    hard_contact_params = ArmGetter.hard_contact_parameters(env)
 
     def cost_to_go(state, goal):
         return env.state_distance_two_arg(state, goal)
 
     def create_contact_object():
-        return tracking.ContactUKF(None, contact_params)
+        return tracking.ContactUKF(None, contact_params, hard_contact_params)
 
     ctrl = controller.Controller()
     save_dir = '{}{}'.format(ArmGetter.env_dir, level)
@@ -107,7 +108,8 @@ def collect_tracking(level, seed_offset=0, trials=50, trial_length=300, force_gu
         # use mode p.GUI to see what the trials look like
         seed = rand.seed(seed_offset + offset)
 
-        contact_set = tracking.ContactSetHard(contact_params, contact_object_factory=create_contact_object)
+        contact_set = tracking.ContactSetHard(contact_params, hard_params=hard_contact_params,
+                                              contact_object_factory=create_contact_object)
         ctrl = GreedyControllerWithRandomWalkOnContact(env, SimpleCartesianDynamics(), cost_to_go,
                                                        contact_set,
                                                        u_min,

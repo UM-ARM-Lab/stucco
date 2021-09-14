@@ -6,7 +6,8 @@
 ## Installation
 1. install required libraries (clone then cd and `pip install -e .`)
 [pytorch utilities](https://github.com/UM-ARM-Lab/arm_pytorch_utilities),
-[pytorch kinematics](https://github.com/UM-ARM-Lab/pytorch_kinematics)
+[pytorch kinematics](https://github.com/UM-ARM-Lab/pytorch_kinematics),
+[YCB object models](https://github.com/eleramp/pybullet-object-models) (only for testing envs)
 2. `pip install -e .`
 
 ## Usage
@@ -55,10 +56,9 @@ contact_set = ContactSetSoft(pt_to_config, contact_params)
 
 You then update it every control step (such as inside a controller) with contact information and change in robot
 ```python
-# additional information is stored in info, such as debugging info
-# observed x and dx; info['dobj'] should also carry dx when in contact
-# TODO remove redundancies in update API
-contact_set.update(x, u, dx, contact_detector, info['reaction'], info=info)
+# additional debugging/visualization information is stored in info, such as control and ground truth object poses
+# observed x and dx 
+contact_set.update(x, dx, contact_detector, info=info)
 ```
 
 Segment the belief into hard assignments of objects for downstream usage:
