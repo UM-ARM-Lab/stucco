@@ -13,8 +13,13 @@
 2. `pip install -e .`
 
 ## Usage
+This library provides code for both 1) contact detection and isolation, and 2) contact tracking.
+However, they can be used indepedently of each other; i.e. you can supply the contact point manually
+to update the tracker instead of getting it from the detector.
 
-[comment]: <> (The method is split into contact detection and isolation, and tracking.)
+This section describes how to use each component, and provide implementation tips.
+The `pxpen` function measuring distance between contact points and robot surfaces in given configurations
+need to be efficient, and we provide a guide on how to implement them.
 
 ### Contact Detection and Isolation
 Detection and isolation is using the momentum observer. At high frequency, we get residual feedback
@@ -46,21 +51,30 @@ This object can later be queried like `contact_detector.in_contact()` and passed
 ### Contact Point Tracking
 The tracking is performed through the `ContactSetSoft` object, created like:
 ```python
-from stucco.tracking import ContactSetSoft
+from stucco.tracking import ContactSetSoft, ContactParameters
 
 # get contact parameters tuned through maximizing median FMI and minimizing median contact error on a training set
-contact_params = RetrievalGetter.contact_parameters(env)
+contact_params = ContactParameters(max_pos_move_per_action=0.03, # not currently important, may be useful for dynamics later
+                                   length=0.02,
+                                   penetration_length=0.002,
+                                   hard_assignment_threshold=0.4,
+                                   intersection_tolerance=0.002)
+
 # we need an efficient implementation of pxpen; point to robot surface distance at a certain configuration
-# in this case it's specialized to that environment
+# see section below for how to implement one
+from stucco.env import arm
 pt_to_config = arm.ArmPointToConfig(env)
+
 contact_set = ContactSetSoft(pt_to_config, contact_params)
 ```
 
 You then update it every control step (such as inside a controller) with contact information and change in robot
 ```python
-# additional debugging/visualization information is stored in info, such as control and ground truth object poses
+# get latest contact point through the contact detector (or can be supplied manually through other means)
+# supplying None indicates we are not in contact
+p = contact_detector.get_last_contact_location()
 # observed x and dx 
-contact_set.update(x, dx, contact_detector, info=info)
+contact_set.update(x, dx, p)
 ```
 
 Segment the belief into hard assignments of objects for downstream usage:
@@ -70,6 +84,63 @@ pts = contact_set.get_posterior_points()
 # contact parameters are stored in contact_set.p
 # list of indices; each element of list corresponds to an object
 groups = contact_set.get_hard_assignment(contact_set.p.hard_assignment_threshold)
+```
+
+### Implementing `pxpen` (point to robot surface distance)
+Our recommendation for this function is to discretize and cache the signed distance function (SDF)
+of the robot end effector in link frame. To support this, 
+we provide the base class `PlanarPointToConfig` that supplies all the other functionality when provided
+the SDF cache and accompanying information.
+
+Here are some tips for how to create this discretized SDF:
+```python
+import os
+import torch
+import numpy as np
+from stucco.env.env import PlanarPointToConfig
+
+# note that this is for a planar environment with fixed orientation; however, it is very easy to extend to
+# 3D and free rotations; the extension to free rotations will require a parallel way to perform rigid body transforms
+# on multiple points, which can be provided by pytorch_kinematics.transforms
+class SamplePointToConfig(PlanarPointToConfig):
+    def __init__(self):
+        # save cache to file for easy loading (use your own path)
+        fullname = 'sample_point_to_config.pkl'
+        if os.path.exists(fullname):
+            super().__init__(*torch.load(fullname))
+        else:
+            # first time creating cache
+            # we need some environment where we can get its bounding box and query an SDF
+            # create robot in simulation (use your own function)
+            robot_id, gripper_id, pos = create_sim_robot()
+            # get axis-aligned bounding box values
+            aabb_min, aabb_max = get_aabb()
+            min_x, min_y = aabb_min[:2]
+            max_x, max_y = aabb_max[:2]
+            
+            # select a cache resolution (doesn't have to be very small)
+            cache_resolution = 0.001
+            # create mesh grid
+            x = np.arange(min_x, max_x + cache_resolution, cache_resolution)
+            y = np.arange(min_y, max_y + cache_resolution, cache_resolution)
+            cache_y_len = len(y)
+
+            d = np.zeros((len(x), len(y)))
+            for i, xi in enumerate(x):
+                for j, yj in enumerate(y):
+                    pt = [xi, yj, pos[2]]
+                    # point query of SDF (use your own function)
+                    d[i, j] = closest_point_on_surface(robot_id, pt)
+            # flatten to allow parallel query of multiple indices
+            d_cache = d.reshape(-1)
+            # save things in (rotated) link frame
+            min_x -= pos[0]
+            max_x -= pos[0]
+            min_y -= pos[1]
+            max_y -= pos[1]
+            data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
+            torch.save(data, fullname)
+            super().__init__(*data)
 ```
 
 ## Reproduce Paper

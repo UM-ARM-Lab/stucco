@@ -51,7 +51,7 @@ class RetrievalController(Controller):
             x = self.x_history[-2][:2]
             dx = info[InfoKeys.DEE_IN_CONTACT][:2]
             info['u'] = torch.tensor(self.u_history[-1][:2])
-            self.contact_set.update(x, dx, self.contact_detector, info=info)
+            self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(), info=info)
 
         if self.remaining_random_actions > 0:
             u = np.random.uniform(low=self.u_min, high=self.u_max, size=self.nu)

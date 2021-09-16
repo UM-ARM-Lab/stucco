@@ -44,7 +44,7 @@ class ContactTrackingResultsPlot:
         self.represent_cme_as_ratio = represent_cme_as_ratio
         self.plot_only_best_params_on_metric = plot_only_best_params_on_metric
 
-        self.f = plt.figure(figsize=(5,4))
+        self.f = plt.figure(figsize=(5, 4))
         self.ax = plt.gca()
 
         self._set_title_and_lims(self.f, self.ax)
@@ -92,7 +92,7 @@ class ContactTrackingResultsPlot:
                 temp[params] = data
             runs_per_param_value = temp
 
-            if self.plot_only_best_params_on_metric is not None:
+            if self.plot_only_best_params_on_metric is not None and len(runs_per_param_value):
                 items = sorted(runs_per_param_value.items(), reverse=self.plot_only_best_params_on_metric[0] == '>',
                                key=lambda item: np.mean(item[1][self.plot_only_best_params_on_metric[1:]]))
                 # keep only the first one
@@ -201,8 +201,10 @@ if __name__ == "__main__":
         "online-birch"
     ]
 
+
     def only_high_ambiguity(a):
         return a > 0.3
+
 
     contact_error_vs_fmi = PlotContactErrorVsFMI(all_runs, methods, plot_aggregate=True, weight_cme=False,
                                                  represent_cme_as_ratio=False, aggregate_perturbation=0.00,

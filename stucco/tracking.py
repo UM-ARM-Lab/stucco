@@ -582,15 +582,22 @@ def squared_error(x, y, sigma=1.):
 
 
 class ContactSet(serialization.Serializable):
-    def __init__(self, params: ContactParameters, immovable_collision_checker=None, device='cpu', visualizer=None):
+    def __init__(self, params: ContactParameters, immovable_collision_checker=None, device='cpu', dtype=torch.float32, visualizer=None):
         self.device = device
+        self.dtype = dtype
         self.p = params
         self.immovable_collision_checker = immovable_collision_checker
         self.visualizer = visualizer
 
     @abc.abstractmethod
-    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
-        """Update contact set with observed transition"""
+    def update(self, x, dx, p=None, info=None):
+        """Update contact set with observed transition
+
+        :param x: current end effector pose
+        :param dx: latest change in end effector pose while in contact
+        :param p: current position of the contact point, or none if not in contact
+        :param info: dictionary with optional keys from InfoKeys that provide extra debugging information
+        """
 
     @abc.abstractmethod
     def get_batch_data_for_dynamics(self, total_num):
@@ -716,7 +723,7 @@ class ContactSetHard(ContactSet):
 
         return res_c, res_i
 
-    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
+    def update(self, x, dx, p=None, info=None):
         """Returns updated contact object"""
         environment = {'robot': x, 'dx': dx, 'dobj': dx}
         if info is not None:
@@ -730,13 +737,12 @@ class ContactSetHard(ContactSet):
             u = torch.zeros_like(x)
             unit_reaction = torch.zeros_like(x)
 
-        cur_pt = contact_detector.get_last_contact_location()
-        if cur_pt is None:
+        if p is None:
             self.stepped_without_contact(u, environment)
             return None, None
 
         # where contact point would be without this movement
-        cur_pt = cur_pt[:2]
+        cur_pt = p[:2]
         prev_pt = cur_pt - environment['dobj']
 
         # associate each contact to a single object (max likelihood estimate on which object it is)
@@ -1021,9 +1027,9 @@ class ContactSetSoft(ContactSet):
             self.sampled_pts[i, bad_pts] = self.sampled_pts[i, good_pts][closest_idx]
             self.sampled_configs[i, bad_pts] = self.sampled_configs[i, good_pts][closest_idx]
 
-    def update(self, x, dx, contact_detector: ContactDetector, info=None, visualizer=None):
+    def update(self, x, dx, p=None, info=None):
         d = self.device
-        dtype = contact_detector.dtype
+        dtype = self.dtype
         x, dx = tensor_utils.ensure_tensor(d, dtype, x, dx)
 
         if info is not None:
@@ -1031,22 +1037,17 @@ class ContactSetSoft(ContactSet):
         else:
             u = torch.zeros_like(x)
 
-        cur_pt = contact_detector.get_last_contact_location(visualizer=visualizer)
         cur_config = tensor_utils.ensure_tensor(d, dtype, x + dx)
-        if cur_pt is None:
+        if p is None:
             # step without contact, eliminate particles that conflict with this config in freespace
             self.update_particles(cur_config)
             return None, None
 
         # TODO factor this out as dynamics
         # where contact point would be without this movement
-        z = cur_pt[2]
-        cur_pt = cur_pt[:2]
+        cur_pt = p[:2]
         prev_pt = cur_pt - dx
         prev_config = cur_config - dx
-
-        if visualizer is not None:
-            visualizer.draw_point(f'c', prev_pt.cpu(), height=z.item(), color=(0, 0, 1))
 
         if self.pts is None:
             self.pts = prev_pt.view(1, -1)
