@@ -99,7 +99,7 @@ class OurMethodFactory:
             contact_detector.clear()
             contact_detector.observe_residual(ee_force_torque, pose)
 
-            xx = x[i][:2]
+            xx = x[i + 1][:2]
             dx = tensor_utils.ensure_tensor(d, dtype, info[InfoKeys.DEE_IN_CONTACT][i][:2])
             c, cc = contact_set.update(xx, dx, contact_detector.get_last_contact_location(), this_info)
 
@@ -363,7 +363,7 @@ def evaluate_methods_on_file(datafile, run_res, methods, show_in_place=False):
 
         for method in method_list:
             # to get consistent results across runs, we use the same RNG
-            rand.seed(0)
+            rand.seed(123)
             labels, param_values, moved_points, pt_weights = method(X, U, reactions, env_cls, info, contact_detector,
                                                                     contact_pts)
             run_key = RunKey(level=level, seed=seed, method=method_name, params=param_values)
@@ -408,7 +408,7 @@ if __name__ == "__main__":
 
     dirs = ['arm/gripper10', 'arm/gripper11', 'arm/gripper12', 'arm/gripper13']
     methods_to_run = {
-        'ours pxdyn': [
+        'ours fix x': [
             # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
             # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
             OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),

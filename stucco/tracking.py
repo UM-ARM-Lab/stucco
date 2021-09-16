@@ -724,7 +724,7 @@ class ContactSetHard(ContactSet):
 
     def update(self, x, dx, p=None, info=None):
         """Returns updated contact object"""
-        environment = {'robot': x, 'dx': dx, 'dobj': dx}
+        environment = {'robot': x - dx, 'dx': dx, 'dobj': dx}
         if info is not None:
             u = info['u']
             r = info['reaction']
@@ -1050,8 +1050,7 @@ class ContactSetSoft(ContactSet):
         else:
             u = torch.zeros_like(x)
 
-        # TODO make x the current config instead of the previous config; apply pxdyn(-dx) to get previous config
-        cur_config = tensor_utils.ensure_tensor(d, dtype, x + dx)
+        cur_config = x
         if p is None:
             # step without contact, eliminate particles that conflict with this config in freespace
             self.update_particles(cur_config)
