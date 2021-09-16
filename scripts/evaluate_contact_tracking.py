@@ -15,7 +15,7 @@ import re
 import matplotlib.pyplot as plt
 import typing
 
-from arm_pytorch_utilities import tensor_utils
+from arm_pytorch_utilities import tensor_utils, rand
 from sklearn.cluster import KMeans, DBSCAN, Birch
 
 from stucco.defines import NO_CONTACT_ID, RunKey, CONTACT_RES_FILE, RUN_AMBIGUITY, CONTACT_ID, CONTACT_POINT_CACHE
@@ -65,7 +65,8 @@ class OurMethodFactory:
     def update_labels_single_res(self, labels, i, latest_obj_id, *update_return):
         return latest_obj_id
 
-    def __call__(self, X, U, reactions, env_class, info, contact_detector: ContactDetectorPlanarPybulletGripper, contact_pts):
+    def __call__(self, X, U, reactions, env_class, info, contact_detector: ContactDetectorPlanarPybulletGripper,
+                 contact_pts):
         self.env_class = env_class
         # TODO select getter based on env class
         contact_params = ArmGetter.contact_parameters(env_class, **self.env_kwargs)
@@ -361,6 +362,8 @@ def evaluate_methods_on_file(datafile, run_res, methods, show_in_place=False):
             method_list = [method_list]
 
         for method in method_list:
+            # to get consistent results across runs, we use the same RNG
+            rand.seed(0)
             labels, param_values, moved_points, pt_weights = method(X, U, reactions, env_cls, info, contact_detector,
                                                                     contact_pts)
             run_key = RunKey(level=level, seed=seed, method=method_name, params=param_values)
@@ -405,11 +408,12 @@ if __name__ == "__main__":
 
     dirs = ['arm/gripper10', 'arm/gripper11', 'arm/gripper12', 'arm/gripper13']
     methods_to_run = {
-        'ours': [OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
-                 OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
-                 OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
-                 OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
-                 ],
+        'ours pxdyn': [
+            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
+            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
+            OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
+            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
+        ],
         # 'ours UKF': OurMethodHard(length=0.1),
         # 'ours UKF convexity merge constraint': OurMethodHard(length=0.1),
         # 'ours PF': OurMethodHard(contact_object_class=tracking.ContactPF, length=0.1),
