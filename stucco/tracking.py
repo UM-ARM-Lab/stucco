@@ -582,7 +582,8 @@ def squared_error(x, y, sigma=1.):
 
 
 class ContactSet(serialization.Serializable):
-    def __init__(self, params: ContactParameters, immovable_collision_checker=None, device='cpu', dtype=torch.float32, visualizer=None):
+    def __init__(self, params: ContactParameters, immovable_collision_checker=None, device='cpu', dtype=torch.float32,
+                 visualizer=None):
         self.device = device
         self.dtype = dtype
         self.p = params
@@ -838,16 +839,32 @@ class ContactSetHard(ContactSet):
         return x, without_contact, (center_points, points, actions)
 
 
+class LinearTranslationalDynamics:
+    @staticmethod
+    def _extract_linear_translation(dx):
+        # for base, x is just position so dx is linear translation
+        return dx
+
+    def __call__(self, p, x, dx):
+        dpos = LinearTranslationalDynamics._extract_linear_translation(dx)
+        new_p = p + dpos
+        new_x = x + dx
+        return new_p, new_x
+
+
 class ContactSetSoft(ContactSet):
     """
     Track contact points and contact configurations without hard object assignments (partitions of points that move
     together). Implemented using a particle filter with each particle being the set of all contact points and configs.
     """
 
-    def __init__(self, pt_to_config_dist, *args, n_particles=100, n_eff_threshold=0.8, replace_bad_points=True,
-                 **kwargs):
+    def __init__(self, pxpen, *args, pxdyn=LinearTranslationalDynamics(), n_particles=100, n_eff_threshold=0.8,
+                 replace_bad_points=True, **kwargs):
         super(ContactSetSoft, self).__init__(*args, **kwargs)
-        self.pt_to_config_dist = pt_to_config_dist
+        # key functions
+        self.pxpen = pxpen
+        self.pxdyn = pxdyn
+
         self.adjacency = None
         self.connection_prob = None
         self.n_particles = n_particles
@@ -932,10 +949,8 @@ class ContactSetSoft(ContactSet):
 
         # don't actually need to label connected components because we just need to propagate for the latest
         # apply dx to each particle's cluster that contains the latest x
-        # sampled_pts = self.pts.repeat(self.n_particles, 1, 1)
-        self.sampled_pts[adjacent] += dx
-        # also move the configurations the same amount
-        self.sampled_configs[adjacent] += dx
+        self.sampled_pts[adjacent], self.sampled_configs[adjacent] = self.pxdyn(self.sampled_pts[adjacent],
+                                                                                self.sampled_configs[adjacent], dx)
         return adjacent
 
     def update_particles(self, config=None):
@@ -949,7 +964,7 @@ class ContactSetSoft(ContactSet):
         if config is not None:
             # for efficiency, just consider the given configuration (should probably consider all points, but may be enough)
             query_points = self.sampled_pts.view(-1, self.sampled_pts.shape[-1])
-            d = self.pt_to_config_dist(config.view(1, -1), query_points).view(self.n_particles, -1)
+            d = self.pxpen(config.view(1, -1), query_points).view(self.n_particles, -1)
             # negative distance indicates penetration
             d += tol
             d[d > 0] = 0
@@ -959,7 +974,7 @@ class ContactSetSoft(ContactSet):
             # otherwise check all configs against all points for each particle
             obs_weights = torch.zeros(self.n_particles, dtype=self.pts.dtype, device=self.pts.device)
             for i in range(self.n_particles):
-                d = self.pt_to_config_dist(self.sampled_configs[i], self.sampled_pts[i])
+                d = self.pxpen(self.sampled_configs[i], self.sampled_pts[i])
                 d += tol
                 d = d[d < 0]
                 obs_weights[i] = d.sum()
@@ -1009,7 +1024,7 @@ class ContactSetSoft(ContactSet):
     def replace_bad_points(self):
         # for points that remain low probability, replace them with a non penetrating one
         for i in range(self.n_particles):
-            d = self.pt_to_config_dist(self.sampled_configs[i], self.sampled_pts[i])
+            d = self.pxpen(self.sampled_configs[i], self.sampled_pts[i])
             d += self.p.intersection_tolerance
             d[d > 0] = 0
             # each column is the distance of that point to each config
@@ -1037,17 +1052,16 @@ class ContactSetSoft(ContactSet):
         else:
             u = torch.zeros_like(x)
 
+        # TODO make x the current config instead of the previous config; apply pxdyn(-dx) to get previous config
         cur_config = tensor_utils.ensure_tensor(d, dtype, x + dx)
         if p is None:
             # step without contact, eliminate particles that conflict with this config in freespace
             self.update_particles(cur_config)
             return None, None
 
-        # TODO factor this out as dynamics
         # where contact point would be without this movement
         cur_pt = p[:2]
-        prev_pt = cur_pt - dx
-        prev_config = cur_config - dx
+        prev_pt, prev_config = self.pxdyn(cur_pt.view(1, -1), cur_config.view(1, -1), -dx)
 
         if self.pts is None:
             self.pts = prev_pt.view(1, -1)
