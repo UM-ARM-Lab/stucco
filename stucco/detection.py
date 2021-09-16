@@ -18,19 +18,24 @@ class ContactDetector:
 
     We additionally assume access to force torque sensors at the end effector, which is our residual."""
 
-    def __init__(self, residual_precision, residual_threshold, num_sample_points=100,
+    def __init__(self, surface_points, surface_normals, residual_precision, residual_threshold,
                  max_friction_cone_angle=50 * math.pi / 180, window_size=5, dtype=torch.float, device='cpu'):
         """
 
+        :param surface_points: N x 3 sampled points on the robot surface in link frame
+        :param surface_normals: N x 3 corresponding surface normals to the surface points, only necessary for
+        visualization
         :param residual_precision: sigma_meas^-1 matrix that scales the different residual dimensions based on their
         expected precision
         :param residual_threshold: contact threshold for residual^T sigma_meas^-1 residual to count as being in contact
         :param max_friction_cone_angle: max angular difference (radian) from surface normal that a contact is possible
         note that 90 degrees is the weakest assumption that the force is from a push and not a pull
         """
+        self._cached_points = surface_points
+        self._cached_normals = surface_normals
+
         self.residual_precision = residual_precision
         self.residual_threshold = residual_threshold
-        self.num_sample_points = num_sample_points
         self.max_friction_cone_angle = max_friction_cone_angle
         self.observation_history = deque(maxlen=500)
         self._window_size = window_size
@@ -126,12 +131,26 @@ class ContactDetector:
 
         Locations are specified wrt the end effector frame."""
 
-    @abc.abstractmethod
     def sample_robot_surface_points(self, pose, visualizer=None) -> typing.Tuple[points, points, normals]:
         """Get points on the surface of the robot that could be possible contact locations
         pose[0] and pose[1] are the position and orientation (quaternion) of the end effector, respectively.
         Also return the correspnoding surface normals for each of the points.
         """
+        if self._cached_points.dtype != self.dtype or self._cached_points.device != self.device:
+            self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
+            self._cached_normals = self._cached_normals.to(device=self.device, dtype=self.dtype)
+
+        x = tf.Translate(*pose[0], device=self.device, dtype=self.dtype)
+        r = tf.Rotate(pose[1], device=self.device, dtype=self.dtype)
+        link_to_current_tf = x.compose(r)
+        pts = link_to_current_tf.transform_points(self._cached_points)
+        normals = link_to_current_tf.transform_normals(self._cached_normals)
+        if visualizer is not None:
+            for i, pt in enumerate(pts):
+                visualizer.draw_point(f't.{i}', pt, color=(1, 0, 0), height=pt[2])
+                visualizer.draw_2d_line(f'n.{i}', pt, normals[i], color=(0.5, 0, 0), size=2., scale=0.1)
+
+        return self._cached_points, pts, normals
 
 
 class ContactDetectorPlanar(ContactDetector):

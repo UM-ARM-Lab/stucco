@@ -39,17 +39,20 @@ applied external wrench (force-torque) at the end effector. In simulation, we ca
 To manage the process, we have a `ContactDetector` object, created like:
 
 ```python
-from stucco.detection import ContactDetector
+from stucco.detection import ContactDetectorPlanar
 import numpy as np
+
+# sample points on the robot surface and the associated surface normals (your function)
+# these should be in link frame
+surface_points, surface_normals = get_robot_points()
 
 # for end-effector force-torque residual, torque magnitudes are a lot smaller
 # in sim without noise, select a precision to balance out the magnitudes
 residual_precision = np.diag([1, 1, 1, 50, 50, 50])
 residual_threshold = 3
 
-contact_detector = ContactDetector(residual_precision, residual_threshold)
-# not a concrete class, look at ContactDetectorPlanar and ContactDetectorPlanarPybulletGripper for how to implement
-# the detector for certain environment classes
+# the Planar version is concretely implemented; a similar one could be implemented to handle more general cases
+contact_detector = ContactDetectorPlanar(surface_points, surface_normals, residual_precision, residual_threshold)
 ```
 
 You then feed this object high frequency residual data along with end-effector poses
@@ -80,6 +83,7 @@ contact_params = ContactParameters(max_pos_move_per_action=0.03,
 # we need an efficient implementation of pxpen; point to robot surface distance at a certain configuration
 # see section below for how to implement one
 from stucco.env import arm
+
 pxpen = arm.ArmPointToConfig(env)
 
 # pxdyn is LinearTranslationalDynamics by default, here we are making it explicit

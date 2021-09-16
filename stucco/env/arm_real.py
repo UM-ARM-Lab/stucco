@@ -645,16 +645,15 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
         # load if possible; otherwise would require a running pybullet instance
         fullname = os.path.join(cfg.DATA_DIR, f'detection_{self.name}_cache.pkl')
         if os.path.exists(fullname):
-            self._cached_points, self._cached_normals = torch.load(fullname)
             print(f"cached robot points and normals loaded from {fullname}")
-            return
+            return torch.load(fullname)
 
         self.robot_id, gripper_id, pos, orientation = RealArmEnv.create_sim_robot_and_gripper(visualizer=visualizer)
         z = pos[2]
         # p.removeBody(gripper_id)
 
-        self._cached_points = []
-        self._cached_normals = []
+        cached_points = []
+        cached_normals = []
 
         r = 0.2
         # sample evenly in terms of angles, but leave out the section in between the fingers
@@ -672,35 +671,35 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
             min_pt = min_pt_arm if min_pt_arm[ContactInfo.DISTANCE] < min_pt_gripper[
                 ContactInfo.DISTANCE] else min_pt_gripper
             min_pt_at_z = [min_pt[ContactInfo.POS_A][0], min_pt[ContactInfo.POS_A][1], z]
-            if len(self._cached_points) > 0:
-                d = np.subtract(self._cached_points, min_pt_at_z)
+            if len(cached_points) > 0:
+                d = np.subtract(cached_points, min_pt_at_z)
                 d = np.linalg.norm(d, axis=1)
                 if np.any(d < self._sample_pt_min_separation):
                     continue
-            self._cached_points.append(min_pt_at_z)
+            cached_points.append(min_pt_at_z)
             normal = min_pt[ContactInfo.POS_B + 1]
-            self._cached_normals.append([-normal[0], -normal[1], 0])
+            cached_normals.append([-normal[0], -normal[1], 0])
 
         if visualizer is not None:
-            for i, min_pt_at_z in enumerate(self._cached_points):
-                t = i / len(self._cached_points)
+            for i, min_pt_at_z in enumerate(cached_points):
+                t = i / len(cached_points)
                 visualizer.sim.draw_point(f'c.{i}', min_pt_at_z, color=(t, t, 1 - t))
         # visualizer.sim.clear_visualizations()
         # convert points back to link frame
         # note that we're using the actual simmed pos and orientation instead of the canonical one since IK doesn't
         # guarantee we'll actually be at the desired pose
-        self._cached_points = torch.tensor(self._cached_points, device=self.device)
-        self._cached_points -= torch.tensor(pos, device=self.device)
+        cached_points = torch.tensor(cached_points, device=self.device)
+        cached_points -= torch.tensor(pos, device=self.device)
         # instead of actually using the link frame, we'll use a rotated version of it so all points lie on the same z
         # this is because the actual frame is not axis aligned wrt the world
         o = list(p.getEulerFromQuaternion(orientation))
         o[1] = 0
         o[2] = 0
         r = tf.Rotate(o, device=self.device, dtype=self.dtype).inverse()
-        self._cached_points = r.transform_points(self._cached_points)
-        self._cached_normals = r.transform_normals(torch.tensor(self._cached_normals, device=self.device))
+        cached_points = r.transform_points(cached_points)
+        cached_normals = r.transform_normals(torch.tensor(cached_normals, device=self.device))
 
-        torch.save((self._cached_points, self._cached_normals), fullname)
+        torch.save((cached_points, cached_normals), fullname)
         logger.info("robot points and normals saved to %s", fullname)
 
         if visualizer is not None:
@@ -711,13 +710,14 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
             orientation[2] = 0
             r = tf.Rotate(orientation, device=self.device, dtype=self.dtype)
             trans = x.compose(r)
-            ros_pts = trans.transform_points(self._cached_points)
+            ros_pts = trans.transform_points(cached_points)
 
             for i, min_pt_at_z in enumerate(ros_pts):
-                t = i / len(self._cached_points)
+                t = i / len(cached_points)
                 visualizer.ros.draw_point(f'c.{i}', min_pt_at_z, color=(t, t, 1 - t))
 
         p.disconnect()
+        return cached_points, cached_normals
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
