@@ -9,7 +9,6 @@ import math
 from torch.distributions.multivariate_normal import MultivariateNormal
 import matplotlib.pyplot as plt
 from arm_pytorch_utilities import tensor_utils, optim, serialization, linalg, draw
-from stucco.detection import ContactDetector
 from stucco.filters.ukf import EnvConditionedUKF
 from stucco.env.env import InfoKeys
 
@@ -18,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ContactParameters:
-    max_pos_move_per_action: float
     length: float = 0.1
     penetration_length: float = 0.01
     hard_assignment_threshold: float = 0.4  # for soft assignment, probability threshold for belonging to same component

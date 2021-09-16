@@ -26,8 +26,7 @@ class ArmGetter(EnvGetter):
 
     @staticmethod
     def contact_parameters(env: arm.ArmEnv, **kwargs) -> tracking.ContactParameters:
-        params = tracking.ContactParameters(max_pos_move_per_action=env.MAX_PUSH_DIST,
-                                            length=0.02,
+        params = tracking.ContactParameters(length=0.02,
                                             penetration_length=0.002,
                                             hard_assignment_threshold=0.4,
                                             intersection_tolerance=0.002)

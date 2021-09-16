@@ -33,8 +33,8 @@ Where `B` represent arbitrary batch dimension(s).
 
 ### Contact Detection and Isolation
 
-Detection and isolation is using the momentum observer. At high frequency, we get residual feedback that estimates
-applied external wrench (force-torque) at the end effector. In simulation, we can get this directly.
+Detection and isolation uses the momentum observer. At high frequency, we get residual feedback that estimates applied
+external wrench (force and torque) at the end effector. In simulation, we can get applied forces directly.
 
 To manage the process, we have a `ContactDetector` object, created like:
 
@@ -60,7 +60,7 @@ You then feed this object high frequency residual data along with end-effector p
 ```python
 # get reaction force and reaction torque at end-effector 
 if contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
-   # other book-keeping in case of making a contact
+# other book-keeping in case of making a contact
 ```
 
 This object can later be queried like `contact_detector.in_contact()` and passed to update the tracking
@@ -71,29 +71,28 @@ The tracking is performed through the `ContactSetSoft` object, created like:
 
 ```python
 from stucco.tracking import ContactSetSoft, ContactParameters, LinearTranslationalDynamics
+from stucco.env.env import PlanarPointToConfig
 
-# get contact parameters tuned through maximizing median FMI and minimizing median contact error on a training set
-contact_params = ContactParameters(max_pos_move_per_action=0.03,
-                                   # not currently important, may be useful for dynamics later
-                                   length=0.02,
+# tune through maximizing median FMI and minimizing median contact error on a training set
+contact_params = ContactParameters(length=0.02,
                                    penetration_length=0.002,
                                    hard_assignment_threshold=0.4,
                                    intersection_tolerance=0.002)
 
-# we need an efficient implementation of pxpen; point to robot surface distance at a certain configuration
+# need an efficient implementation of pxpen; point to robot surface distance at a certain config
 # see section below for how to implement one
-from stucco.env import arm
-
-pxpen = arm.ArmPointToConfig(env)
+# here we pass in a cached discretized signed distance field and its description
+pxpen = PlanarPointToConfig(d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len)
 
 # pxdyn is LinearTranslationalDynamics by default, here we are making it explicit
 contact_set = ContactSetSoft(pxpen, contact_params, pxdyn=LinearTranslationalDynamics())
 ```
 
-You then update it every control step (such as inside a controller) with contact information and change in robot
+You then update it every control step with robot pose and contact point info
 
 ```python
-# get latest contact point through the contact detector (or can be supplied manually through other means)
+# get latest contact point through the contact detector 
+# (or can be supplied manually through other means)
 # supplying None indicates we are not in contact
 p = contact_detector.get_last_contact_location()
 # observed x and dx 
@@ -125,8 +124,9 @@ import numpy as np
 from stucco.env.env import PlanarPointToConfig
 
 
-# note that this is for a planar environment with fixed orientation; however, it is very easy to extend to
-# 3D and free rotations; the extension to free rotations will require a parallel way to perform rigid body transforms
+# note that this is for a planar environment with fixed orientation; 
+# however, it is very easy to extend to 3D and free rotations; 
+# the extension to free rotations will require a parallel way to perform rigid body transforms 
 # on multiple points, which can be provided by pytorch_kinematics.transforms
 class SamplePointToConfig(PlanarPointToConfig):
     def __init__(self):

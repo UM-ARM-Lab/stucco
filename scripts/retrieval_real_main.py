@@ -76,16 +76,10 @@ class RealRetrievalGetter(EnvGetter):
 
     @staticmethod
     def contact_parameters(env: arm_real.RealArmEnv, **kwargs) -> tracking.ContactParameters:
-        params = tracking.ContactParameters(state_to_pos=env.get_ee_pos_states,
-                                            pos_to_state=no_function,
-                                            control_similarity=no_function,
-                                            state_to_reaction=no_function,
-                                            max_pos_move_per_action=env.MAX_PUSH_DIST,
-                                            length=0.006,
+        params = tracking.ContactParameters(length=0.006,
+                                            penetration_length=0.002,
                                             hard_assignment_threshold=0.4,
-                                            intersection_tolerance=0.002,
-                                            weight_multiplier=0.1,
-                                            ignore_below_weight=0.2)
+                                            intersection_tolerance=0.002)
         if kwargs is not None:
             for k, v in kwargs.items():
                 setattr(params, k, v)
