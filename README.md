@@ -107,6 +107,10 @@ pts = contact_set.get_posterior_points()
 # contact parameters are stored in contact_set.p
 # list of indices; each element of list corresponds to an object
 groups = contact_set.get_hard_assignment(contact_set.p.hard_assignment_threshold)
+
+for group in groups:
+    object_pts = pts[group]
+    # use points associated with the object downstream
 ```
 
 ### Implementing `pxpen` (point to robot surface distance)
