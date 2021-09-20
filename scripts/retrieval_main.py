@@ -12,7 +12,7 @@ from datetime import datetime
 from sklearn.cluster import Birch, DBSCAN, KMeans
 from window_recorder.recorder import WindowRecorder
 
-from stucco.cluster_baseline import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
 from stucco.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
 from stucco.retrieval_controller import rot_2d_mat_to_angle, \

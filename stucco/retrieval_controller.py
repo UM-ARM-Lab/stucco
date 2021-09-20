@@ -11,7 +11,7 @@ from arm_pytorch_utilities.controller import Controller
 from pynput import keyboard
 
 from stucco import detection, tracking
-from stucco.cluster_baseline import process_labels_with_noise
+from stucco.baselines.cluster import process_labels_with_noise
 from stucco.defines import NO_CONTACT_ID
 from stucco import cfg
 from stucco.env.env import InfoKeys

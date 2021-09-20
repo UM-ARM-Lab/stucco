@@ -12,7 +12,7 @@ import copy
 from arm_pytorch_utilities import tensor_utils
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
-from stucco.cluster_baseline import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.env.env import InfoKeys
 from stucco.evaluation import object_robot_penetration_score
 from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \

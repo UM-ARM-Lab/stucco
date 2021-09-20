@@ -31,7 +31,8 @@ from stucco.env import arm, pybullet_env as env_base
 from stucco.env.env import InfoKeys
 from stucco.env_getters.arm import ArmGetter
 
-from stucco.cluster_baseline import process_labels_with_noise, OnlineSklearnFixedClusters, OnlineAgglomorativeClustering
+from stucco.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
+    OnlineAgglomorativeClustering
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
