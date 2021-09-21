@@ -11,11 +11,13 @@ from arm_pytorch_utilities.controller import Controller
 from pynput import keyboard
 
 from stucco import detection, tracking
-from stucco.baselines.cluster import process_labels_with_noise
 from stucco.defines import NO_CONTACT_ID
 from stucco import cfg
 from stucco.env.env import InfoKeys
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
+
+from stucco.baselines.cluster import process_labels_with_noise
+from stucco.baselines.gmphd import GMPHDWrapper
 
 
 class RetrievalController(Controller):
@@ -304,15 +306,15 @@ class SklearnPredeterminedController(RetrievalPredeterminedController):
             self.in_contact.append(False)
 
 
-class SklearnTrackingMethod(TrackingMethod):
-    def __init__(self, env, online_class, method, inertia_ratio=0.5, **kwargs):
-        self.env = env
-        self.online_method = online_class(method(**kwargs), inertia_ratio=inertia_ratio)
-        self.ctrl: typing.Optional[SklearnPredeterminedController] = None
+class CommonBaselineTrackingMethod(TrackingMethod):
+    @property
+    @abc.abstractmethod
+    def method(self):
+        """Get method that can provide final_labels() and moved_data()"""
 
     def __iter__(self):
-        moved_pt_labels = process_labels_with_noise(self.online_method.final_labels())
-        moved_pts = self.online_method.moved_data()
+        moved_pt_labels = process_labels_with_noise(self.method.final_labels())
+        moved_pts = self.method.moved_data()
         # labels[valid] = moved_pt_labels
         groups = []
         for i, obj_id in enumerate(np.unique(moved_pt_labels)):
@@ -324,16 +326,10 @@ class SklearnTrackingMethod(TrackingMethod):
 
         return iter(groups)
 
-    def create_predetermined_controller(self, controls):
-        self.ctrl = SklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
-        return self.ctrl
-
     def visualize_contact_points(self, env):
-        # valid = self.ctrl.in_contact
-        # labels = np.ones(len(valid)) * NO_CONTACT_ID
-        moved_pt_labels = process_labels_with_noise(self.online_method.final_labels())
-        moved_pts = self.online_method.moved_data()
-        # labels[valid] = moved_pt_labels
+        moved_pt_labels = process_labels_with_noise(self.method.final_labels())
+        moved_pts = self.method.moved_data()
+        i = 0
         for i, obj_id in enumerate(np.unique(moved_pt_labels)):
             if obj_id == NO_CONTACT_ID:
                 continue
@@ -341,15 +337,76 @@ class SklearnTrackingMethod(TrackingMethod):
             indices = moved_pt_labels == obj_id
             color, u_color = state_action_color_pairs[i % len(state_action_color_pairs)]
             base_name = str(i)
-            self.env.visualize_state_actions(base_name, moved_pts[indices], None, color, u_color, 0)
+            env.visualize_state_actions(base_name, moved_pts[indices], None, color, u_color, 0)
+        for j in range(i + 1, 10):
+            env.visualize_state_actions(str(j), [], None, None, None, 0)
+
+
+class SklearnTrackingMethod(CommonBaselineTrackingMethod):
+    def __init__(self, env, online_class, method, inertia_ratio=0.5, **kwargs):
+        self.env = env
+        self.online_method = online_class(method(**kwargs), inertia_ratio=inertia_ratio)
+        self.ctrl: typing.Optional[SklearnPredeterminedController] = None
+
+    @property
+    def method(self):
+        return self.online_method
+
+    def create_predetermined_controller(self, controls):
+        self.ctrl = SklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
+        return self.ctrl
 
     def get_labelled_moved_points(self, labels):
-        labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.online_method.final_labels())
-        moved_pts = self.online_method.moved_data()
+        labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
+        moved_pts = self.method.moved_data()
         return labels, moved_pts
 
 
-class KeyboardDirPressed():
+class PHDPredeterminedController(RetrievalPredeterminedController):
+
+    def __init__(self, g, contact_detector: detection.ContactDetector, controls, nu=None):
+        super().__init__(controls, nu=nu)
+        self.g = g
+        self.contact_detector = contact_detector
+        self.in_contact = []
+
+    def update(self, obs, info, visualizer=None):
+        contact_point = self.contact_detector.get_last_contact_location(visualizer=visualizer)
+        if contact_point is not None:
+            self.in_contact.append(True)
+            contact_point = contact_point.cpu().numpy()
+            dobj = info[InfoKeys.DEE_IN_CONTACT]
+            pt = contact_point - dobj
+            self.g.update(pt, dobj)
+        else:
+            self.in_contact.append(False)
+
+
+class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
+    def __init__(self, env, **kwargs):
+        self.env = env
+        self.g = GMPHDWrapper(**kwargs, bounds=(-1, -1, 1, 1))
+        self.ctrl = None
+
+    @property
+    def method(self):
+        return self.g
+
+    def create_predetermined_controller(self, controls):
+        self.ctrl = PHDPredeterminedController(self.g, self.env.contact_detector, controls, nu=2)
+        return self.ctrl
+
+    def visualize_contact_points(self, env):
+        super(PHDFilterTrackingMethod, self).visualize_contact_points(env)
+        # TODO also visualize the intensity
+
+    def get_labelled_moved_points(self, labels):
+        labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
+        moved_pts = self.method.moved_data()
+        return labels, moved_pts
+
+
+class KeyboardDirPressed:
     def __init__(self):
         self._dir = [0, 0]
         self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)

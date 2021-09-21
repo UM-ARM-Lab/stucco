@@ -15,19 +15,20 @@ from window_recorder.recorder import WindowRecorder
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
 from stucco.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
-from stucco.retrieval_controller import rot_2d_mat_to_angle, \
-    sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
-    SklearnTrackingMethod, KeyboardController
 from stucco.env.env import InfoKeys
 
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
 from stucco import cfg
+from stucco import icp, tracking
 from stucco.env import arm
 from stucco.env.arm import Levels
 from stucco.env_getters.arm import RetrievalGetter
 from stucco.env.pybullet_env import state_action_color_pairs
-from stucco import icp, tracking
+
+from stucco.retrieval_controller import rot_2d_mat_to_angle, \
+    sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
+    SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -323,7 +324,8 @@ def main(env, method_name, seed=0):
                                               threshold=0.08),
         'online-dbscan': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
         'online-kmeans': SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
-                                               random_state=0)
+                                               random_state=0),
+        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.01, birth=0.01)
     }
     env.draw_user_text(f"{method_name} seed {seed}", xy=[-0.1, 0.28, -0.5])
     return run_retrieval(env, methods_to_run[method_name], seed=seed)
@@ -353,7 +355,7 @@ def keyboard_control(env):
 
 parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
 parser.add_argument('method',
-                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans'],
+                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
                     help='which method to run')
 parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     default=[0],
@@ -377,16 +379,17 @@ if __name__ == "__main__":
     fmis = []
     cmes = []
     # backup video logging in case ffmpeg and nvidia driver are not compatible
-    with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
-                        name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
-        for seed in args.seed:
-            m, cme = main(env, method_name, seed=seed)
-            fmi = m[0]
-            fmis.append(fmi)
-            cmes.append(cme)
-            logger.info(f"{method_name} fmi {fmi} cme {cme}")
-            env.vis.clear_visualizations()
-            env.reset()
+    # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
+    #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
+    for seed in args.seed:
+        m, cme = main(env, method_name, seed=seed)
+        fmi = m[0]
+        fmis.append(fmi)
+        cmes.append(cme)
+        logger.info(f"{method_name} fmi {fmi} cme {cme}")
+        env.vis.clear_visualizations()
+        env.reset()
+
     logger.info(
         f"{method_name} mean fmi {np.mean(fmis)} median fmi {np.median(fmis)} std fmi {np.std(fmis)} {fmis}\n"
         f"mean cme {np.mean(cmes)} median cme {np.median(cmes)} std cme {np.std(cmes)} {cmes}")

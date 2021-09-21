@@ -391,6 +391,8 @@ class GMPHDWrapper:
         return indices
 
     def final_labels(self):
+        if self.data is None:
+            return []
         bias = copy.copy(self.fp_fn_bias)
         estitems = self.g.extractstatesusingintegral(bias=bias)
         # we should expect at least 1 item since we just made contact

@@ -450,7 +450,7 @@ class ArmEnv(PybulletEnv):
             states = states.cpu()
             if actions is not None:
                 actions = actions.cpu()
-        j = 0
+        j = -1
         for j in range(len(states)):
             p = self.get_ee_pos(states[j])
             name = '{}.{}'.format(base_name, j)
