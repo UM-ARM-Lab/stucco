@@ -33,6 +33,7 @@ from stucco.env_getters.arm import ArmGetter
 
 from stucco.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
     OnlineAgglomorativeClustering
+from stucco.baselines.gmphd import GMPHDWrapper
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -227,6 +228,25 @@ def online_sklearn_method_factory(online_class, method, inertia_ratio=0.5, **kwa
     return sklearn_method
 
 
+def phd_filter_factory(**kwargs):
+    def phd_method(X, U, reactions, env_class, info, contact_detector, contact_pts):
+        method = GMPHDWrapper(**kwargs, X=X, bounds=(-1, -1, 1, 1))
+
+        valid = np.linalg.norm(contact_pts, axis=1) > 0.
+        dobj = info[InfoKeys.DEE_IN_CONTACT]
+        for i in range(len(contact_pts)):
+            if not valid[i]:
+                continue
+            method.update(contact_pts[i] - dobj[i], dobj[i])
+
+        labels = np.ones(len(valid)) * NO_CONTACT_ID
+        labels[valid] = process_labels_with_noise(method.final_labels())
+        moved_pts = method.moved_data()
+        return labels, dict_to_namespace_str(kwargs), moved_pts, np.ones(len(moved_pts))
+
+    return phd_method
+
+
 def get_contact_point_history(data, filename):
     """Return the contact points; for each pts[i], report the point of contact before u[i]"""
     contact_detector = ContactDetectorPlanarPybulletGripper("floating_gripper", np.diag([1, 1, 1, 50, 50, 50]), 1.)
@@ -409,12 +429,12 @@ if __name__ == "__main__":
 
     dirs = ['arm/gripper10', 'arm/gripper11', 'arm/gripper12', 'arm/gripper13']
     methods_to_run = {
-        'ours fix x': [
-            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
-            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
-            OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
-            # OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
-        ],
+        # 'ours fix x': [
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
+        #     OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
+        # ],
         # 'ours UKF': OurMethodHard(length=0.1),
         # 'ours UKF convexity merge constraint': OurMethodHard(length=0.1),
         # 'ours PF': OurMethodHard(contact_object_class=tracking.ContactPF, length=0.1),
@@ -426,6 +446,18 @@ if __name__ == "__main__":
         # 'online-dbscan': online_sklearn_method_factory(OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
         # 'online-birch': online_sklearn_method_factory(OnlineAgglomorativeClustering, Birch, n_clusters=None,
         #                                               threshold=0.08)
+        'gmphd t1': [
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01),
+            phd_filter_factory(fp_fn_bias=2, q_mag=0.5, birth=0.01),
+            phd_filter_factory(fp_fn_bias=2, q_mag=1., birth=0.01),
+            phd_filter_factory(fp_fn_bias=2, q_mag=2., birth=0.01),
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.5, birth=0.01),
+            phd_filter_factory(fp_fn_bias=1, q_mag=1., birth=0.01),
+            phd_filter_factory(fp_fn_bias=1, q_mag=2., birth=0.01),
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, detection=0.95),
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.1),
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.01),
+        ]
     }
 
     # full_filename = os.path.join(cfg.DATA_DIR, 'arm/gripper13/25.mat')
