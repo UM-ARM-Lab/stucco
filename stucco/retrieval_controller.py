@@ -150,6 +150,14 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
         canonical_pos = [0, 0, z]
         p.resetBasePositionAndOrientation(object_id, canonical_pos, [0, 0, 0, 1])
 
+        # box is rectilinear, so can just get bounding box
+        aabb_min, aabb_max = p.getAABB(object_id)
+        bb = np.zeros((4, 3))
+        bb[0] = [aabb_min[0], aabb_min[1], 1]
+        bb[1] = [aabb_min[0], aabb_max[1], 1]
+        bb[2] = [aabb_max[0], aabb_max[1], 1]
+        bb[3] = [aabb_max[0], aabb_min[1], 1]
+
         points = []
         sigma = 0.1
         while len(points) < num_points:
@@ -169,11 +177,12 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
     p.resetBasePositionAndOrientation(object_id, orig_pos, orig_orientation)
 
     points = torch.tensor(points)
+    bb = torch.tensor(bb)
 
-    cache[name][seed] = points
+    cache[name][seed] = points, bb
     torch.save(cache, fullname)
 
-    return points
+    return points, bb
 
 
 def pose_error(target_pose, guess_pose):

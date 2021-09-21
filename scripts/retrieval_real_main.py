@@ -220,7 +220,8 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
 
     z = env._observe_ee(return_z=True)[-1]
 
-    model_points = sample_model_points(None, num_points=50, force_z=z, seed=0, name="cheezit")
+    model_points, bb = sample_model_points(None, num_points=50, force_z=z, seed=0, name="cheezit")
+    bb = bb.to(dtype=dtype)
     mph = model_points.clone().to(dtype=dtype)
     # make homogeneous [x, y, 1]
     mph[:, -1] = 1
@@ -261,10 +262,17 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
                 rospy.loginfo(f"err each obj {np.round(dist_per_est_obj, 4)}")
                 best_T = best_tsf_guess.inverse()
 
-                transformed_model_points = mph @ best_T.transpose(-1, -2)
-                for i, pt in enumerate(transformed_model_points):
-                    pt = [pt[0], pt[1], z]
-                    env.vis.ros.draw_point(f"tmptbest.{i}", pt, color=(0, 0, 1), length=0.008)
+                # transformed_model_points = mph @ best_T.transpose(-1, -2)
+                # for i, pt in enumerate(transformed_model_points):
+                #     pt = [pt[0], pt[1], z]
+                #     env.vis.ros.draw_point(f"tmptbest.{i}", pt, color=(0, 0, 1), length=0.008)
+
+                tf_bb = bb @ best_T.transpose(-1, -2)
+                for i in range(len(tf_bb)):
+                    pt = [tf_bb[i][0], tf_bb[i][1], z]
+                    next_pt = [tf_bb[(i + 1) % len(tf_bb)][0], tf_bb[(i + 1) % len(tf_bb)][1], z]
+                    env.vis.draw_2d_line(f"tmptbestline.{i}", pt, np.subtract(next_pt, pt), color=(0, 0, 1), size=2,
+                                         scale=1)
 
             if u is None:
                 env.recalibrate_static_wrench()

@@ -76,7 +76,7 @@ def test_icp(env):
     state_c, action_c = state_action_color_pairs[0]
     env.visualize_state_actions("fixed", contact_points, actions, state_c, action_c, 0.05)
 
-    model_points = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
+    model_points, _ = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
     for i, pt in enumerate(model_points):
         env.vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
 
@@ -174,8 +174,9 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
     obs = env.reset()
     z = env._observe_ee(return_z=True)[-1]
 
-    model_points = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
+    model_points, bb = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
     mph = model_points.clone().to(dtype=dtype)
+    bb = bb.to(dtype=dtype)
     # make homogeneous [x, y, 1]
     mph[:, -1] = 1
 
@@ -232,12 +233,21 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
 
             pose_error_per_step[simTime] = pos_err + 0.3 * yaw_err
             logger.debug(f"pose error {simTime}: {pos_err} {yaw_err} {pose_error_per_step[simTime]}")
-            transformed_model_points = mph @ best_T.transpose(-1, -2)
-            for i, pt in enumerate(transformed_model_points):
-                if i % 2 == 0:
-                    continue
-                pt = [pt[0], pt[1], z]
-                env.vis.draw_point(f"tmptbest.{i}", pt, color=(0, 0, 1), length=0.008)
+
+            # plot current best estimate of object pose (first block samples points, next one is the full perimeter)
+            # transformed_model_points = mph @ best_T.transpose(-1, -2)
+            # for i, pt in enumerate(transformed_model_points):
+            #     if i % 2 == 0:
+            #         continue
+            #     pt = [pt[0], pt[1], z]
+            #     env.vis.draw_point(f"tmptbest.{i}", pt, color=(0, 0, 1), length=0.008)
+
+            tf_bb = bb @ best_T.transpose(-1, -2)
+            for i in range(len(tf_bb)):
+                pt = [tf_bb[i][0], tf_bb[i][1], z]
+                next_pt = [tf_bb[(i + 1) % len(tf_bb)][0], tf_bb[(i + 1) % len(tf_bb)][1], z]
+                env.vis.draw_2d_line(f"tmptbestline.{i}", pt, np.subtract(next_pt, pt), color=(0, 0, 1), size=2,
+                                     scale=1)
         else:
             contact_id.append(NO_CONTACT_ID)
 
