@@ -335,7 +335,7 @@ def main(env, method_name, seed=0):
         'online-dbscan': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
         'online-kmeans': SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
                                                random_state=0),
-        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.01, birth=0.01)
+        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.00005, r_mag=0.00005, birth=0.001, detection=0.3)
     }
     env.draw_user_text(f"{method_name} seed {seed}", xy=[-0.1, 0.28, -0.5])
     return run_retrieval(env, methods_to_run[method_name], seed=seed)

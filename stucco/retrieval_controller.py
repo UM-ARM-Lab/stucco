@@ -19,6 +19,13 @@ from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, state
 from stucco.baselines.cluster import process_labels_with_noise
 from stucco.baselines.gmphd import GMPHDWrapper
 
+from arm_pytorch_utilities.draw import clear_ax_content
+from datetime import datetime
+import matplotlib.pyplot as plt
+import os
+import subprocess
+import glob
+
 
 class RetrievalController(Controller):
 
@@ -397,6 +404,16 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         self.g = GMPHDWrapper(**kwargs, bounds=(-1, -1, 1, 1))
         self.ctrl = None
 
+        self.i = 0
+        self.tmp_save_folder = "/home/zhsh/Documents/results/tmp"
+        self.f = plt.figure(figsize=(8, 4))
+        self.ax = plt.gca()
+        self.ax.set_ylim(0., 0.8)
+        self.ax.set_xlim(-0.8, 0.8)
+        self.ax.set_aspect('equal')
+        plt.ion()
+        plt.show()
+
     @property
     def method(self):
         return self.g
@@ -407,11 +424,38 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
 
     def visualize_contact_points(self, env):
         super(PHDFilterTrackingMethod, self).visualize_contact_points(env)
-        # TODO also visualize the intensity
+
+        # visualize the intensity
+        clear_ax_content(self.ax)
+
+        x = np.linspace(0., 0.8)
+        y = np.linspace(-.8, .8)
+        X, Y = np.meshgrid(x, y)
+        XX = np.array([X.ravel(), Y.ravel()]).T
+        Z = self.g.g.gmmeval(XX.reshape(-1, 2, 1))
+        Z = np.stack(Z).astype(float).reshape(X.shape)
+        # axes corresponds to the debug camera in pybullet
+        plt.contour(-Y, X, Z)
+
+        self.f.canvas.draw()
+        plt.pause(0.0001)
+        plt.savefig(self.tmp_save_folder + "/file{:02d}.png".format(self.i))
+        self.i += 1
 
     def get_labelled_moved_points(self, labels):
         labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
         moved_pts = self.method.moved_data()
+
+        # save intensity plot images to video
+        plt.close(self.f)
+        os.chdir(self.tmp_save_folder)
+        subprocess.call([
+            'ffmpeg', '-framerate', '4', '-i', 'file%02d.png', '-r', '30', '-pix_fmt', 'yuv420p',
+            f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}.mp4"
+        ])
+        for file_name in glob.glob("*.png"):
+            os.remove(file_name)
+
         return labels, moved_pts
 
 
