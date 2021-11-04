@@ -63,7 +63,8 @@ class RealRetrievalGetter(EnvGetter):
     @classmethod
     def env(cls, level=Levels.NO_CLUTTER, **kwargs):
         level = Levels(level)
-        env = arm_real.RealArmEnv(environment_level=level)
+        # env = arm_real.RealArmEnv(environment_level=level)
+        env = arm_real.RealArmEnvMedusa(environment_level=level)
         return env
 
     @staticmethod
@@ -330,7 +331,7 @@ def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
     if time.time() - start > timeout:
         return
 
-    self.victor.open_right_gripper(0.15)
+    self.robot.open_right_gripper(0.15)
     rospy.sleep(1)
 
     goal_pos = [pose[0] + grasp_offset[0] * 0.6, pose[1] + grasp_offset[1] * 0.6, z]
@@ -344,9 +345,9 @@ def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
     if time.time() - start > timeout:
         return
 
-    self.victor.close_right_gripper()
+    self.robot.close_right_gripper()
     rospy.sleep(5)
-    self.victor.open_right_gripper(0)
+    self.robot.open_right_gripper(0)
     rospy.sleep(1)
 
 
@@ -488,7 +489,7 @@ def main():
     # ignore fz since it's usually large and noisy
     residual_precision[2] = 0
 
-    env = arm_real.RealArmEnv(residual_precision=np.diag(residual_precision), residual_threshold=5.)
+    env = arm_real.RealArmEnvMedusa(residual_precision=np.diag(residual_precision), residual_threshold=5.)
     contact_params = RealRetrievalGetter.contact_parameters(env)
 
     pt_to_config = arm_real.RealArmPointToConfig(env)

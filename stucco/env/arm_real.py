@@ -15,22 +15,25 @@ import numpy as np
 from pytorch_kinematics import transforms as tf
 from tf.transformations import quaternion_from_euler
 
+from mmint_camera_utils.camera_utils import project_depth_image, project_depth_points
 from stucco import tracking
 from stucco.detection_impl import ContactDetectorPlanarPybulletGripper
 from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, Visualizer, \
     PlanarPointToConfig, InfoKeys
 
-from stucco.detection import ContactDetector
+from stucco.detection import ContactDetector, ContactDetectorPlanar
 from geometry_msgs.msg import Pose, Quaternion
 
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, DebugDrawer, state_action_color_pairs
 from stucco.env.real_env import DebugRvizDrawer
 
-from arm_robots.cartesian import ArmSide
 from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
 from tf2_geometry_msgs import WrenchStamped
 from arm_robots.victor import Victor
+from bubble_utils.bubble_med.bubble_med import BubbleMed
+from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
+from mmint_camera_utils.point_cloud_parsers import PicoFlexxPointCloudParser
 
 # runner imports
 from arm_pytorch_utilities import tensor_utils
@@ -125,6 +128,7 @@ class RealArmEnv(Env):
 
     EE_LINK_NAME = "victor_right_arm_link_7"
     WORLD_FRAME = "victor_root"
+    ACTIVE_MOVING_ARM = 1  # right
 
     @staticmethod
     def state_names():
@@ -189,63 +193,66 @@ class RealArmEnv(Env):
         self.vel = vel
 
         if not stub:
-            victor = Victor(force_trigger=5.0)
-            self.victor = victor
-            # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
-            self.victor.cartesian._timeout_per_m = 40 / self.vel
-            victor.connect()
-            self.vis.init_ros()
+            self._setup_robot_ros(residual_threshold=residual_threshold, residual_precision=residual_precision)
 
-            self.motion_status_input_lock = Lock()
-            self._temp_wrenches = []
-            # subscribe to status messages
-            self.right_arm_contact_listener = rospy.Subscriber(victor.ns("right_arm/motion_status"), MotionStatus,
-                                                               self.contact_listener)
-            self.cleaned_wrench_publisher = rospy.Publisher(victor.ns("right_gripper/cleaned_wrench"), WrenchStamped,
-                                                            queue_size=10)
-            self.large_wrench_publisher = rospy.Publisher(victor.ns("right_gripper/large_wrench"), WrenchStamped,
-                                                          queue_size=10)
-            self.large_wrench_world_publisher = rospy.Publisher(victor.ns("right_gripper/large_wrench_world"),
-                                                                WrenchStamped, queue_size=10)
+    def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
+        victor = Victor(force_trigger=5.0)
+        self.robot = victor
+        # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
+        self.robot.cartesian._timeout_per_m = 40 / self.vel
+        victor.connect()
+        self.vis.init_ros()
 
-            # to reset the rest pose, manually jog it there then read the values
-            # rest_pose = pose_msg_to_pos_quaternion(victor.get_link_pose(self.EE_LINK_NAME))
+        self.motion_status_input_lock = Lock()
+        self._temp_wrenches = []
+        # subscribe to status messages
+        self.right_arm_contact_listener = rospy.Subscriber(victor.ns("right_arm/motion_status"), MotionStatus,
+                                                           self.contact_listener)
+        self.cleaned_wrench_publisher = rospy.Publisher(victor.ns("right_gripper/cleaned_wrench"), WrenchStamped,
+                                                        queue_size=10)
+        self.large_wrench_publisher = rospy.Publisher(victor.ns("right_gripper/large_wrench"), WrenchStamped,
+                                                      queue_size=10)
+        self.large_wrench_world_publisher = rospy.Publisher(victor.ns("right_gripper/large_wrench_world"),
+                                                            WrenchStamped, queue_size=10)
 
-            # reset to rest position
-            self.return_to_rest()
+        # to reset the rest pose, manually jog it there then read the values
+        # rest_pose = pose_msg_to_pos_quaternion(victor.get_link_pose(self.EE_LINK_NAME))
 
-            base_pose = pose_msg_to_pos_quaternion(victor.get_link_pose('victor_right_arm_mount'))
-            status = victor.get_right_arm_status()
-            canonical_joints = [status.measured_joint_position.joint_1, status.measured_joint_position.joint_2,
-                                status.measured_joint_position.joint_3, status.measured_joint_position.joint_4,
-                                status.measured_joint_position.joint_5, status.measured_joint_position.joint_6,
-                                status.measured_joint_position.joint_7]
+        # reset to rest position
+        self.return_to_rest(self.robot.right_arm_group)
+        self.robot.close_right_gripper()
 
-            self.last_ee_pos = self._observe_ee(return_z=True)
-            self.state = self._obs()
+        base_pose = pose_msg_to_pos_quaternion(victor.get_link_pose('victor_right_arm_mount'))
+        status = victor.get_right_arm_status()
+        canonical_joints = [status.measured_joint_position.joint_1, status.measured_joint_position.joint_2,
+                            status.measured_joint_position.joint_3, status.measured_joint_position.joint_4,
+                            status.measured_joint_position.joint_5, status.measured_joint_position.joint_6,
+                            status.measured_joint_position.joint_7]
 
-            if residual_precision is None:
-                residual_precision = np.diag([1, 1, 0, 1, 1, 1])
-            # parallel visualizer for ROS and pybullet
-            self._contact_detector = ContactDetectorPlanarRealArm("victor", residual_precision, residual_threshold,
-                                                                  base_pose=base_pose,
-                                                                  default_joint_config=canonical_joints,
-                                                                  canonical_pos=self.REST_POS,
-                                                                  canonical_orientation=self.REST_ORIENTATION,
-                                                                  window_size=50,
-                                                                  visualizer=self.vis)
-            self.vis.sim = None
+        self.last_ee_pos = self._observe_ee(return_z=True)
+        self.state = self._obs()
+
+        if residual_precision is None:
+            residual_precision = np.diag([1, 1, 0, 1, 1, 1])
+        # parallel visualizer for ROS and pybullet
+        self._contact_detector = ContactDetectorPlanarRealArm("victor", residual_precision, residual_threshold,
+                                                              base_pose=base_pose,
+                                                              default_joint_config=canonical_joints,
+                                                              canonical_pos=self.REST_POS,
+                                                              canonical_orientation=self.REST_ORIENTATION,
+                                                              window_size=50,
+                                                              visualizer=self.vis)
+        self.vis.sim = None
 
     @property
     def vis(self) -> CombinedVisualizer:
         return self._vis
 
-    def return_to_rest(self):
-        self.victor.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
-        # self.victor.plan_to_pose(self.victor.right_arm_group, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
-        self.victor.plan_to_joint_config(self.victor.right_arm_group, self.REST_JOINTS)
-        self.victor.close_right_gripper()
-        self.victor.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
+    def return_to_rest(self, group_name):
+        self.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
+        # self.robot.plan_to_pose(group_name, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
+        self.robot.plan_to_joint_config(group_name, self.REST_JOINTS)
+        self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
 
     def recalibrate_static_wrench(self):
         start = time.time()
@@ -290,7 +297,7 @@ class RealArmEnv(Env):
             wr.wrench.torque.x = w.a
             wr.wrench.torque.y = w.b
             wr.wrench.torque.z = w.c
-            wr_world = self.victor.tf_wrapper.transform_to_frame(wr, self.WORLD_FRAME)
+            wr_world = self.robot.tf_wrapper.transform_to_frame(wr, self.WORLD_FRAME)
             if np.linalg.norm([w.x, w.y, w.z]) > 10:
                 self.large_wrench_publisher.publish(wr)
             wr = wr_world.wrench
@@ -319,7 +326,7 @@ class RealArmEnv(Env):
             # observe and save contact info
             info = {}
 
-            pose = pose_msg_to_pos_quaternion(self.victor.get_link_pose(self.EE_LINK_NAME))
+            pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose(self.EE_LINK_NAME))
             pos = pose[0]
             # manually make observed point planar
             orientation = list(p.getEulerFromQuaternion(pose[1]))
@@ -370,7 +377,7 @@ class RealArmEnv(Env):
         return state
 
     def _observe_ee(self, return_z=False):
-        pose = self.victor.get_link_pose(self.EE_LINK_NAME)
+        pose = self.robot.get_link_pose(self.EE_LINK_NAME)
         if return_z:
             return np.array([pose.position.x, pose.position.y, pose.position.z])
         else:
@@ -405,8 +412,8 @@ class RealArmEnv(Env):
             orientation = quaternion_from_euler(*orientation)
         if len(orientation) == 4:
             orientation = Quaternion(*orientation)
-        self.victor.move_delta_cartesian_impedance(ArmSide.RIGHT, dx, dy, target_z=self.REST_POS[2] + dz, blocking=True,
-                                                   step_size=0.01, target_orientation=orientation)
+        self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx, dy, target_z=self.REST_POS[2] + dz,
+                                                  blocking=True, step_size=0.01, target_orientation=orientation)
         self.state = self._obs()
         info = self.aggregate_info()
 
@@ -436,10 +443,10 @@ class RealArmEnv(Env):
         return fs[median_mini_step], info[InfoKeys.HIGH_FREQ_REACTION_T][median_mini_step]
 
     def reset(self):
-        self.victor.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
+        self.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
         # reset to rest position
-        self.victor.plan_to_pose(self.victor.right_arm_group, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
-        self.victor.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
+        self.robot.plan_to_pose(self.robot.right_arm_group, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
+        self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
         self.state = self._obs()
         self.contact_detector.clear()
         return np.copy(self.state), None
@@ -621,8 +628,89 @@ class RealArmEnv(Env):
         return robot_id, gripper_id, pos, orientation
 
 
+class RealArmEnvMedusa(RealArmEnv):
+    """Same as inherited class, but on medusa rather than victor and with a bubble gripper"""
+    MAX_PUSH_DIST = 0.02
+    RESET_RAISE_BY = 0.025
+
+    REST_POS = [0.565179880383697, -0.029918686192412114, 0.09889075218881908 - 0.03]
+    REST_ORIENTATION = [0.75 * np.pi, 0.5 * np.pi, - 0.75 * np.pi]
+    # REST_ORIENTATION_QUAT = [-0.7068252, 0, 0, 0.7073883]
+    BASE_POSE = ([0, 0, 0], [0, 0, 0, 1])
+    REST_JOINTS = [-0.6087128180974765, 1.5331392555701764, 0.620243140542067, -1.3122646576495662, -2.365803345934927,
+                   -1.2556336222343112, 0.6481318699970027]
+
+    EE_LINK_NAME = "med_kuka_link_7"
+    WORLD_FRAME = "med_base"
+    ACTIVE_MOVING_ARM = 0  # only 1 arm
+
+    def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
+        med = BubbleMed(display_goals=False)
+        self.robot = med
+        # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
+        self.robot.cartesian._timeout_per_m = 40 / self.vel
+        self.robot.connect()
+        self.vis.init_ros()
+        # TODO create gripper
+
+        self.motion_status_input_lock = Lock()
+        self._temp_wrenches = []
+        # subscribe to status messages
+        self.contact_listener = rospy.Subscriber(self.robot.ns("motion_status"), MotionStatus,
+                                                 self.contact_listener)
+        self.cleaned_wrench_publisher = rospy.Publisher(self.robot.ns("cleaned_wrench"), WrenchStamped, queue_size=10)
+        self.large_wrench_publisher = rospy.Publisher(self.robot.ns("large_wrench"), WrenchStamped, queue_size=10)
+        self.large_wrench_world_publisher = rospy.Publisher(self.robot.ns("large_wrench_world"), WrenchStamped,
+                                                            queue_size=10)
+
+        # to reset the rest pose, manually jog it there then read the values
+        rest_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose(self.EE_LINK_NAME))
+
+        # reset to rest position
+        self.return_to_rest(self.robot.arm_group)
+
+        base_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose('med_base'))
+        status = self.robot.get_arm_status()
+        canonical_joints = [status.measured_joint_position.joint_1, status.measured_joint_position.joint_2,
+                            status.measured_joint_position.joint_3, status.measured_joint_position.joint_4,
+                            status.measured_joint_position.joint_5, status.measured_joint_position.joint_6,
+                            status.measured_joint_position.joint_7]
+
+        self.last_ee_pos = self._observe_ee(return_z=True)
+        self.state = self._obs()
+
+        if residual_precision is None:
+            residual_precision = np.diag([1, 1, 0, 1, 1, 1])
+
+        camera_name_right = 'pico_flexx_right'
+        camera_name_left = 'pico_flexx_left'
+        camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
+        camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
+
+        # TODO get point at tip of the gripper when we have the gripper model
+        self._contact_detector = ContactDetectorPlanarRealArmBubble(residual_precision, residual_threshold, [],
+                                                                    camera_parser_left, camera_parser_right,
+                                                                    self.EE_LINK_NAME)
+
+        # parallel visualizer for ROS and pybullet
+        self.vis.sim = None
+
+    # --- observing state
+    def aggregate_info(self):
+        with self.motion_status_input_lock:
+            info = {key: np.stack(value, axis=0) for key, value in self._single_step_contact_info.items() if len(value)}
+            # don't need to aggregate external wrench with new contact detector
+            info['reaction'], info['torque'] = self._observe_reaction_force_torque(info)
+        name = InfoKeys.DEE_IN_CONTACT
+        if name in info:
+            info[name] = info[name].sum(axis=0)
+        else:
+            info[name] = np.zeros(3)
+        return info
+
+
 class ArmRealDataSource(EnvDataSource):
-    loader_map = {RealArmEnv: ArmRealLoader}
+    loader_map = {RealArmEnv: ArmRealLoader, RealArmEnvMedusa: ArmRealLoader}
 
     @staticmethod
     def _default_data_dir():
@@ -718,6 +806,58 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
 
         p.disconnect()
         return cached_points, cached_normals
+
+
+class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
+    """Contact detector using the bubble gripper"""
+
+    def __init__(self, residual_precision, residual_threshold, points_for_no_bubble_deformation,
+                 left_camera: PicoFlexxPointCloudParser, right_camera: PicoFlexxPointCloudParser,
+                 ee_link_frame: str, imprint_threshold=0.001, deform_number_threshold=5):
+        # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
+        self.pts_no_deformation = points_for_no_bubble_deformation
+        self.left_camera = left_camera
+        self.right_camera = right_camera
+        self.link_frame = ee_link_frame
+        # TODO save current point cloud as reference, or load from file
+        self.ref_l = None
+        self.ref_r = None
+        self.K_l = None
+        self.K_r = None
+        self.imprint_threshold = imprint_threshold
+        self.deform_number_threshold = deform_number_threshold
+        super(ContactDetectorPlanarRealArmBubble, self).__init__(None, None, residual_precision, residual_threshold)
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+        # TODO consider using a TimeSynchronizer
+        l = self.left_camera.get_image_depth()
+        r = self.right_camera.get_image_depth()
+
+        imprint_l = process_bubble_img(self.ref_l - l)
+        imprint_r = process_bubble_img(self.ref_r - r)
+
+        # check if any are above threshold
+        deform_l = imprint_l > self.imprint_threshold
+        deform_r = imprint_r > self.imprint_threshold
+
+        if len(deform_l) > self.deform_number_threshold:
+            # these are in optical/camera frame
+            # average in image space, then project the average to point cloud
+            im_coordinates = torch.nonzero(deform_l)
+            contact_center_im = im_coordinates.to(dtype=deform_l.dtype).mean(dim=0)
+            v, u = contact_center_im
+            # TODO interpolation on the depth image to get depth
+            d = None
+            pt = project_depth_points(u, v, d, self.K_l)
+        elif len(deform_r) > self.deform_number_threshold:
+            pass
+        else:
+            # TODO check and confirm reaction force?
+            return self.pts_no_deformation
+
+        # TODO check that the latest pose is the origin of self.link_frame
+        # TODO need to return points wrt the frame that the poses are the origin of
+        pass
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
