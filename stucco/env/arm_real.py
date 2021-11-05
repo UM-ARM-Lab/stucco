@@ -520,9 +520,9 @@ class RealArmEnv(Env):
         return debug_names_created
 
     @classmethod
-    def create_sim_robot_and_gripper(cls, base_pose=None, canonical_joint=None, canonical_pos=None,
-                                     canonical_orientation=None,
-                                     visualizer: typing.Optional[CombinedVisualizer] = None):
+    def _create_sim_robot_base(cls, base_pose=None, canonical_joint=None, canonical_pos=None,
+                               canonical_orientation=None,
+                               visualizer: typing.Optional[CombinedVisualizer] = None):
         if base_pose is None:
             base_pose = cls.BASE_POSE
         if canonical_pos is None:
@@ -568,9 +568,13 @@ class RealArmEnv(Env):
         d_pos = np.linalg.norm(np.subtract(pos, canonical_pos))
         qd = p.getDifferenceQuaternion(orientation, p.getQuaternionFromEuler(canonical_orientation))
         d_orientation = 2 * math.atan2(np.linalg.norm(qd[:3]), qd[-1])
-        if d_pos > 0.05 or d_orientation > 0.03:
+        if d_pos > 0.05 or d_orientation > 0.04:
             raise RuntimeError(f"sim EE can't arrive at desired EE d pos {d_pos} d orientation {d_orientation}")
+        return robot_id, pos, orientation
 
+    @classmethod
+    def create_sim_robot_and_gripper(cls, visualizer: typing.Optional[CombinedVisualizer] = None, **kwargs):
+        robot_id, pos, orientation = cls._create_sim_robot_base(visualizer=visualizer, **kwargs)
         # create shape that matches the gripper
         col_ids = []
         vis_ids = []
@@ -707,6 +711,22 @@ class RealArmEnvMedusa(RealArmEnv):
         else:
             info[name] = np.zeros(3)
         return info
+
+    @classmethod
+    def create_sim_robot_and_gripper(cls, visualizer: typing.Optional[CombinedVisualizer] = None, **kwargs):
+        robot_id, pos, orientation = cls._create_sim_robot_base(visualizer=visualizer, base_pose=cls.BASE_POSE,
+                                                                canonical_joint=cls.REST_JOINTS,
+                                                                canonical_pos=cls.REST_POS,
+                                                                canonical_orientation=cls.REST_ORIENTATION)
+        # need to offset by z in orientation to get ee_link frame
+        offset = p.rotateVector(orientation, [0, 0, 0.045])
+
+        # load gripper (doesn't include the bubbles, so this is just for alignment)
+        # TODO add inflated bubbles to this model
+        gripper_id = p.loadURDF(os.path.join(cfg.URDF_DIR, "wsg50_flipped.urdf"), basePosition=np.add(pos, offset),
+                                baseOrientation=orientation)
+
+        return robot_id, gripper_id, pos, orientation
 
 
 class ArmRealDataSource(EnvDataSource):
@@ -863,11 +883,12 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
 class RealArmPointToConfig(PlanarPointToConfig):
     def __init__(self, env: RealArmEnv):
         # try loading cache
-        fullname = os.path.join(cfg.DATA_DIR, f'arm_real_point_to_config.pkl')
+        # assume that each class has its own configuration, so only need 1 cache per class
+        fullname = os.path.join(cfg.DATA_DIR, f'{env.__class__.__name__}_point_to_config.pkl')
         if os.path.exists(fullname):
             super(RealArmPointToConfig, self).__init__(*torch.load(fullname))
         else:
-            robot_id, gripper_id, pos, orientation = RealArmEnv.create_sim_robot_and_gripper(visualizer=env.vis)
+            robot_id, gripper_id, pos, orientation = env.create_sim_robot_and_gripper(visualizer=env.vis)
             mins = []
             maxs = []
             for i in range(-1, p.getNumJoints(gripper_id)):
