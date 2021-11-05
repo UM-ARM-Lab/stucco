@@ -34,6 +34,7 @@ from arm_robots.victor import Victor
 from bubble_utils.bubble_med.bubble_med import BubbleMed
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
 from mmint_camera_utils.point_cloud_parsers import PicoFlexxPointCloudParser
+from mmint_camera_utils.camera_utils import bilinear_interpolate
 
 # runner imports
 from arm_pytorch_utilities import tensor_utils
@@ -832,16 +833,20 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
     """Contact detector using the bubble gripper"""
 
     def __init__(self, residual_precision, residual_threshold, points_for_no_bubble_deformation,
-                 left_camera: PicoFlexxPointCloudParser, right_camera: PicoFlexxPointCloudParser,
-                 ee_link_frame: str, imprint_threshold=0.001, deform_number_threshold=5):
+                 camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
+                 ee_link_frame: str, imprint_threshold=0.005, deform_number_threshold=5, ref_l=None, ref_r=None):
         # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
         self.pts_no_deformation = points_for_no_bubble_deformation
-        self.left_camera = left_camera
-        self.right_camera = right_camera
+        self.camera_l = camera_l
+        self.camera_r = camera_r
         self.link_frame = ee_link_frame
-        # TODO save current point cloud as reference, or load from file
-        self.ref_l = None
-        self.ref_r = None
+        # save current point cloud as reference, or load from file
+        self.ref_l = ref_l
+        self.ref_r = ref_r
+        if self.ref_l is None or self.ref_r is None:
+            self.ref_l = self.camera_l.get_image_depth()
+            self.ref_r = self.camera_r.get_image_depth()
+
         self.K_l = None
         self.K_r = None
         self.imprint_threshold = imprint_threshold
@@ -850,8 +855,8 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
         # TODO consider using a TimeSynchronizer
-        l = self.left_camera.get_image_depth()
-        r = self.right_camera.get_image_depth()
+        l = self.camera_l.get_image_depth()
+        r = self.camera_r.get_image_depth()
 
         imprint_l = process_bubble_img(self.ref_l - l)
         imprint_r = process_bubble_img(self.ref_r - r)
@@ -860,24 +865,31 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
         deform_l = imprint_l > self.imprint_threshold
         deform_r = imprint_r > self.imprint_threshold
 
+        # TODO debug visualization of depth images and imprints
+
         if len(deform_l) > self.deform_number_threshold:
-            # these are in optical/camera frame
-            # average in image space, then project the average to point cloud
-            im_coordinates = torch.nonzero(deform_l)
-            contact_center_im = im_coordinates.to(dtype=deform_l.dtype).mean(dim=0)
-            v, u = contact_center_im
-            # TODO interpolation on the depth image to get depth
-            d = None
-            pt = project_depth_points(u, v, d, self.K_l)
+            pt = self._get_link_frame_deform_point(l, deform_l, self.camera_l)
         elif len(deform_r) > self.deform_number_threshold:
-            pass
+            pt = self._get_link_frame_deform_point(r, deform_r, self.camera_r)
         else:
             # TODO check and confirm reaction force?
             return self.pts_no_deformation
 
         # TODO check that the latest pose is the origin of self.link_frame
-        # TODO need to return points wrt the frame that the poses are the origin of
-        pass
+        pose_check = self.camera_l.tf_listener.lookupTransform(self.link_frame, "world", rospy.Time.now())
+        return pt
+
+    def _get_link_frame_deform_point(self, depth_im, mask, camera):
+        # these are in optical/camera frame
+        # average in image space, then project the average to point cloud
+        im_coordinates = torch.nonzero(mask)
+        contact_center_im = im_coordinates.to(dtype=depth_im.dtype).mean(dim=0)
+        v, u = contact_center_im
+        # interpolation on the depth image to get depth value
+        d = bilinear_interpolate(depth_im, u, v)
+        pt = project_depth_points(u, v, d, self.K_l)
+        pt = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
+        return pt[0]
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
