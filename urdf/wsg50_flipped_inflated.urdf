@@ -249,7 +249,7 @@
     <visual>
       <origin rpy="0 -1.8661 0" xyz="-0.0252755 0 0.0434163"/>
       <geometry>
-        <mesh filename="package://meshes/bubbles/collision/bubble_flipped.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://meshes/bubbles/collision/bubble_flipped_inflated.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="pastel">
         <color rgba="0.8588 0.5255 0.6588 1"/>
@@ -258,7 +258,7 @@
     <collision>
       <origin rpy="0 -1.8661 0" xyz="-0.0252755 0 0.0434163"/>
       <geometry>
-        <mesh filename="package://meshes/bubbles/collision/bubble_flipped.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://meshes/bubbles/collision/bubble_flipped_inflated.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <contact_coefficients kd="1.0" kp="1000.0" mu="0"/>
@@ -294,7 +294,7 @@
     <visual>
       <origin rpy="0 -1.8661 0" xyz="-0.0252755 0 0.0434163"/>
       <geometry>
-        <mesh filename="package://meshes/bubbles/collision/bubble_flipped.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://meshes/bubbles/collision/bubble_flipped_inflated.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="pastel">
         <color rgba="0.8588 0.5255 0.6588 1"/>
@@ -303,7 +303,7 @@
     <collision>
       <origin rpy="0 -1.8661 0" xyz="-0.0252755 0 0.0434163"/>
       <geometry>
-        <mesh filename="package://meshes/bubbles/visual/bubble_flipped.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://meshes/bubbles/visual/bubble_flipped_inflated.stl" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
     <contact_coefficients kd="1.0" kp="1000.0" mu="0"/>
@@ -322,6 +322,7 @@
       <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0"/>
     </inertial>
   </link>
+  <!--  ==================================  END OF FINGER SELECTION  ==================================  -->
   <gazebo reference="wsg50_finger_left">
     <material>Gazebo/Blue</material>
     <turnGravityOff>false</turnGravityOff>
@@ -332,9 +333,6 @@
   </gazebo>
   <!-- GRASP FRAME -->
   <joint name="wsg50_grasp_frame_fake_joint" type="fixed">
-    <!-- BUBBLES -->
-    <origin rpy="0 0 0" xyz="0 0 0.194"/>
-    <!-- May be worth considering the parameter finger_tip-->
     <!-- <origin xyz="0 0 0" rpy="0 0 -1.5708"/> -->
     <parent link="wsg50_base_link"/>
     <child link="grasp_frame"/>

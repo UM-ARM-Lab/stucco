@@ -35,6 +35,7 @@ from bubble_utils.bubble_med.bubble_med import BubbleMed
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
 from mmint_camera_utils.point_cloud_parsers import PicoFlexxPointCloudParser
 from mmint_camera_utils.camera_utils import bilinear_interpolate
+from wsg_50_utils.wsg_50_gripper import WSG50Gripper
 
 # runner imports
 from arm_pytorch_utilities import tensor_utils
@@ -638,12 +639,12 @@ class RealArmEnvMedusa(RealArmEnv):
     MAX_PUSH_DIST = 0.02
     RESET_RAISE_BY = 0.025
 
-    REST_POS = [0.565179880383697, -0.029918686192412114, 0.09889075218881908 - 0.03]
+    REST_POS = [0.565179880383697, -0.029918686192412114, 0.09889075218881908 - 0.015]
     REST_ORIENTATION = [0.75 * np.pi, 0.5 * np.pi, - 0.75 * np.pi]
     # REST_ORIENTATION_QUAT = [-0.7068252, 0, 0, 0.7073883]
     BASE_POSE = ([0, 0, 0], [0, 0, 0, 1])
-    REST_JOINTS = [-0.6087128180974765, 1.5331392555701764, 0.620243140542067, -1.3122646576495662, -2.365803345934927,
-                   -1.2556336222343112, 0.6481318699970027]
+    REST_JOINTS = [-0.6247649084794565, 1.49610584350157, 0.6107584653902799, -1.3317384239240129, -2.3319198194954844,
+                   -1.2559155511588722, 0.6192390422605022]
 
     EE_LINK_NAME = "med_kuka_link_7"
     WORLD_FRAME = "med_base"
@@ -687,15 +688,15 @@ class RealArmEnvMedusa(RealArmEnv):
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
-        camera_name_right = 'pico_flexx_right'
-        camera_name_left = 'pico_flexx_left'
-        camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
-        camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
-
-        # TODO get point at tip of the gripper when we have the gripper model
-        self._contact_detector = ContactDetectorPlanarRealArmBubble(residual_precision, residual_threshold, [],
-                                                                    camera_parser_left, camera_parser_right,
-                                                                    self.EE_LINK_NAME)
+        # camera_name_right = 'pico_flexx_right'
+        # camera_name_left = 'pico_flexx_left'
+        # camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
+        # camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
+        #
+        # # TODO get point at tip of the gripper when we have the gripper model
+        # self._contact_detector = ContactDetectorPlanarRealArmBubble(residual_precision, residual_threshold, [],
+        #                                                             camera_parser_left, camera_parser_right,
+        #                                                             self.EE_LINK_NAME)
 
         # parallel visualizer for ROS and pybullet
         self.vis.sim = None
@@ -724,8 +725,8 @@ class RealArmEnvMedusa(RealArmEnv):
 
         # load gripper (doesn't include the bubbles, so this is just for alignment)
         # TODO add inflated bubbles to this model
-        gripper_id = p.loadURDF(os.path.join(cfg.URDF_DIR, "wsg50_flipped.urdf"), basePosition=np.add(pos, offset),
-                                baseOrientation=orientation)
+        gripper_id = p.loadURDF(os.path.join(cfg.URDF_DIR, "wsg50_flipped_inflated.urdf"),
+                                basePosition=np.add(pos, offset), baseOrientation=orientation)
 
         return robot_id, gripper_id, pos, orientation
 
@@ -854,7 +855,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
         super(ContactDetectorPlanarRealArmBubble, self).__init__(None, None, residual_precision, residual_threshold)
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
-        # TODO consider using a TimeSynchronizer
+        # consider using a TimeSynchronizer
         l = self.camera_l.get_image_depth()
         r = self.camera_r.get_image_depth()
 
@@ -876,7 +877,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
             return self.pts_no_deformation
 
         # TODO check that the latest pose is the origin of self.link_frame
-        pose_check = self.camera_l.tf_listener.lookupTransform(self.link_frame, "world", rospy.Time.now())
+        pose_check = self.camera_l.tf_listener.lookupTransform("world", self.link_frame, rospy.Time.now())
         return pt
 
     def _get_link_frame_deform_point(self, depth_im, mask, camera):
