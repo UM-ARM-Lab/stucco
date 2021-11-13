@@ -631,7 +631,7 @@ class RealArmEnv(Env):
                                        linkJointTypes=[p.JOINT_FIXED for _ in col_ids],
                                        linkJointAxis=[[0, 0, 1] for _ in col_ids])
 
-        return robot_id, gripper_id, pos, orientation
+        return robot_id, gripper_id, pos, orientation, []
 
 
 class RealArmEnvMedusa(RealArmEnv):
@@ -657,7 +657,7 @@ class RealArmEnvMedusa(RealArmEnv):
         self.robot.cartesian._timeout_per_m = 40 / self.vel
         self.robot.connect()
         self.vis.init_ros()
-        # TODO create gripper
+        self.gripper = WSG50Gripper()
 
         self.motion_status_input_lock = Lock()
         self._temp_wrenches = []
@@ -674,6 +674,7 @@ class RealArmEnvMedusa(RealArmEnv):
 
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
+        # self.gripper.move(0)
 
         base_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose('med_base'))
         status = self.robot.get_arm_status()
@@ -723,12 +724,22 @@ class RealArmEnvMedusa(RealArmEnv):
         # need to offset by z in orientation to get ee_link frame
         offset = p.rotateVector(orientation, [0, 0, 0.045])
 
-        # load gripper (doesn't include the bubbles, so this is just for alignment)
-        # TODO add inflated bubbles to this model
+        # load gripper including inflated bubbles
         gripper_id = p.loadURDF(os.path.join(cfg.URDF_DIR, "wsg50_flipped_inflated.urdf"),
                                 basePosition=np.add(pos, offset), baseOrientation=orientation)
 
-        return robot_id, gripper_id, pos, orientation
+        # grippers are not connected at the middle, so SDF at the center will be close to 0
+        # because we're going to rummage with it closed, we should treat it as a closed object, so add filler body
+        filler_body_ids = []
+        r = 0.08
+        base_col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=r)
+        base_vis_id = p.createVisualShape(p.GEOM_SPHERE, radius=r, rgbaColor=(0.0, 0.8, 0, 0.5))
+
+        offset = p.rotateVector(orientation, [0, 0, 0.21])
+        filler_body_ids.append(p.createMultiBody(0, base_col_id, base_vis_id, basePosition=np.add(pos, offset),
+                                                baseOrientation=orientation))
+
+        return robot_id, gripper_id, pos, orientation, filler_body_ids
 
 
 class ArmRealDataSource(EnvDataSource):
@@ -758,7 +769,7 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
             print(f"cached robot points and normals loaded from {fullname}")
             return torch.load(fullname)
 
-        self.robot_id, gripper_id, pos, orientation = RealArmEnv.create_sim_robot_and_gripper(visualizer=visualizer)
+        self.robot_id, gripper_id, pos, orientation, _ = RealArmEnv.create_sim_robot_and_gripper(visualizer=visualizer)
         z = pos[2]
         # p.removeBody(gripper_id)
 
@@ -901,7 +912,8 @@ class RealArmPointToConfig(PlanarPointToConfig):
         if os.path.exists(fullname):
             super(RealArmPointToConfig, self).__init__(*torch.load(fullname))
         else:
-            robot_id, gripper_id, pos, orientation = env.create_sim_robot_and_gripper(visualizer=env.vis)
+            robot_id, gripper_id, pos, orientation, filler_body_ids = env.create_sim_robot_and_gripper(
+                visualizer=env.vis)
             mins = []
             maxs = []
             for i in range(-1, p.getNumJoints(gripper_id)):
@@ -933,7 +945,10 @@ class RealArmPointToConfig(PlanarPointToConfig):
                     pt = [xi, yj, pos[2]]
                     closest_arm = closest_point_on_surface(robot_id, pt)
                     closest_gripper = closest_point_on_surface(gripper_id, pt)
-                    d[i, j] = min(closest_arm[ContactInfo.DISTANCE], closest_gripper[ContactInfo.DISTANCE])
+                    dists = [closest_arm[ContactInfo.DISTANCE], closest_gripper[ContactInfo.DISTANCE]]
+                    for body_id in filler_body_ids:
+                        dists.append(closest_point_on_surface(body_id, pt)[ContactInfo.DISTANCE])
+                    d[i, j] = min(dists)
             d_cache = d.reshape(-1)
             # save things in (rotated) link frame, so subtract the REST PSO
             min_x -= pos[0]
