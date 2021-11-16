@@ -414,8 +414,8 @@ class RealArmEnv(Env):
             orientation = quaternion_from_euler(*orientation)
         if len(orientation) == 4:
             orientation = Quaternion(*orientation)
-        self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx, dy, target_z=self.REST_POS[2] + dz,
-                                                  blocking=True, step_size=0.01, target_orientation=orientation)
+        self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy, target_z=self.REST_POS[2] + dz,
+                                                  blocking=True, step_size=0.025, target_orientation=orientation)
         self.state = self._obs()
         info = self.aggregate_info()
 
@@ -689,16 +689,17 @@ class RealArmEnvMedusa(RealArmEnv):
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
-        # camera_name_right = 'pico_flexx_right'
-        # camera_name_left = 'pico_flexx_left'
-        # camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
-        # camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
-        #
-        # # TODO get point at tip of the gripper when we have the gripper model
-        # self._contact_detector = ContactDetectorPlanarRealArmBubble(residual_precision, residual_threshold, [],
-        #                                                             camera_parser_left, camera_parser_right,
-        #                                                             self.EE_LINK_NAME)
+        camera_name_right = 'pico_flexx_right'
+        camera_name_left = 'pico_flexx_left'
+        camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
+        camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
 
+        self._contact_detector = ContactDetectorPlanarRealArmBubble("medusa", residual_precision, residual_threshold,
+                                                                    camera_parser_left, camera_parser_right,
+                                                                    self.EE_LINK_NAME,
+                                                                    visualizer=self.vis,
+                                                                    canonical_pos=self.REST_POS,
+                                                                    canonical_orientation=self.REST_ORIENTATION)
         # parallel visualizer for ROS and pybullet
         self.vis.sim = None
 
@@ -737,7 +738,7 @@ class RealArmEnvMedusa(RealArmEnv):
 
         offset = p.rotateVector(orientation, [0, 0, 0.21])
         filler_body_ids.append(p.createMultiBody(0, base_col_id, base_vis_id, basePosition=np.add(pos, offset),
-                                                baseOrientation=orientation))
+                                                 baseOrientation=orientation))
 
         return robot_id, gripper_id, pos, orientation, filler_body_ids
 
@@ -757,24 +758,18 @@ class ArmRealDataSource(EnvDataSource):
 class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
     """Contact detector for real robot, with init points loaded from pybullet"""
 
-    def __init__(self, *args, base_pose=None, canonical_pos=None, **kwargs):
+    def __init__(self, *args, base_pose=None, **kwargs):
         self._base_pose = base_pose
-        self._canonical_pos = canonical_pos
         super().__init__(*args, robot_id=None, **kwargs)
 
     def _init_sample_surface_points_in_canonical_pose(self, visualizer: typing.Optional[CombinedVisualizer] = None):
-        # load if possible; otherwise would require a running pybullet instance
-        fullname = os.path.join(cfg.DATA_DIR, f'detection_{self.name}_cache.pkl')
-        if os.path.exists(fullname):
-            print(f"cached robot points and normals loaded from {fullname}")
-            return torch.load(fullname)
-
         self.robot_id, gripper_id, pos, orientation, _ = RealArmEnv.create_sim_robot_and_gripper(visualizer=visualizer)
         z = pos[2]
-        # p.removeBody(gripper_id)
-
-        cached_points = []
-        cached_normals = []
+        # instead of actually using the link frame, we'll use a rotated version of it so all points lie on the same z
+        # this is because the actual frame is not axis aligned wrt the world
+        fixed_orientation = list(p.getEulerFromQuaternion(orientation))
+        fixed_orientation[1] = 0
+        fixed_orientation[2] = 0
 
         r = 0.2
         # sample evenly in terms of angles, but leave out the section in between the fingers
@@ -783,45 +778,24 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
         angles = np.linspace(start_angle + leave_out, np.pi * 2 - leave_out + start_angle, self.num_sample_points)
 
         offset_y = 0.2
+        sample_pts = []
         for angle in angles:
             pt = [np.cos(angle) * r + pos[0], np.sin(angle) * r + pos[1] + offset_y, z]
-            # visualizer.sim.draw_point(f't', pt, color=(0, 0, 0))
+            sample_pts.append(pt)
 
-            min_pt_arm = closest_point_on_surface(self.robot_id, pt)
-            min_pt_gripper = closest_point_on_surface(gripper_id, pt)
-            min_pt = min_pt_arm if min_pt_arm[ContactInfo.DISTANCE] < min_pt_gripper[
-                ContactInfo.DISTANCE] else min_pt_gripper
-            min_pt_at_z = [min_pt[ContactInfo.POS_A][0], min_pt[ContactInfo.POS_A][1], z]
-            if len(cached_points) > 0:
-                d = np.subtract(cached_points, min_pt_at_z)
-                d = np.linalg.norm(d, axis=1)
-                if np.any(d < self._sample_pt_min_separation):
-                    continue
-            cached_points.append(min_pt_at_z)
-            normal = min_pt[ContactInfo.POS_B + 1]
-            cached_normals.append([-normal[0], -normal[1], 0])
-
-        if visualizer is not None:
-            for i, min_pt_at_z in enumerate(cached_points):
-                t = i / len(cached_points)
-                visualizer.sim.draw_point(f'c.{i}', min_pt_at_z, color=(t, t, 1 - t))
         # visualizer.sim.clear_visualizations()
         # convert points back to link frame
         # note that we're using the actual simmed pos and orientation instead of the canonical one since IK doesn't
         # guarantee we'll actually be at the desired pose
-        cached_points = torch.tensor(cached_points, device=self.device)
-        cached_points -= torch.tensor(pos, device=self.device)
-        # instead of actually using the link frame, we'll use a rotated version of it so all points lie on the same z
-        # this is because the actual frame is not axis aligned wrt the world
-        o = list(p.getEulerFromQuaternion(orientation))
-        o[1] = 0
-        o[2] = 0
-        r = tf.Rotate(o, device=self.device, dtype=self.dtype).inverse()
-        cached_points = r.transform_points(cached_points)
-        cached_normals = r.transform_normals(torch.tensor(cached_normals, device=self.device))
-
-        torch.save((cached_points, cached_normals), fullname)
-        logger.info("robot points and normals saved to %s", fullname)
+        # TODO check the transform in the call is the same as below
+        # cached_points = torch.tensor(cached_points, device=self.device)
+        # cached_points -= torch.tensor(pos, device=self.device)
+        # r = tf.Rotate(fixed_orientation, device=self.device, dtype=self.dtype).inverse()
+        # cached_points = r.transform_points(cached_points)
+        # cached_normals = r.transform_normals(torch.tensor(cached_normals, device=self.device))
+        cached_points, cached_normals = self._project_sample_points_to_surface([self.robot_id, gripper_id], pos,
+                                                                               fixed_orientation, sample_pts,
+                                                                               visualizer=visualizer)
 
         if visualizer is not None:
             x = tf.Translate(*self._canonical_pos, device=self.device, dtype=self.dtype)
@@ -841,14 +815,14 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
         return cached_points, cached_normals
 
 
-class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
+class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
     """Contact detector using the bubble gripper"""
 
-    def __init__(self, residual_precision, residual_threshold, points_for_no_bubble_deformation,
+    def __init__(self, name, residual_precision, residual_threshold,
                  camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
-                 ee_link_frame: str, imprint_threshold=0.005, deform_number_threshold=5, ref_l=None, ref_r=None):
-        # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
-        self.pts_no_deformation = points_for_no_bubble_deformation
+                 ee_link_frame: str, imprint_threshold=0.005, deform_number_threshold=5, ref_l=None, ref_r=None,
+                 **kwargs):
+
         self.camera_l = camera_l
         self.camera_r = camera_r
         self.link_frame = ee_link_frame
@@ -863,7 +837,35 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
         self.K_r = None
         self.imprint_threshold = imprint_threshold
         self.deform_number_threshold = deform_number_threshold
-        super(ContactDetectorPlanarRealArmBubble, self).__init__(None, None, residual_precision, residual_threshold)
+        super(ContactDetectorPlanarRealArmBubble, self).__init__(name, residual_precision, residual_threshold, **kwargs)
+
+    def _init_sample_surface_points_in_canonical_pose(self, visualizer: typing.Optional[CombinedVisualizer] = None):
+        robot_id, gripper_id, pos, orientation, _ = RealArmEnvMedusa.create_sim_robot_and_gripper(visualizer=visualizer)
+
+        # single point at the front
+        offset = p.rotateVector(orientation, [0, 0, 0.3])
+        pt = np.add(pos, offset)
+        # potentially add other points
+
+        cached_points, cached_normals = self._project_sample_points_to_surface([robot_id, gripper_id], pos,
+                                                                               orientation, [pt], visualizer=visualizer)
+
+        p.disconnect()
+
+        # visualize it on the real robot
+        if visualizer is not None:
+            x = tf.Translate(*self._canonical_pos, device=self.device, dtype=self.dtype)
+            # actual orientation is rotated wrt world frame so not all points are on same z level
+            orientation = copy.deepcopy(self._canonical_orientation)
+            r = tf.Rotate(orientation, device=self.device, dtype=self.dtype)
+            trans = x.compose(r)
+            ros_pts = trans.transform_points(cached_points)
+
+            for i, min_pt_at_z in enumerate(ros_pts):
+                t = i / len(cached_points)
+                visualizer.ros.draw_point(f'c.{i}', min_pt_at_z, color=(t, t, 1 - t))
+
+        return cached_points, cached_normals
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
         # consider using a TimeSynchronizer
@@ -884,8 +886,9 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanar):
         elif len(deform_r) > self.deform_number_threshold:
             pt = self._get_link_frame_deform_point(r, deform_r, self.camera_r)
         else:
+            # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
             # TODO check and confirm reaction force?
-            return self.pts_no_deformation
+            return self._cached_points[0]
 
         # TODO check that the latest pose is the origin of self.link_frame
         pose_check = self.camera_l.tf_listener.lookupTransform("world", self.link_frame, rospy.Time.now())
