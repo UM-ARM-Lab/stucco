@@ -188,6 +188,8 @@ class RealArmEnv(Env):
         self._contact_detector = None
         self._vis = CombinedVisualizer()
         self._contact_debug_names = []
+        # for Victor, have to force orientation to be planar in several places
+        self._need_to_force_planar = True
 
         # additional information accumulated in a single step
         self._single_step_contact_info = {}
@@ -323,17 +325,18 @@ class RealArmEnv(Env):
 
             # print residual
             residual = wr_np.T @ self.contact_detector.residual_precision @ wr_np
-            self.vis.ros.draw_text("residualmag", f"{np.round(residual, 2)}", [0.5, -0.3, 1], absolute_pos=True)
+            self.vis.ros.draw_text("residualmag", f"{np.round(residual, 2)}", [0.5, 0.3, 0.5], absolute_pos=True)
 
             # observe and save contact info
             info = {}
 
             pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose(self.EE_LINK_NAME))
             pos = pose[0]
-            # manually make observed point planar
             orientation = list(p.getEulerFromQuaternion(pose[1]))
-            orientation[1] = 0
-            orientation[2] = 0
+            if self._need_to_force_planar:
+                # manually make observed point planar
+                orientation[1] = 0
+                orientation[2] = 0
             if self.contact_detector.observe_residual(wr_np, (pos, orientation)):
                 info[InfoKeys.DEE_IN_CONTACT] = np.subtract(pos, self.last_ee_pos)
             self.last_ee_pos = pos
@@ -409,11 +412,8 @@ class RealArmEnv(Env):
         # set target orientation as rest orientation
         if orientation is None:
             orientation = copy.deepcopy(self.REST_ORIENTATION)
-            orientation[1] += np.pi / 4
-        if len(orientation) == 3:
-            orientation = quaternion_from_euler(*orientation)
-        if len(orientation) == 4:
-            orientation = Quaternion(*orientation)
+            if self._need_to_force_planar:
+                orientation[1] += np.pi / 4
         self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy, target_z=self.REST_POS[2] + dz,
                                                   blocking=True, step_size=0.025, target_orientation=orientation)
         self.state = self._obs()
@@ -651,6 +651,7 @@ class RealArmEnvMedusa(RealArmEnv):
     ACTIVE_MOVING_ARM = 0  # only 1 arm
 
     def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
+        self._need_to_force_planar = False
         med = BubbleMed(display_goals=False)
         self.robot = med
         # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
@@ -674,7 +675,7 @@ class RealArmEnvMedusa(RealArmEnv):
 
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
-        self.gripper.move(0)
+        # self.gripper.move(0)
 
         base_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose('med_base'))
         status = self.robot.get_arm_status()
@@ -684,15 +685,15 @@ class RealArmEnvMedusa(RealArmEnv):
                             status.measured_joint_position.joint_7]
 
         self.last_ee_pos = self._observe_ee(return_z=True)
+        self.REST_POS[2] = self.last_ee_pos[-1]
         self.state = self._obs()
 
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
-        camera_name_right = 'pico_flexx_right'
-        camera_name_left = 'pico_flexx_left'
-        camera_parser_right = PicoFlexxPointCloudParser(camera_name=camera_name_right)
-        camera_parser_left = PicoFlexxPointCloudParser(camera_name=camera_name_left)
+        use_cameras = False
+        camera_parser_right = PicoFlexxPointCloudParser(camera_name='pico_flexx_right') if use_cameras else None
+        camera_parser_left = PicoFlexxPointCloudParser(camera_name='pico_flexx_left') if use_cameras else None
 
         self._contact_detector = ContactDetectorPlanarRealArmBubble("medusa", residual_precision, residual_threshold,
                                                                     camera_parser_left, camera_parser_right,
@@ -829,12 +830,17 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         # save current point cloud as reference, or load from file
         self.ref_l = ref_l
         self.ref_r = ref_r
-        if self.ref_l is None or self.ref_r is None:
-            self.ref_l = self.camera_l.get_image_depth()
-            self.ref_r = self.camera_r.get_image_depth()
 
-        self.K_l = None
-        self.K_r = None
+        if self.camera_l is not None:
+            if self.ref_l is None or self.ref_r is None:
+                self.ref_l = self.camera_l.get_image_depth()
+                self.ref_r = self.camera_r.get_image_depth()
+            info = self.camera_l.get_camera_info_depth()
+            self.K_l = info['K']
+            info = self.camera_r.get_camera_info_depth()
+            self.K_r = info['K']
+        else:
+            rospy.logwarn("Creating contact detector without camera")
         self.imprint_threshold = imprint_threshold
         self.deform_number_threshold = deform_number_threshold
         super(ContactDetectorPlanarRealArmBubble, self).__init__(name, residual_precision, residual_threshold, **kwargs)
@@ -867,10 +873,10 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
 
         # TODO debug visualization of depth images and imprints
 
-        if len(deform_l) > self.deform_number_threshold:
-            pt = self._get_link_frame_deform_point(l, deform_l, self.camera_l)
-        elif len(deform_r) > self.deform_number_threshold:
-            pt = self._get_link_frame_deform_point(r, deform_r, self.camera_r)
+        if deform_l.sum() > self.deform_number_threshold:
+            pt = self._get_link_frame_deform_point(l, deform_l, self.camera_l, "left")
+        elif deform_r.sum() > self.deform_number_threshold:
+            pt = self._get_link_frame_deform_point(r, deform_r, self.camera_r, "right")
         else:
             # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
             # TODO check and confirm reaction force?
@@ -890,17 +896,16 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
 
         return pt
 
-    def _get_link_frame_deform_point(self, depth_im, mask, camera):
+    def _get_link_frame_deform_point(self, depth_im, mask, camera, side_str):
         # these are in optical/camera frame
         # average in image space, then project the average to point cloud
-        im_coordinates = torch.nonzero(mask)
-        contact_center_im = im_coordinates.to(dtype=depth_im.dtype).mean(dim=0)
-        v, u = contact_center_im
+        vs, us, _ = np.nonzero(mask)
+        v, u = vs.mean(), us.mean()
         # interpolation on the depth image to get depth value
         d = bilinear_interpolate(depth_im, u, v)
         pt = project_depth_points(u, v, d, self.K_l)
-        pt = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
-        return pt[0]
+        pt = camera.transform_pc(np.array(pt).reshape(1, -1), f"{side_str}_bubble_camera_frame", self.link_frame)
+        return torch.tensor(pt[0], dtype=self.dtype, device=self.device)
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
