@@ -6,6 +6,7 @@ from collections import deque
 
 import pytorch_kinematics.transforms as tf
 from arm_pytorch_utilities import math_utils
+import numpy as np
 
 point = torch.tensor
 points = torch.tensor
@@ -107,7 +108,7 @@ class ContactDetector:
                 break
             ee_ft.append(ee_force_torque)
             pp.append(prev_pose)
-        ee_ft = torch.tensor(ee_ft, dtype=self.dtype, device=self.device)
+        ee_ft = torch.tensor(np.stack(ee_ft), dtype=self.dtype, device=self.device)
         # assume we don't move that much in a short amount of time and we can just use the latest pose
         pp = tuple(torch.tensor(p, dtype=self.dtype, device=self.device) for p in pp[0])
         # pos = torch.tensor([p[0] for p in pp], dtype=self.dtype)
