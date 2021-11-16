@@ -18,44 +18,52 @@ logger = logging.getLogger(__name__)
 
 
 class VideoLogger:
-    def __init__(self):
-        self.wr = WindowRecorder(window_names=("RViz*", "RViz"), name_suffix="rviz", frame_rate=30.0,
-                                 save_dir=cfg.VIDEO_DIR)
+    def __init__(self, window_names=("RViz*", "RViz"), log_rviz=True, log_external_video=True):
+        self.log_rviz = log_rviz
+        self.log_external_video = log_external_video
+        if self.log_rviz:
+            self.wr = WindowRecorder(window_names=window_names, name_suffix="rviz", frame_rate=30.0,
+                                     save_dir=cfg.VIDEO_DIR)
 
     def __enter__(self):
         logger.info("Start recording videos")
-        srv_name = "video_recorder"
-        rospy.wait_for_service(srv_name)
-        self.srv_video = rospy.ServiceProxy(srv_name, TriggerVideoRecording)
-        self.req = TriggerVideoRecordingRequest()
-        self.req.filename = os.path.join(cfg.VIDEO_DIR,
-                                         '{}_robot.mp4'.format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
-        self.req.timeout_in_sec = 3600
-        self.req.record = True
-        self.srv_video(self.req)
-        self.wr.__enter__()
+        if self.log_external_video:
+            srv_name = "video_recorder"
+            rospy.wait_for_service(srv_name)
+            self.srv_video = rospy.ServiceProxy(srv_name, TriggerVideoRecording)
+            self.req = TriggerVideoRecordingRequest()
+            self.req.filename = os.path.join(cfg.VIDEO_DIR,
+                                             '{}_robot.mp4'.format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
+            self.req.timeout_in_sec = 3600
+            self.req.record = True
+            self.srv_video(self.req)
+        if self.log_rviz:
+            self.wr.__enter__()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         logger.info("Stop recording videos")
         # stop logging video
-        self.wr.__exit__()
-        if self.srv_video is not None:
-            self.req.record = False
-            # for some reason service will accept the request but not give a response... ignore for now
-            try:
-                self.srv_video(self.req)
-            except ServiceException:
-                pass
+        if self.log_rviz:
+            self.wr.__exit__()
+        if self.log_external_video:
+            if self.srv_video is not None:
+                self.req.record = False
+                # for some reason service will accept the request but not give a response... ignore for now
+                try:
+                    self.srv_video(self.req)
+                except ServiceException:
+                    pass
 
 
 class DebugRvizDrawer(Visualizer):
     BASE_SCALE = 0.005
 
-    def __init__(self, action_scale=0.1, max_nominal_model_error=20):
+    def __init__(self, action_scale=0.1, max_nominal_model_error=20, world_frame="victor_root"):
         self.marker_pub = rospy.Publisher("visualization_marker", Marker, queue_size=0)
         self.action_scale = action_scale
         self.max_nom_model_error = max_nominal_model_error
+        self.world_frame = world_frame
         self._ns = set()
 
     def _extract_ns_id_from_name(self, name):
@@ -127,7 +135,7 @@ class DebugRvizDrawer(Visualizer):
             self._ns.add(ns)
         elif ns in self._ns:
             self._ns.remove(ns)
-        marker.header.frame_id = "victor_root"
+        marker.header.frame_id = self.world_frame
         marker.type = marker_type
         marker.action = Marker.ADD
         marker.scale.x = scale

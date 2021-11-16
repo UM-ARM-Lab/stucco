@@ -656,7 +656,7 @@ class RealArmEnvMedusa(RealArmEnv):
         # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
         self.robot.cartesian._timeout_per_m = 40 / self.vel
         self.robot.connect()
-        self.vis.init_ros()
+        self.vis.init_ros(world_frame="world")
         self.gripper = WSG50Gripper()
 
         self.motion_status_input_lock = Lock()
@@ -674,7 +674,7 @@ class RealArmEnvMedusa(RealArmEnv):
 
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
-        # self.gripper.move(0)
+        self.gripper.move(0)
 
         base_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose('med_base'))
         status = self.robot.get_arm_status()
@@ -851,20 +851,6 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
                                                                                orientation, [pt], visualizer=visualizer)
 
         p.disconnect()
-
-        # visualize it on the real robot
-        if visualizer is not None:
-            x = tf.Translate(*self._canonical_pos, device=self.device, dtype=self.dtype)
-            # actual orientation is rotated wrt world frame so not all points are on same z level
-            orientation = copy.deepcopy(self._canonical_orientation)
-            r = tf.Rotate(orientation, device=self.device, dtype=self.dtype)
-            trans = x.compose(r)
-            ros_pts = trans.transform_points(cached_points)
-
-            for i, min_pt_at_z in enumerate(ros_pts):
-                t = i / len(cached_points)
-                visualizer.ros.draw_point(f'c.{i}', min_pt_at_z, color=(t, t, 1 - t))
-
         return cached_points, cached_normals
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
@@ -888,10 +874,20 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         else:
             # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
             # TODO check and confirm reaction force?
-            return self._cached_points[0]
+            pt = self._cached_points[0]
 
         # TODO check that the latest pose is the origin of self.link_frame
         pose_check = self.camera_l.tf_listener.lookupTransform("world", self.link_frame, rospy.Time.now())
+
+        if visualizer is not None:
+            x = tf.Translate(*pose[0], device=self.device, dtype=self.dtype)
+            r = tf.Rotate(pose[1], device=self.device, dtype=self.dtype)
+            link_to_current_tf = x.compose(r)
+            pts = link_to_current_tf.transform_points(pt.view(1, -1))
+            visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
+            visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
+                                    scale=0.2)
+
         return pt
 
     def _get_link_frame_deform_point(self, depth_im, mask, camera):

@@ -229,7 +229,8 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
 
     best_tsf_guess = None
 
-    with VideoLogger():
+    with VideoLogger(window_names=("medusa_flipped_inflated.rviz* - RViz", "medusa_flipped_inflated.rviz - RViz"),
+                     log_external_video=False):
         while not rospy.is_shutdown() and not ctrl.done():
             best_distance = None
 
@@ -353,7 +354,7 @@ def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
 
 class Levels(enum.IntEnum):
     NO_CLUTTER = 0
-    TIGHT_CLUTTER = 1
+    FLAT_BOX = 1
     CAN_IN_FRONT = 2
 
 
@@ -431,30 +432,31 @@ def create_predetermined_controls(level: Levels):
         ret_ctrl += [[0, -1.0]] * 4
         ret_ctrl += [[0.7, -1.0]] * 4
     elif level is Levels.CAN_IN_FRONT:
-        ctrl = [[0.0, 1.0, None]]
-        # poke master chef can to the right
-        # ctrl += [[0.8, 0, None], [0.5, 0.], None]
-        ctrl += [[0.1, 0, ], None, [1.0, 0.], [0.2, 0]]
-        ctrl += [[1.0, 0], [-0.1, 0.4, None]] * 3
-        ctrl += [[1.0, 0]]
-        ctrl += [[0.0, -1.0, None], [0.1, 0.1], None]
-        ctrl += [[1.0, 1.0], [0.3, -0.7, None]] * 3
-        # move in front of cheezit box
-        ctrl += [[-1.0, 0], None] * 4
-        ctrl += [[0, 0.5], None] * 2
-        # poke cheezit box
-        ctrl += [[0, 1.0], [-0.85, -0.3, None]] * 3
-        # poke kettle
-        ctrl += [[-0.1, -1, None]] * 2
-        ctrl += [[-0.2, 0.12], None]
-        ctrl += [[-1., 0.6], [-1, 0.6], [-0.2, -0.3, None]] * 3
-
-        # move in between to poke both
-        ctrl += [[0, 1.0]] * 5
-        ctrl += [[-1, 1]]
-        ctrl += [[0.2, 0], None]
-        ctrl += [[1, 0], None, [1.0, 0], [0.5, 0]]
-        ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 4
+        ctrl = [[0., 0.]] * 20
+        # ctrl = [[0.0, 1.0, None]]
+        # # poke master chef can to the right
+        # # ctrl += [[0.8, 0, None], [0.5, 0.], None]
+        # ctrl += [[0.1, 0, ], None, [1.0, 0.], [0.2, 0]]
+        # ctrl += [[1.0, 0], [-0.1, 0.4, None]] * 3
+        # ctrl += [[1.0, 0]]
+        # ctrl += [[0.0, -1.0, None], [0.1, 0.1], None]
+        # ctrl += [[1.0, 1.0], [0.3, -0.7, None]] * 3
+        # # move in front of cheezit box
+        # ctrl += [[-1.0, 0], None] * 4
+        # ctrl += [[0, 0.5], None] * 2
+        # # poke cheezit box
+        # ctrl += [[0, 1.0], [-0.85, -0.3, None]] * 3
+        # # poke kettle
+        # ctrl += [[-0.1, -1, None]] * 2
+        # ctrl += [[-0.2, 0.12], None]
+        # ctrl += [[-1., 0.6], [-1, 0.6], [-0.2, -0.3, None]] * 3
+        #
+        # # move in between to poke both
+        # ctrl += [[0, 1.0]] * 5
+        # ctrl += [[-1, 1]]
+        # ctrl += [[0.2, 0], None]
+        # ctrl += [[1, 0], None, [1.0, 0], [0.5, 0]]
+        # ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 4
 
         # ctrl += [None]
         # ctrl += [[0, 1], None]
