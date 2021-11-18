@@ -73,7 +73,11 @@ class ContactDetector:
         if len(self.observation_history) == 0:
             return False
         for i in range(self._window_size):
-            in_contact, ee_force_torque, prev_pose = self.observation_history[-1 - i]
+            index = -1 - i
+            # out of range
+            if index < -len(self.observation_history):
+                return False
+            in_contact, ee_force_torque, prev_pose = self.observation_history[index]
             if in_contact:
                 return True
         return False
