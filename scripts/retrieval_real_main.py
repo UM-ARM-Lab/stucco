@@ -166,8 +166,8 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
 
         # 3 elements in a control means to perform it but not calibrate (and ignore whether we think we're in contact or not)
         # skip if we were calibrating with the last control, or if we are currently calibrating
-        skip_update = (u is None) or (len(self.x_history) < 2) or (
-                (self.u_history[-1] is None) or (len(self.u_history[-1]) > 2))
+        skip_update = (type(u) is SpecialActions) or (len(self.x_history) < 2) or (
+                (type(self.u_history[-1]) is SpecialActions) or (len(self.u_history[-1]) > 2))
         if not skip_update:
             x = self.x_history[-1][:2]
             dx = info[InfoKeys.DEE_IN_CONTACT][:2]
@@ -276,11 +276,17 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
                     env.vis.draw_2d_line(f"tmptbestline.{i}", pt, np.subtract(next_pt, pt), color=(0, 0, 1), size=2,
                                          scale=1)
 
-            if u is None:
+            if u is SpecialActions.RECALIBRATE:
                 env.recalibrate_static_wrench()
                 obs = env._obs()
                 info = None
                 continue
+            elif u is SpecialActions.WAIT_FOR_INPUT:
+                input("Enter to continue execution")
+                obs = env._obs()
+                info = None
+                continue
+
             obs, _, done, info = env.step(u[:2])
             print(f"pushed {u} state {obs}")
 
@@ -358,85 +364,24 @@ class Levels(enum.IntEnum):
     CAN_IN_FRONT = 2
 
 
+class SpecialActions(enum.Enum):
+    RECALIBRATE = 0
+    WAIT_FOR_INPUT = 1
+
+
 def create_predetermined_controls(level: Levels):
     ctrl = None
     ret_ctrl = None
-    if level is Levels.NO_CLUTTER:
-        # get 4 points on the front face
-        ctrl = [[0, 0.65], None]
-        ctrl += [[0, 1.0]]
-        ctrl += [[0.4, -1., None], [1.0, -0.5, None]]
-        ctrl += [[0, 0.6], None]
-        ctrl += [[0, 0.9]]
-        ctrl += [[0.4, -0.9, None], [1.0, -0.5, None]]
-        ctrl += [[0, 0.9], None]
-        ctrl += [[0, 1.0]]
-        ctrl += [[0.4, -0.7, None], [1.0, -0.5, None]]
-        ctrl += [[0, 0.7], None]
-        ctrl += [[0, 1.0]]
+    if level is Levels.CAN_IN_FRONT:
+        # ctrl = [SpecialActions.RECALIBRATE] + [[0., 0.]] * 20
+        ctrl = [[0.0, 1.0, None]]
+        # poke master chef can to the right
+        ctrl += [[0.1, 0, ]]
+        ctrl += [SpecialActions.RECALIBRATE]
+        ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[1.0, 0.], [0.2, 0]]
 
-        # # move to the left side of front the cheezit box and poke again
-        ctrl += [[-0.4, -0.9, None]]
-        ctrl += [[-1.0, 0], None]
-        ctrl += [[-1.0, 0]] * 2
-        ctrl += [None]
-        ctrl += [[-1.0, 0]] * 2
-        ctrl += [[0., -0.7, None]]
-        ctrl += [[0.0, 0.4], None]
-        ctrl += [[0.0, 1.0]]
 
-        # move to the left side of the cheezit box
-        ctrl += [[-1.0, -0.5], None]
-        ctrl += [[-1.0, 0]] * 2
-        ctrl += [[-0.9, 0]] * 1
-        ctrl += [None]
-        ctrl += [[-1.0, 0]] * 2
-        ctrl += [[0.0, 0.6], None]
-        ctrl += [[0.0, 1.0]] * 3
-        ctrl += [None]
-        ctrl += [[0.0, 1.0]] * 3
-
-        # poke to the right with the side
-        ctrl += [[0.4, 0.], None]
-        ctrl += [[0.7, 0.]]
-        ctrl += [[-0.1, 0.7], None]
-        ctrl += [[0.7, 0.]]
-
-    elif level is Levels.FLAT_BOX:
-        # move to face cheezit
-        ctrl = [[1.0, 0, None]] * 4
-        ctrl += [[0, 1.0], None]
-        # poke again
-        ctrl += [[0, 1.0], [-0.9, -0.8, None]]
-        ctrl += [[0, 0.5], None]
-        ctrl += [[0, 1.0], [-0.4, -0.8, None]]
-
-        # poke cup close to where we poked cheezit
-        ctrl += [[-0.8, 0], None]
-        ctrl += [[-1, 0]] * 2
-        ctrl += [[-0.7, 0.7], None]
-        ctrl += [[-1, 1]]
-        ctrl += [[1, 0, None]]
-        ctrl += [[0, 0.3], None]
-        ctrl += [[0, 1]]
-        # poke along its side
-        ctrl += [[0.4, 0.2, None], [-0.1, 0.07], None, [-1, 0.7]] * 4
-        ctrl += [[-0.7, 0.9]]
-        # back to poking cheezit
-        ctrl += [[1.0, 0.7, None], [0.2, 0], None]
-        ctrl += [[0.5, 0], [-0.2, 1.0, None]] * 4
-        ctrl += [[0.9, 0]]
-
-        ret_ctrl = [[-0.9, 0]]
-        ret_ctrl += [[-1., -0.3]] * 4
-        ret_ctrl += [[0, -1.0]] * 4
-        ret_ctrl += [[0.7, -1.0]] * 4
-    elif level is Levels.CAN_IN_FRONT:
-        ctrl = [[0., 0.]] * 20
-        # ctrl = [[0.0, 1.0, None]]
-        # # poke master chef can to the right
-        # # ctrl += [[0.8, 0, None], [0.5, 0.], None]
-        # ctrl += [[0.1, 0, ], None, [1.0, 0.], [0.2, 0]]
         # ctrl += [[1.0, 0], [-0.1, 0.4, None]] * 3
         # ctrl += [[1.0, 0]]
         # ctrl += [[0.0, -1.0, None], [0.1, 0.1], None]
