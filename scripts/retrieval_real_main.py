@@ -211,7 +211,7 @@ class RealSklearnTrackingMethod(SklearnTrackingMethod):
         return self.ctrl
 
 
-def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
+def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait=0.):
     input("enter to start execution")
     controls, ret_ctrl = create_predetermined_controls(level)
     ctrl = method.create_predetermined_controller(controls)
@@ -289,6 +289,7 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod):
 
             obs, _, done, info = env.step(u[:2])
             print(f"pushed {u} state {obs}")
+            rospy.sleep(control_wait)
 
         # after estimating pose, plan a grasp to it and attempt a grasp
         if best_tsf_guess is not None:
@@ -373,14 +374,13 @@ def create_predetermined_controls(level: Levels):
     ctrl = None
     ret_ctrl = None
     if level is Levels.CAN_IN_FRONT:
-        # ctrl = [SpecialActions.RECALIBRATE] + [[0., 0.]] * 20
-        ctrl = [[0.0, 1.0, None]]
-        # poke master chef can to the right
-        ctrl += [[0.1, 0, ]]
-        ctrl += [SpecialActions.RECALIBRATE]
-        ctrl += [SpecialActions.WAIT_FOR_INPUT]
-        ctrl += [[1.0, 0.], [0.2, 0]]
-
+        ctrl = [SpecialActions.RECALIBRATE] + [[0., 0.]] * 20
+        # ctrl = [[0.0, 1.0, None]]
+        # # poke master chef can to the right
+        # ctrl += [[0.1, 0, ]]
+        # ctrl += [SpecialActions.RECALIBRATE]
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        # ctrl += [[1.0, 0.], [0.2, 0]]
 
         # ctrl += [[1.0, 0], [-0.1, 0.4, None]] * 3
         # ctrl += [[1.0, 0]]
@@ -460,7 +460,7 @@ def main():
     # move to the actual left side
     env.vis.clear_visualizations(["0", "0a", "1", "1a", "c", "reaction", "tmptbest", "residualmag"])
 
-    run_retrieval(env, level, pt_to_config, methods_to_run[args.method])
+    run_retrieval(env, level, pt_to_config, methods_to_run[args.method], control_wait=1.)
     env.vis.clear_visualizations()
 
 
