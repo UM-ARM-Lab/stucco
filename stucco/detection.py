@@ -124,9 +124,7 @@ class ContactDetector:
         if last_contact_point is None:
             return None
 
-        x = tf.Translate(*pose[0], dtype=self.dtype, device=self.device)
-        r = tf.Rotate(pose[1], dtype=self.dtype, device=self.device)
-        link_to_current_tf = x.compose(r)
+        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=pose[1], dtype=self.dtype, device=self.device)
         return link_to_current_tf.transform_points(last_contact_point.view(1, -1))[0]
 
     @abc.abstractmethod
@@ -145,9 +143,7 @@ class ContactDetector:
             self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
             self._cached_normals = self._cached_normals.to(device=self.device, dtype=self.dtype)
 
-        x = tf.Translate(*pose[0], device=self.device, dtype=self.dtype)
-        r = tf.Rotate(pose[1], device=self.device, dtype=self.dtype)
-        link_to_current_tf = x.compose(r)
+        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=pose[1], dtype=self.dtype, device=self.device)
         pts = link_to_current_tf.transform_points(self._cached_points)
         normals = link_to_current_tf.transform_normals(self._cached_normals)
         if visualizer is not None:

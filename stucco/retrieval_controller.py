@@ -95,14 +95,14 @@ class RetrievalPredeterminedController(Controller):
         return self.i >= len(self.controls)
 
     @abc.abstractmethod
-    def update(self, obs, info):
+    def update(self, obs, info, visualizer=None):
         pass
 
-    def command(self, obs, info=None):
+    def command(self, obs, info=None, visualizer=None):
         self.x_history.append(obs)
 
         if len(self.x_history) > 1:
-            self.update(obs, info)
+            self.update(obs, info, visualizer=visualizer)
 
         if self.done():
             u = [0 for _ in range(self.nu)]
@@ -123,14 +123,15 @@ class OursRetrievalPredeterminedController(RetrievalPredeterminedController):
         self.contact_set = contact_set
         self.contact_indices = []
 
-    def update(self, obs, info):
+    def update(self, obs, info, visualizer=None):
         if self.contact_detector.in_contact():
             self.contact_indices.append(self.i)
 
         x = self.x_history[-1][:2]
         dx = info[InfoKeys.DEE_IN_CONTACT][:2]
         info['u'] = torch.tensor(self.u_history[-1])
-        self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(), info=info)
+        self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(visualizer=visualizer),
+                                info=info)
 
 
 def rot_2d_mat_to_angle(T):

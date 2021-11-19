@@ -57,9 +57,7 @@ class ContactDetectorPlanarPybulletGripper(ContactDetectorPlanar):
                 visualizer.draw_2d_line(f'n.{i}', min_pt_at_z, cached_normals[i], color=(0.5, 0, 0), size=2., scale=0.1)
 
         # convert points back to link frame
-        x = tf.Translate(*ee_pos, device=self.device, dtype=self.dtype)
-        r = tf.Rotate(ee_orientation, device=self.device, dtype=self.dtype)
-        trans = x.compose(r).inverse()
+        trans = tf.Transform3d(pos=ee_pos, rot=ee_orientation, dtype=self.dtype, device=self.device).inverse()
         cached_points = trans.transform_points(torch.tensor(cached_points, device=self.device, dtype=self.dtype))
         cached_normals = trans.transform_normals(torch.tensor(cached_normals, device=self.device, dtype=self.dtype))
 
