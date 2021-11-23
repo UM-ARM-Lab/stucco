@@ -913,7 +913,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
             pt = self._get_link_frame_deform_point(self.cache_r['depth_img'], self.cache_r['mask'], self.camera_r)
         else:
             # TODO can pass points for no bubble deformation into normal pipeline, instead of always selecting it
-            # TODO check and confirm reaction force?
+            rospy.loginfo("Non-bubble contact")
             pt = self._cached_points[0]
 
         if visualizer is not None:
@@ -933,8 +933,8 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         # interpolation on the depth image to get depth value
         d = bilinear_interpolate(depth_im, u, v)
         pt = project_depth_points(u, v, d, self.K_l)
-        pt = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
-        return torch.tensor(pt[0], dtype=self.dtype, device=self.device)
+        pt_l = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
+        return torch.tensor(pt_l[0], dtype=self.dtype, device=self.device)
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
