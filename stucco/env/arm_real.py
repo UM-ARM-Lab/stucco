@@ -860,6 +860,8 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         self.imprint_threshold = imprint_threshold
         self.deform_number_threshold = deform_number_threshold
         if self.camera_l is not None:
+            self.camera_l_input_lock = Lock()
+            self.camera_r_input_lock = Lock()
             if self.ref_l is None or self.ref_r is None:
                 self.ref_l = self.camera_l.get_image_depth()
                 self.ref_r = self.camera_r.get_image_depth()
@@ -877,6 +879,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
 
             move_figure(self.imprint_fig, 0, 0)
             self.im_handle = {}
+            self.removable_artists = []
             plt.show()
             self.camera_l.register_callback('depth', self._depth_img_callback_l)
             self.camera_r.register_callback('depth', self._depth_img_callback_r)
@@ -884,22 +887,32 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
             rospy.logwarn("Creating contact detector without camera")
         super(ContactDetectorPlanarRealArmBubble, self).__init__(name, residual_precision, residual_threshold, **kwargs)
 
-    def _draw_deformation(self, imprint, ax):
+    def _draw_deformation(self, ax, **cache_content):
+        imprint = cache_content['imprint']
         # debug visualization of depth images and imprints
         if ax not in self.im_handle:
             self.im_handle[ax] = ax.imshow(imprint.squeeze(), norm=self.imprint_norm)
         else:
             self.im_handle[ax].set_data(imprint.squeeze())
+        vu = cache_content.get('contact_avg_pixel', None)
+        if vu is not None:
+            self.removable_artists.append(ax.annotate('contact pt', xy=(vu[1], vu[0]), xycoords='data', xytext=(0, 25),
+                                                      textcoords='offset points',
+                                                      arrowprops=dict(facecolor='black', shrink=0.05),
+                                                      horizontalalignment='center',
+                                                      verticalalignment='top'))
         plt.pause(0.0001)
 
     def observe_residual(self, ee_force_torque, pose=None):
         # we are informed by cameras in addition to force-torque of whether we're in contact or not
         epsilon = ee_force_torque.T @ self.residual_precision @ ee_force_torque
         in_contact = epsilon > self.residual_threshold
-        if self.cache_l is not None and self.cache_l['contact']:
-            in_contact = True
-        if self.cache_r is not None and self.cache_r['contact']:
-            in_contact = True
+        with self.camera_l_input_lock:
+            if self.cache_l is not None and self.cache_l['contact']:
+                in_contact = True
+        with self.camera_r_input_lock:
+            if self.cache_r is not None and self.cache_r['contact']:
+                in_contact = True
 
         self.observation_history.append((in_contact, ee_force_torque, pose))
 
@@ -915,12 +928,14 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
                 'contact': deform_significant}
 
     def _depth_img_callback_l(self, img):
-        self.cache_l = self._process_depth_img(img, self.ref_l)
-        if self.cache_l['contact']:
-            rospy.loginfo('left contact')
+        with self.camera_l_input_lock:
+            self.cache_l = self._process_depth_img(img, self.ref_l)
+            if self.cache_l['contact']:
+                rospy.loginfo('left contact')
 
     def _depth_img_callback_r(self, img):
-        self.cache_r = self._process_depth_img(img, self.ref_r)
+        with self.camera_r_input_lock:
+            self.cache_r = self._process_depth_img(img, self.ref_r)
         if self.cache_r['contact']:
             rospy.loginfo('right contact')
 
@@ -936,35 +951,44 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         points.append(np.add(pos, p.rotateVector(orientation, [0, -0.15, 0.2])))
 
         cached_points, cached_normals = self._project_sample_points_to_surface([robot_id, gripper_id], pos,
-                                                                               orientation, points, visualizer=visualizer)
+                                                                               orientation, points,
+                                                                               visualizer=visualizer)
 
         p.disconnect()
         return cached_points, cached_normals
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
-        if self.cache_l is not None and self.cache_l['contact']:
-            pt = self._get_link_frame_deform_point(self.cache_l['depth_img'], self.cache_l['mask'], self.camera_l)
-        elif self.cache_r is not None and self.cache_r['contact']:
-            pt = self._get_link_frame_deform_point(self.cache_r['depth_img'], self.cache_r['mask'], self.camera_r)
-        else:
-            # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
-            rospy.loginfo("Non-bubble contact")
-            pt = super().isolate_contact(ee_force_torque, pose, q=q, visualizer=None)
+        pt = None
+        # TODO handle contact on each bubble separately
+        with self.camera_l_input_lock as l, self.camera_r_input_lock as r:
+            if self.cache_l is not None and self.cache_l['contact']:
+                pt = self._get_link_frame_deform_point(self.cache_l, self.camera_l)
+            if pt is None and self.cache_r is not None and self.cache_r['contact']:
+                pt = self._get_link_frame_deform_point(self.cache_r, self.camera_r)
+            if pt is None:
+                # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
+                rospy.loginfo("Non-bubble contact")
+                pt = super().isolate_contact(ee_force_torque, pose, q=q, visualizer=None)
 
-        if visualizer is not None:
-            xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
-            pts = xr.transform_points(pt.view(1, -1))
-            visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
-            visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
-                                    scale=0.2)
-        if self.cache_l is not None:
-            self._draw_deformation(self.cache_l['imprint'], self.imprint_ax_l)
-        if self.cache_r is not None:
-            self._draw_deformation(self.cache_r['imprint'], self.imprint_ax_r)
+            if visualizer is not None:
+                xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
+                pts = xr.transform_points(pt.view(1, -1))
+                visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
+                visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
+                                        scale=0.2)
+            for artist in self.removable_artists:
+                artist.remove()
+            self.removable_artists = []
+            if self.cache_l is not None:
+                self._draw_deformation(self.imprint_ax_l, **self.cache_l)
+            if self.cache_r is not None:
+                self._draw_deformation(self.imprint_ax_r, **self.cache_r)
 
         return pt
 
-    def _get_link_frame_deform_point(self, depth_im, mask, camera):
+    def _get_link_frame_deform_point(self, cache, camera):
+        depth_im = cache['depth_img']
+        mask = cache['mask']
         # these are in optical/camera frame
         # average in image space, then project the average to point cloud
         vs, us, _ = np.nonzero(mask)
@@ -973,6 +997,8 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         d = bilinear_interpolate(depth_im, u, v)
         pt = project_depth_points(u, v, d, self.K_l)
         pt_l = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
+        cache['contact_avg_pixel'] = (v, u)
+        cache['contact_pt_link_frame'] = pt_l
         return torch.tensor(pt_l[0], dtype=self.dtype, device=self.device)
 
 
