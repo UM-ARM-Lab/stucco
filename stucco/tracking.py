@@ -932,9 +932,13 @@ class ContactSetSoft(ContactSet):
             sigma = 1 / self.p.length
         return torch.exp(-sigma * distance ** 2)
 
-    def predict_particles(self, dx):
+    def predict_particles(self, query_pts, dx):
         """Apply action to all particles"""
-        dd = (self.pts[-1] - self.sampled_pts).norm(dim=-1)
+        # dd = (self.pts[-1] - self.sampled_pts).norm(dim=-1)
+        dd = torch.cdist(query_pts, self.sampled_pts)
+
+        # take the minimum distance to any of our query points for probability
+        dd = dd.min(dim=-2)[0]
 
         # convert to probability
         connection_prob = self._distance_to_probability(dd)
@@ -1056,26 +1060,32 @@ class ContactSetSoft(ContactSet):
             self.update_particles(cur_config)
             return None, None
 
+        # handle multiple number of points
         # where contact point would be without this movement
-        cur_pt = p[:2]
-        prev_pt, prev_config = self.pxdyn(cur_pt.view(1, -1), cur_config.view(1, -1), -dx)
+        if len(p.shape) < 2:
+            p = p.reshape(1, -1)
+        N = len(p)
+        cur_pt = p[:, :2]
+        prev_pt, prev_config = self.pxdyn(cur_pt.view(N, -1), cur_config.view(1, -1), -dx)
+        prev_config = prev_config.repeat(N, 1)
+        u = u.repeat(N, 1)
+        # both should be (N, -1)
 
         if self.pts is None:
-            self.pts = prev_pt.view(1, -1)
-            self.configs = prev_config.view(1, -1)
-            self.acts = u.view(1, -1)
+            self.pts = prev_pt
+            self.configs = prev_config
+            self.acts = u
             self.sampled_pts = self.pts.repeat(self.n_particles, 1, 1)
             self.sampled_configs = self.configs.repeat(self.n_particles, 1, 1)
         else:
-            self.pts = torch.cat((self.pts, prev_pt.view(1, -1)))
-            self.configs = torch.cat((self.configs, prev_config.view(1, -1)))
-            self.acts = torch.cat((self.acts, u.view(1, -1)))
-            self.sampled_pts = torch.cat([self.sampled_pts, prev_pt.view(1, -1).repeat(self.n_particles, 1, 1)], dim=1)
-            self.sampled_configs = torch.cat(
-                [self.sampled_configs, prev_config.view(1, -1).repeat(self.n_particles, 1, 1)], dim=1)
+            self.pts = torch.cat((self.pts, prev_pt))
+            self.configs = torch.cat((self.configs, prev_config))
+            self.acts = torch.cat((self.acts, u))
+            self.sampled_pts = torch.cat([self.sampled_pts, prev_pt.repeat(self.n_particles, 1, 1)], dim=1)
+            self.sampled_configs = torch.cat([self.sampled_configs, prev_config.repeat(self.n_particles, 1, 1)], dim=1)
 
         # classic alternation of predict and update steps
-        self.predict_particles(dx)
+        self.predict_particles(prev_pt, dx)
         # check all configs against all points
         self.update_particles(None)
 

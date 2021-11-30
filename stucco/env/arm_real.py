@@ -516,7 +516,8 @@ class RealArmEnv(Env):
     def visualize_state_actions(self, base_name, states, actions, state_c, action_c, action_scale):
         if torch.is_tensor(states):
             states = states.cpu()
-            actions = actions.cpu()
+            if actions is not None:
+                actions = actions.cpu()
         debug_names_created = []
         for j in range(len(states)):
             p = self.get_ee_pos(states[j])
@@ -985,21 +986,22 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         return cached_points, cached_normals
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
-        pt = None
         # TODO handle contact on each bubble separately
         with self.camera_l_input_lock as l, self.camera_r_input_lock as r:
+            pt = []
             if self.cache_l is not None and self.cache_l['contact']:
-                pt = self._get_link_frame_deform_point(self.cache_l, self.camera_l)
-            if pt is None and self.cache_r is not None and self.cache_r['contact']:
-                pt = self._get_link_frame_deform_point(self.cache_r, self.camera_r)
-            if pt is None:
+                pt.append(self._get_link_frame_deform_point(self.cache_l, self.camera_l))
+            if self.cache_r is not None and self.cache_r['contact']:
+                pt.append(self._get_link_frame_deform_point(self.cache_r, self.camera_r))
+            if len(pt) == 0:
                 # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
                 rospy.loginfo("Non-bubble contact")
-                pt = super().isolate_contact(ee_force_torque, pose, q=q, visualizer=None)
+                pt.append(super().isolate_contact(ee_force_torque, pose, q=q, visualizer=None))
+            pt = torch.stack(pt)
 
             if visualizer is not None:
                 xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
-                pts = xr.transform_points(pt.view(1, -1))
+                pts = xr.transform_points(pt)
                 visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
                 visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
                                         scale=0.2)

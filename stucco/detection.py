@@ -126,7 +126,7 @@ class ContactDetector:
 
         link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(torch.tensor(pose[1])),
                                             dtype=self.dtype, device=self.device)
-        return link_to_current_tf.transform_points(last_contact_point.view(1, -1))[0]
+        return link_to_current_tf.transform_points(last_contact_point)
 
     @abc.abstractmethod
     def get_jacobian(self, locations, q=None):
