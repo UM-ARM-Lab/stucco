@@ -94,6 +94,9 @@ class RetrievalPredeterminedController(Controller):
     def done(self):
         return self.i >= len(self.controls)
 
+    def insert_next_controls(self, controls):
+        self.controls = self.controls[:self.i] + controls + self.controls[self.i:]
+
     @abc.abstractmethod
     def update(self, obs, info, visualizer=None):
         pass

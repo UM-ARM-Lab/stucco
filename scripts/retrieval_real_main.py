@@ -80,7 +80,8 @@ class RealRetrievalGetter(EnvGetter):
         params = tracking.ContactParameters(length=0.006,
                                             penetration_length=0.002,
                                             hard_assignment_threshold=0.4,
-                                            intersection_tolerance=0.002)
+                                            # need higher for deformable bubble
+                                            intersection_tolerance=0.010)
         if kwargs is not None:
             for k, v in kwargs.items():
                 setattr(params, k, v)
@@ -122,7 +123,7 @@ def confirm_pt_to_config(env, pt_to_config):
     config = env.state
     from arm_pytorch_utilities import rand
     import torch
-    rand.seed(1)
+    rand.seed(2)
     pts = (torch.rand((20, 2)) - 0.5) * 0.3
     pts += config
     pts[:, 1] += 0.1
@@ -132,6 +133,14 @@ def confirm_pt_to_config(env, pt_to_config):
         env.vis.ros.draw_point(f'temp.{i}', pt, height=env.REST_POS[2], label=str(round(d[i].item(), 2)),
                                color=(1, 1, 1, 1))
         print(d[i])
+
+
+def debug_pt_to_config(env, pt_to_config, config, point):
+    d = pt_to_config(torch.from_numpy(config).view(1, -1), point)
+    d = d.view(-1)
+    env.vis.ros.draw_point(f'temp.0', point[0], height=env.REST_POS[2], label=str(round(d[0].item(), 2)),
+                           color=(1, 1, 1, 1))
+    print(d[0])
 
 
 def keyboard_control(env):
@@ -214,7 +223,7 @@ class RealSklearnTrackingMethod(SklearnTrackingMethod):
 def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait=0.):
     input("enter to start execution")
     controls, ret_ctrl = create_predetermined_controls(level)
-    ctrl = method.create_predetermined_controller(controls)
+    ctrl: RetrievalPredeterminedController = method.create_predetermined_controller(controls)
     obs = env._obs()
     info = None
     dtype = torch.float32
@@ -230,16 +239,17 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
     best_tsf_guess = None
 
     with VideoLogger(window_names=("medusa_flipped_inflated.rviz* - RViz", "medusa_flipped_inflated.rviz - RViz"),
-                     log_external_video=False):
+                     log_external_video=True):
         while not rospy.is_shutdown() and not ctrl.done():
             best_distance = None
 
             with env.motion_status_input_lock:
                 u, skip_update = ctrl.command(obs, info, env.vis.ros)
+            # debug_pt_to_config(env, ctrl.contact_set.pxpen, env.state, torch.tensor([[0.6432, 0.2542]]))
             method.visualize_contact_points(env)
 
             if env.contact_detector.in_contact() and not skip_update:
-                all_configs = torch.tensor(ctrl.x_history, dtype=dtype, device=mph.device).view(-1, env.nx)
+                all_configs = torch.tensor(np.array(ctrl.x_history), dtype=dtype, device=mph.device).view(-1, env.nx)
                 dist_per_est_obj = []
                 for this_pts in method:
                     this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
@@ -282,7 +292,15 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
                 info = None
                 continue
             elif u is SpecialActions.WAIT_FOR_INPUT:
-                input("Enter to continue execution")
+                user_input = input("Enter to continue execution")
+                if user_input == "q":
+                    exit(0)
+                if user_input != "":
+                    try:
+                        next_u = [float(d) for d in user_input.split(" ")]
+                        ctrl.insert_next_controls([next_u, SpecialActions.WAIT_FOR_INPUT])
+                    except:
+                        pass
                 obs = env._obs()
                 info = None
                 continue
@@ -299,7 +317,7 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
         rospy.sleep(1)
 
 
-def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
+def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40):
     # should be safe to return to original pose
     z_extra = 0.05
     z = self.REST_POS[2] + z_extra
@@ -339,7 +357,8 @@ def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
     if time.time() - start > timeout:
         return
 
-    self.robot.open_right_gripper(0.15)
+    # self.robot.open_right_gripper(0.15)
+    self.robot.gripper.move(50)
     rospy.sleep(1)
 
     goal_pos = [pose[0] + grasp_offset[0] * 0.6, pose[1] + grasp_offset[1] * 0.6, z]
@@ -353,9 +372,11 @@ def grasp_at_pose(self: arm_real.RealArmEnv, pose, ret_ctrl=(), timeout=40):
     if time.time() - start > timeout:
         return
 
-    self.robot.close_right_gripper()
+    # self.robot.close_right_gripper()
+    self.robot.gripper.move(0)
     rospy.sleep(5)
-    self.robot.open_right_gripper(0)
+    # self.robot.open_right_gripper(0)
+    self.robot.gripper.move(50)
     rospy.sleep(1)
 
 
@@ -374,37 +395,65 @@ def create_predetermined_controls(level: Levels):
     ctrl = None
     ret_ctrl = None
     if level is Levels.CAN_IN_FRONT:
-        ctrl = [SpecialActions.RECALIBRATE] + [[0., 0.]] * 20
-        # ctrl = [[0.0, 1.0, None]]
-        # # poke master chef can to the right
-        # ctrl += [[0.1, 0, ]]
-        # ctrl += [SpecialActions.RECALIBRATE]
+        # ctrl = [SpecialActions.RECALIBRATE] + [[0., 0.]] * 20
+        ctrl = [[0.0, 0.1], SpecialActions.RECALIBRATE]
+        ctrl += [[0.0, 0.9]]
+        ctrl += [[0.0, 0.7]]
+        # poke master chef can to the right
+        ctrl += [[0.1, 0, ]]
+        ctrl += [SpecialActions.RECALIBRATE]
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
-        # ctrl += [[1.0, 0.], [0.2, 0]]
+        ctrl += [[0.8, 0.]]
 
-        # ctrl += [[1.0, 0], [-0.1, 0.4, None]] * 3
-        # ctrl += [[1.0, 0]]
-        # ctrl += [[0.0, -1.0, None], [0.1, 0.1], None]
-        # ctrl += [[1.0, 1.0], [0.3, -0.7, None]] * 3
-        # # move in front of cheezit box
-        # ctrl += [[-1.0, 0], None] * 4
-        # ctrl += [[0, 0.5], None] * 2
-        # # poke cheezit box
-        # ctrl += [[0, 1.0], [-0.85, -0.3, None]] * 3
-        # # poke kettle
-        # ctrl += [[-0.1, -1, None]] * 2
-        # ctrl += [[-0.2, 0.12], None]
-        # ctrl += [[-1., 0.6], [-1, 0.6], [-0.2, -0.3, None]] * 3
-        #
+        ctrl += [[1.0, 0], [-0.5, 0.3, None]] * 3
+        ctrl += [[1.0, 0]]
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[0.0, -0.3, None], [0.1, 0.1], SpecialActions.RECALIBRATE]
+        ctrl += [[1.0, 1.0], [0.3, -0.5, None]] * 3
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+
+        # poke kettle
+        ctrl += [[-0.5, -0.5, None]]
+        ctrl += [[-0.5, 0], SpecialActions.RECALIBRATE]
+        ctrl += [[-1.0, 0]] * 3
+        ctrl += [[-0.5, 0], SpecialActions.RECALIBRATE]
+        ctrl += [[-1.0, 0]] * 2
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[-0.1, -0.5, None]] * 2
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[-0.2, 0.12], SpecialActions.RECALIBRATE]
+        ctrl += [[-0.9, 0.5], [-0.9, 0.6], [-0.2, -0.3, None]] * 3
+
+        ctrl += [[0.4, 0.3, None], [-1, 0.6]] * 2
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+
+        # move in front of cheezit box
+        ctrl += [[0, -1.0], SpecialActions.RECALIBRATE] * 3
+        ctrl += [[1.0, 0], SpecialActions.RECALIBRATE] * 10
+        ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[0, 0.7], SpecialActions.RECALIBRATE] * 1
+        # poke cheezit box
+        ctrl += [[0, 1.0], [-0.85, -0.3, None]] * 3
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+
         # # move in between to poke both
-        # ctrl += [[0, 1.0]] * 5
-        # ctrl += [[-1, 1]]
+        ctrl += [[-1.0, .0, None]] * 3
+        ctrl += [[-0.3, 0.3], SpecialActions.RECALIBRATE]
+        ctrl += [[-1.0, 1.0]] * 3
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[0.0, 0.5], SpecialActions.RECALIBRATE]
+        ctrl += [[0.0, 1.0]] * 4
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[0.5, 0], SpecialActions.RECALIBRATE]
+        ctrl += [[1, 0]]
         # ctrl += [[0.2, 0], None]
         # ctrl += [[1, 0], None, [1.0, 0], [0.5, 0]]
-        # ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 4
+        ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 4
 
         # ctrl += [None]
         # ctrl += [[0, 1], None]
+
+        # ret_ctrl = [[0.9, 0]]
 
         ret_ctrl = [[-0.9, 0]]
         ret_ctrl += [[-1., -0.3]] * 4
@@ -436,7 +485,7 @@ def main():
     # ignore fz since it's usually large and noisy
     residual_precision[2] = 0
 
-    env = arm_real.RealArmEnvMedusa(residual_precision=np.diag(residual_precision), residual_threshold=5.)
+    env = arm_real.RealArmEnvMedusa(residual_precision=np.diag(residual_precision), residual_threshold=5., vel=0.25)
     contact_params = RealRetrievalGetter.contact_parameters(env)
 
     pt_to_config = arm_real.RealArmPointToConfig(env)
