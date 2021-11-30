@@ -748,9 +748,39 @@ class RealArmEnvMedusa(RealArmEnv):
         base_col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=r)
         base_vis_id = p.createVisualShape(p.GEOM_SPHERE, radius=r, rgbaColor=(0.0, 0.8, 0, 0.5))
 
+        col_ids = []
+        vis_ids = []
+        link_positions = []
+        link_orientations = []
+        # fingers
+        half_extents = [0.01, 0.005, 0.071]
+        col_ids.append(p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents))
+        vis_ids.append(p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=(0, 0.6, 0.0, 0.5)))
+        l = 0.024
+        ll = -0.02
+        open_angle = 1.8 * np.pi / 3
+        link_positions.append([0, -l, ll])
+        link_orientations.append(p.getQuaternionFromEuler([open_angle, 0, 0]))
+        # other finger, mirrored
+        col_ids.append(p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents))
+        vis_ids.append(p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=(0, 0.6, 0.0, 0.5)))
+        link_positions.append([0, l, ll])
+        link_orientations.append(p.getQuaternionFromEuler([-open_angle, 0, 0]))
+
         offset = p.rotateVector(orientation, [0, 0, 0.21])
+        # filler_body_ids.append(p.createMultiBody(0, base_col_id, base_vis_id, basePosition=np.add(pos, offset),
+        #                                          baseOrientation=orientation))
         filler_body_ids.append(p.createMultiBody(0, base_col_id, base_vis_id, basePosition=np.add(pos, offset),
-                                                 baseOrientation=orientation))
+                                                 baseOrientation=orientation,
+                                                 linkCollisionShapeIndices=col_ids, linkVisualShapeIndices=vis_ids,
+                                                 linkMasses=[0 for _ in col_ids],
+                                                 linkPositions=link_positions,
+                                                 linkOrientations=link_orientations,
+                                                 linkInertialFramePositions=[[0, 0, 0] for _ in col_ids],
+                                                 linkInertialFrameOrientations=[[0, 0, 0, 1] for _ in col_ids],
+                                                 linkParentIndices=[0 for _ in col_ids],
+                                                 linkJointTypes=[p.JOINT_FIXED for _ in col_ids],
+                                                 linkJointAxis=[[0, 0, 1] for _ in col_ids]))
 
         return robot_id, gripper_id, pos, orientation, filler_body_ids
 
@@ -924,33 +954,30 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         deform = imprint > self.imprint_threshold
         deform_num = deform.sum()
         deform_significant = deform_num > self.deform_number_threshold
-        return {'depth_img': img, 'imprint': imprint, 'mask': deform, 'mask_num': deform_num,
+        return {'ref_img': ref_img, 'depth_img': img, 'imprint': imprint, 'mask': deform, 'mask_num': deform_num,
                 'contact': deform_significant}
 
     def _depth_img_callback_l(self, img):
         with self.camera_l_input_lock:
             self.cache_l = self._process_depth_img(img, self.ref_l)
-            if self.cache_l['contact']:
-                rospy.loginfo('left contact')
 
     def _depth_img_callback_r(self, img):
         with self.camera_r_input_lock:
             self.cache_r = self._process_depth_img(img, self.ref_r)
-        if self.cache_r['contact']:
-            rospy.loginfo('right contact')
 
     def _init_sample_surface_points_in_canonical_pose(self, visualizer: typing.Optional[CombinedVisualizer] = None):
-        robot_id, gripper_id, pos, orientation, _ = RealArmEnvMedusa.create_sim_robot_and_gripper(visualizer=visualizer)
+        robot_id, gripper_id, pos, orientation, filler_ids = RealArmEnvMedusa.create_sim_robot_and_gripper(
+            visualizer=visualizer)
 
         # single point at the front
         points = []
         offset = p.rotateVector(orientation, [0, 0, 0.4])
         points.append(np.add(pos, offset))
         # points on the side
-        points.append(np.add(pos, p.rotateVector(orientation, [0, 0.15, 0.2])))
-        points.append(np.add(pos, p.rotateVector(orientation, [0, -0.15, 0.2])))
+        points.append(np.add(pos, p.rotateVector(orientation, [0, 0.15, 0.15])))
+        points.append(np.add(pos, p.rotateVector(orientation, [0, -0.15, 0.15])))
 
-        cached_points, cached_normals = self._project_sample_points_to_surface([robot_id, gripper_id], pos,
+        cached_points, cached_normals = self._project_sample_points_to_surface([robot_id, gripper_id] + filler_ids, pos,
                                                                                orientation, points,
                                                                                visualizer=visualizer)
 
@@ -987,7 +1014,8 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         return pt
 
     def _get_link_frame_deform_point(self, cache, camera):
-        depth_im = cache['depth_img']
+        # return the undeformed point to prevent penetration with the model
+        depth_im = cache['ref_img']
         mask = cache['mask']
         # these are in optical/camera frame
         # average in image space, then project the average to point cloud
@@ -995,6 +1023,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         v, u = vs.mean(), us.mean()
         # interpolation on the depth image to get depth value
         d = bilinear_interpolate(depth_im, u, v)
+
         pt = project_depth_points(u, v, d, self.K_l)
         pt_l = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
         cache['contact_avg_pixel'] = (v, u)
