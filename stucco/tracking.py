@@ -937,8 +937,10 @@ class ContactSetSoft(ContactSet):
         # dd = (self.pts[-1] - self.sampled_pts).norm(dim=-1)
         dd = torch.cdist(query_pts, self.sampled_pts)
 
+        # each point can at most be affected by 1 dx per contact
+        # we compare its sampled probability against the most likely motion
         # take the minimum distance to any of our query points for probability
-        dd = dd.min(dim=-2)[0]
+        dd, closest_dx_index = dd.min(dim=-2)
 
         # convert to probability
         connection_prob = self._distance_to_probability(dd)
@@ -952,7 +954,8 @@ class ContactSetSoft(ContactSet):
         # don't actually need to label connected components because we just need to propagate for the latest
         # apply dx to each particle's cluster that contains the latest x
         self.sampled_pts[adjacent], self.sampled_configs[adjacent] = self.pxdyn(self.sampled_pts[adjacent],
-                                                                                self.sampled_configs[adjacent], dx)
+                                                                                self.sampled_configs[adjacent],
+                                                                                dx[closest_dx_index][adjacent])
         return adjacent
 
     def update_particles(self, config=None):
@@ -1066,8 +1069,8 @@ class ContactSetSoft(ContactSet):
             p = p.reshape(1, -1)
         N = len(p)
         cur_pt = p[:, :2]
+        # 1 dx per sensor
         prev_pt, prev_config = self.pxdyn(cur_pt.view(N, -1), cur_config.view(1, -1), -dx)
-        prev_config = prev_config.repeat(N, 1)
         u = u.repeat(N, 1)
         # both should be (N, -1)
 
