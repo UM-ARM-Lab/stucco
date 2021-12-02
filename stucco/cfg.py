@@ -1,6 +1,6 @@
 import os
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../stucco'))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
 DATA_DIR = os.path.join(ROOT_DIR, 'data')
 VIDEO_DIR = os.path.join(ROOT_DIR, 'videos')
 URDF_DIR = os.path.join(ROOT_DIR, 'urdf')
