@@ -25,7 +25,7 @@ from stucco import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector
-from stucco.detection_impl import ContactDetectorPlanarPybulletGripper
+from stucco.detection_impl import PybulletResidualPlanarContactSensor
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +254,9 @@ class ArmEnv(PybulletEnv):
         self._contact_info = {}
         self._largest_contact = {}
         self._reaction_force = np.zeros(2)
+
+    def _clear_state_before_step(self):
+        self.contact_detector.clear_sensors()
 
     def set_task_config(self, goal=None, init=None):
         if goal is not None:
@@ -609,7 +612,9 @@ class ArmEnv(PybulletEnv):
         new_ee_pos, new_ee_orientation = self._observe_ee(return_z=True, return_orientation=True)
         pose = (new_ee_pos, new_ee_orientation)
         if self.contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
-            info[InfoKeys.DEE_IN_CONTACT] = np.subtract(new_ee_pos, self.last_ee_pos)
+            dx = np.subtract(new_ee_pos, self.last_ee_pos)
+            self.contact_detector.observe_dx(dx[:2])
+            info[InfoKeys.DEE_IN_CONTACT] = dx
         self.last_ee_pos = new_ee_pos
 
         # save end effector pose
@@ -741,6 +746,8 @@ class ArmEnv(PybulletEnv):
         return dx, dy, dz
 
     def step(self, action):
+        self._clear_state_before_step()
+
         action = np.clip(action, *self.get_control_bounds())
         # normalize action such that the input can be within a fixed range
         old_state = np.copy(self.state)
@@ -887,6 +894,8 @@ class ArmJointEnv(ArmEnv):
         return (dist * 10) ** 2, done
 
     def step(self, action):
+        self._clear_state_before_step()
+
         action = np.clip(action, *self.get_control_bounds())
         # normalize action such that the input can be within a fixed range
         old_state = np.copy(self.state)
@@ -1053,6 +1062,8 @@ class PlanarArmEnv(ArmEnv):
         return dx, dy
 
     def step(self, action):
+        self._clear_state_before_step()
+
         action = np.clip(action, *self.get_control_bounds())
         # normalize action such that the input can be within a fixed range
         old_state = np.copy(self.state)
@@ -1120,10 +1131,13 @@ class FloatingGripperEnv(PlanarArmEnv):
     def create_contact_detector(self, residual_threshold, residual_precision) -> ContactDetector:
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 1, 50, 50, 50])
-        return ContactDetectorPlanarPybulletGripper("floating_gripper", residual_precision, residual_threshold,
-                                                    robot_id=self.robot_id,
-                                                    canonical_orientation=self.endEffectorOrientation,
-                                                    default_joint_config=[0, 0])
+        contact_detector = ContactDetector(residual_precision)
+        contact_detector.register_contact_sensor(
+            PybulletResidualPlanarContactSensor("floating_gripper", residual_threshold,
+                                                robot_id=self.robot_id,
+                                                canonical_orientation=self.endEffectorOrientation,
+                                                default_joint_config=[0, 0]))
+        return contact_detector
 
     def _observe_ee(self, return_z=False, return_orientation=False):
         gripperPose = p.getBasePositionAndOrientation(self.gripperId)

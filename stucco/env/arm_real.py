@@ -17,7 +17,8 @@ from pytorch_kinematics import transforms as tf
 
 from mmint_camera_utils.camera_utils import project_depth_image, project_depth_points
 from stucco import tracking
-from stucco.detection_impl import ContactDetectorPlanarPybulletGripper
+from stucco.detection_impl import PybulletResidualPlanarContactSensor
+from stucco.detection import ContactSensor
 from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, Visualizer, \
     PlanarPointToConfig, InfoKeys
@@ -206,6 +207,9 @@ class RealArmEnv(Env):
         if not stub:
             self._setup_robot_ros(residual_threshold=residual_threshold, residual_precision=residual_precision)
 
+    def _clear_state_before_step(self):
+        self.contact_detector.clear_sensors()
+
     def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
         victor = Victor(force_trigger=5.0)
         self.robot = victor
@@ -246,13 +250,13 @@ class RealArmEnv(Env):
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
         # parallel visualizer for ROS and pybullet
-        self._contact_detector = ContactDetectorPlanarRealArm("victor", residual_precision, residual_threshold,
-                                                              base_pose=base_pose,
-                                                              default_joint_config=canonical_joints,
-                                                              canonical_pos=self.REST_POS,
-                                                              canonical_orientation=self.REST_ORIENTATION,
-                                                              window_size=50,
-                                                              visualizer=self.vis)
+        self._contact_detector = ContactDetector(residual_precision, window_size=50)
+        self._contact_detector.register_contact_sensor(KukaResidualContactSensor("victor", residual_threshold,
+                                                                                 base_pose=base_pose,
+                                                                                 default_joint_config=canonical_joints,
+                                                                                 canonical_pos=self.REST_POS,
+                                                                                 canonical_orientation=self.REST_ORIENTATION,
+                                                                                 visualizer=self.vis))
         self.vis.sim = None
 
     @property
@@ -346,7 +350,9 @@ class RealArmEnv(Env):
                 orientation[1] = 0
                 orientation[2] = 0
             if self.contact_detector.observe_residual(wr_np, (pos, orientation)):
-                info[InfoKeys.DEE_IN_CONTACT] = np.subtract(pos, self.last_ee_pos)
+                dx = np.subtract(pos, self.last_ee_pos)
+                self.contact_detector.observe_dx(dx[:2])
+                info[InfoKeys.DEE_IN_CONTACT] = dx
             self.last_ee_pos = pos
 
             info[InfoKeys.HIGH_FREQ_EE_POSE] = np.r_[pose[0], pose[1]]
@@ -408,6 +414,7 @@ class RealArmEnv(Env):
         return dx, dy
 
     def step(self, action, dz=0., orientation=None):
+        self._clear_state_before_step()
         action = np.clip(action, *self.get_control_bounds())
         # self.static_wrench = self.DIR_TO_WRENCH_OFFSET[tuple(action)]
 
@@ -798,12 +805,8 @@ class ArmRealDataSource(EnvDataSource):
         return ArmRealDataSource.loader_map.get(env_type, None)
 
 
-class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
-    """Contact detector for real robot, with init points loaded from pybullet"""
-
-    def __init__(self, *args, base_pose=None, **kwargs):
-        self._base_pose = base_pose
-        super().__init__(*args, robot_id=None, **kwargs)
+class KukaResidualContactSensor(PybulletResidualPlanarContactSensor):
+    """Residual contact sensor for real robot, with init points loaded from pybullet"""
 
     def _init_sample_surface_points_in_canonical_pose(self, visualizer: typing.Optional[CombinedVisualizer] = None):
         self.robot_id, gripper_id, pos, orientation, _ = RealArmEnv.create_sim_robot_and_gripper(visualizer=visualizer)
@@ -826,16 +829,6 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
             pt = [np.cos(angle) * r + pos[0], np.sin(angle) * r + pos[1] + offset_y, z]
             sample_pts.append(pt)
 
-        # visualizer.sim.clear_visualizations()
-        # convert points back to link frame
-        # note that we're using the actual simmed pos and orientation instead of the canonical one since IK doesn't
-        # guarantee we'll actually be at the desired pose
-        # TODO check the transform in the call is the same as below
-        # cached_points = torch.tensor(cached_points, device=self.device)
-        # cached_points -= torch.tensor(pos, device=self.device)
-        # r = tf.Rotate(fixed_orientation, device=self.device, dtype=self.dtype).inverse()
-        # cached_points = r.transform_points(cached_points)
-        # cached_normals = r.transform_normals(torch.tensor(cached_normals, device=self.device))
         cached_points, cached_normals = self._project_sample_points_to_surface([self.robot_id, gripper_id], pos,
                                                                                fixed_orientation, sample_pts,
                                                                                visualizer=visualizer)
@@ -858,113 +851,8 @@ class ContactDetectorPlanarRealArm(ContactDetectorPlanarPybulletGripper):
         return cached_points, cached_normals
 
 
-def move_figure(f, x, y):
-    """Move figure's upper left corner to pixel (x, y)"""
-    backend = matplotlib.get_backend()
-    if backend == 'TkAgg':
-        f.canvas.manager.window.wm_geometry("+%d+%d" % (x, y))
-    elif backend == 'WXAgg':
-        f.canvas.manager.window.SetPosition((x, y))
-    else:
-        # This works for QT and GTK
-        # You can also use window.setGeometry
-        f.canvas.manager.window.move(x, y)
-
-
-class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
-    """Contact detector using the bubble gripper"""
-
-    def __init__(self, name, residual_precision, residual_threshold,
-                 camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
-                 ee_link_frame: str, imprint_threshold=0.004, deform_number_threshold=20, ref_l=None, ref_r=None,
-                 **kwargs):
-
-        self.camera_l = camera_l
-        self.camera_r = camera_r
-        self.link_frame = ee_link_frame
-        # save current point cloud as reference, or load from file
-        self.ref_l = ref_l
-        self.ref_r = ref_r
-        self.cache_l = None
-        self.cache_r = None
-
-        self.imprint_threshold = imprint_threshold
-        self.deform_number_threshold = deform_number_threshold
-        if self.camera_l is not None:
-            self.camera_l_input_lock = Lock()
-            self.camera_r_input_lock = Lock()
-            if self.ref_l is None or self.ref_r is None:
-                self.ref_l = self.camera_l.get_image_depth()
-                self.ref_r = self.camera_r.get_image_depth()
-            info = self.camera_l.get_camera_info_depth()
-            self.K_l = info['K']
-            info = self.camera_r.get_camera_info_depth()
-            self.K_r = info['K']
-
-            plt.ion()
-            self.imprint_norm = matplotlib.colors.Normalize(vmin=-self.imprint_threshold, vmax=self.imprint_threshold)
-            self.imprint_fig, [self.imprint_ax_l, self.imprint_ax_r] = plt.subplots(ncols=2, sharex=True, sharey=True,
-                                                                                    figsize=(9, 3))
-            self.imprint_fig.colorbar(matplotlib.cm.ScalarMappable(norm=self.imprint_norm),
-                                      ax=[self.imprint_ax_l, self.imprint_ax_r])
-
-            move_figure(self.imprint_fig, 0, 0)
-            self.im_handle = {}
-            self.removable_artists = []
-            plt.show()
-            self.camera_l.register_callback('depth', self._depth_img_callback_l)
-            self.camera_r.register_callback('depth', self._depth_img_callback_r)
-        else:
-            rospy.logwarn("Creating contact detector without camera")
-        super(ContactDetectorPlanarRealArmBubble, self).__init__(name, residual_precision, residual_threshold, **kwargs)
-
-    def _draw_deformation(self, ax, **cache_content):
-        imprint = cache_content['imprint']
-        # debug visualization of depth images and imprints
-        if ax not in self.im_handle:
-            self.im_handle[ax] = ax.imshow(imprint.squeeze(), norm=self.imprint_norm)
-        else:
-            self.im_handle[ax].set_data(imprint.squeeze())
-        vu = cache_content.get('contact_avg_pixel', None)
-        if vu is not None:
-            self.removable_artists.append(ax.annotate('contact pt', xy=(vu[1], vu[0]), xycoords='data', xytext=(0, 25),
-                                                      textcoords='offset points',
-                                                      arrowprops=dict(facecolor='black', shrink=0.05),
-                                                      horizontalalignment='center',
-                                                      verticalalignment='top'))
-        plt.pause(0.0001)
-
-    def observe_residual(self, ee_force_torque, pose=None):
-        # we are informed by cameras in addition to force-torque of whether we're in contact or not
-        epsilon = ee_force_torque.T @ self.residual_precision @ ee_force_torque
-        in_contact = epsilon > self.residual_threshold
-        with self.camera_l_input_lock:
-            if self.cache_l is not None and self.cache_l['contact']:
-                in_contact = True
-        with self.camera_r_input_lock:
-            if self.cache_r is not None and self.cache_r['contact']:
-                in_contact = True
-
-        self.observation_history.append((in_contact, ee_force_torque, pose))
-
-        return in_contact
-
-    def _process_depth_img(self, img, ref_img):
-        imprint = process_bubble_img(ref_img - img)
-        # check if any are above threshold
-        deform = imprint > self.imprint_threshold
-        deform_num = deform.sum()
-        deform_significant = deform_num > self.deform_number_threshold
-        return {'ref_img': ref_img, 'depth_img': img, 'imprint': imprint, 'mask': deform, 'mask_num': deform_num,
-                'contact': deform_significant}
-
-    def _depth_img_callback_l(self, img):
-        with self.camera_l_input_lock:
-            self.cache_l = self._process_depth_img(img, self.ref_l)
-
-    def _depth_img_callback_r(self, img):
-        with self.camera_r_input_lock:
-            self.cache_r = self._process_depth_img(img, self.ref_r)
+class BubbleResidualContactSensor(PybulletResidualPlanarContactSensor):
+    """Residual contact sensor for real robot with a bubble gripper, with init points loaded from pybullet"""
 
     def _init_sample_surface_points_in_canonical_pose(self, visualizer: typing.Optional[CombinedVisualizer] = None):
         robot_id, gripper_id, pos, orientation, filler_ids = RealArmEnvMedusa.create_sim_robot_and_gripper(
@@ -985,35 +873,71 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         p.disconnect()
         return cached_points, cached_normals
 
+
+def move_figure(f, x, y):
+    """Move figure's upper left corner to pixel (x, y)"""
+    backend = matplotlib.get_backend()
+    if backend == 'TkAgg':
+        f.canvas.manager.window.wm_geometry("+%d+%d" % (x, y))
+    elif backend == 'WXAgg':
+        f.canvas.manager.window.SetPosition((x, y))
+    else:
+        # This works for QT and GTK
+        # You can also use window.setGeometry
+        f.canvas.manager.window.move(x, y)
+
+
+class BubbleCameraContactSensor(ContactSensor):
+    def __init__(self, camera: PicoFlexxPointCloudParser, link_frame, imprint_threshold=0.004,
+                 deform_number_threshold=20, ref_img=None, dtype=torch.float, device='cpu'):
+        self.camera = camera
+        self.link_frame = link_frame
+        self.ref = ref_img
+        self.cache = None
+        self.imprint_threshold = imprint_threshold
+        self.deform_number_threshold = deform_number_threshold
+
+        self.dtype = dtype
+        self.device = device
+
+        if self.camera is not None:
+            self.input_lock = Lock()
+            self.ref = self.camera.get_image_depth()
+            info = self.camera.get_camera_info_depth()
+            self.K = info['K']
+
+            self.camera.register_callback('depth', self._depth_img_callback)
+        else:
+            rospy.logwarn("Creating contact detector without camera")
+
+        super().__init__()
+
+    def clear(self):
+        super().clear()
+        self.cache = None
+
+    def observe_residual(self, residual):
+        with self.input_lock:
+            self.in_contact = self.cache is not None and self.cache['contact']
+
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
-        # TODO handle contact on each bubble separately
-        with self.camera_l_input_lock as l, self.camera_r_input_lock as r:
-            pt = []
-            if self.cache_l is not None and self.cache_l['contact']:
-                pt.append(self._get_link_frame_deform_point(self.cache_l, self.camera_l))
-            if self.cache_r is not None and self.cache_r['contact']:
-                pt.append(self._get_link_frame_deform_point(self.cache_r, self.camera_r))
-            if len(pt) == 0:
-                # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
-                rospy.loginfo("Non-bubble contact")
-                pt.append(super().isolate_contact(ee_force_torque, pose, q=q, visualizer=None))
-            pt = torch.stack(pt)
+        with self.input_lock:
+            if self.cache is not None and self.cache['contact']:
+                return self._get_link_frame_deform_point(self.cache, self.camera)
+        return None
 
-            if visualizer is not None:
-                xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
-                pts = xr.transform_points(pt)
-                visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
-                visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
-                                        scale=0.2)
-            for artist in self.removable_artists:
-                artist.remove()
-            self.removable_artists = []
-            if self.cache_l is not None:
-                self._draw_deformation(self.imprint_ax_l, **self.cache_l)
-            if self.cache_r is not None:
-                self._draw_deformation(self.imprint_ax_r, **self.cache_r)
+    def _depth_img_callback(self, img):
+        with self.input_lock:
+            self.cache = self._process_depth_img(img, self.ref)
 
-        return pt
+    def _process_depth_img(self, img, ref_img):
+        imprint = process_bubble_img(ref_img - img)
+        # check if any are above threshold
+        deform = imprint > self.imprint_threshold
+        deform_num = deform.sum()
+        deform_significant = deform_num > self.deform_number_threshold
+        return {'ref_img': ref_img, 'depth_img': img, 'imprint': imprint, 'mask': deform, 'mask_num': deform_num,
+                'contact': deform_significant}
 
     def _get_link_frame_deform_point(self, cache, camera):
         # return the undeformed point to prevent penetration with the model
@@ -1026,11 +950,93 @@ class ContactDetectorPlanarRealArmBubble(ContactDetectorPlanarPybulletGripper):
         # interpolation on the depth image to get depth value
         d = bilinear_interpolate(depth_im, u, v)
 
-        pt = project_depth_points(u, v, d, self.K_l)
+        pt = project_depth_points(u, v, d, self.K)
         pt_l = camera.transform_pc(np.array(pt).reshape(1, -1), camera.optical_frame['depth'], self.link_frame)
         cache['contact_avg_pixel'] = (v, u)
         cache['contact_pt_link_frame'] = pt_l
         return torch.tensor(pt_l[0], dtype=self.dtype, device=self.device)
+
+
+class ContactDetectorPlanarRealArmBubble(ContactDetector):
+    """Contact detector using the bubble gripper"""
+
+    def __init__(self, name, residual_precision, residual_threshold,
+                 camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
+                 ee_link_frame: str, imprint_threshold=0.004, deform_number_threshold=20,
+                 window_size=5, dtype=torch.float, device='cpu', **kwargs):
+
+        self.register_contact_sensor(BubbleResidualContactSensor(name, residual_threshold, **kwargs))
+        if camera_l is not None:
+            self.register_contact_sensor(BubbleCameraContactSensor(camera_l, ee_link_frame,
+                                                                   imprint_threshold=imprint_threshold,
+                                                                   deform_number_threshold=deform_number_threshold,
+                                                                   dtype=dtype, device=device))
+            self.register_contact_sensor(BubbleCameraContactSensor(camera_r, ee_link_frame,
+                                                                   imprint_threshold=imprint_threshold,
+                                                                   deform_number_threshold=deform_number_threshold,
+                                                                   dtype=dtype, device=device))
+
+            plt.ion()
+            self.imprint_norm = matplotlib.colors.Normalize(vmin=-imprint_threshold, vmax=imprint_threshold)
+            self.imprint_fig, [self.imprint_ax_l, self.imprint_ax_r] = plt.subplots(ncols=2, sharex=True, sharey=True,
+                                                                                    figsize=(9, 3))
+            self.imprint_fig.colorbar(matplotlib.cm.ScalarMappable(norm=self.imprint_norm),
+                                      ax=[self.imprint_ax_l, self.imprint_ax_r])
+
+            move_figure(self.imprint_fig, 0, 0)
+            self.im_handle = {}
+            self.removable_artists = []
+            plt.show()
+        else:
+            rospy.logwarn("Creating contact detector without camera")
+
+        super().__init__(residual_precision, window_size=window_size, dtype=dtype, device=device)
+
+    def _draw_deformation(self, ax, **cache_content):
+        imprint = cache_content['imprint']
+        # debug visualization of depth images and imprints
+        if ax not in self.im_handle:
+            self.im_handle[ax] = ax.imshow(imprint.squeeze(), norm=self.imprint_norm)
+        else:
+            self.im_handle[ax].set_data(imprint.squeeze())
+        vu = cache_content.get('contact_avg_pixel', None)
+        if vu is not None:
+            self.removable_artists.append(ax.annotate('contact pt', xy=(vu[1], vu[0]), xycoords='data', xytext=(0, 25),
+                                                      textcoords='offset points',
+                                                      arrowprops=dict(facecolor='black', shrink=0.05),
+                                                      horizontalalignment='center',
+                                                      verticalalignment='top'))
+        plt.pause(0.0001)
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+        cache_l = self.sensors[1].cache
+        cache_r = self.sensors[2].cache
+        pt = []
+        for s in range(1, len(self.sensors)):
+            pt_candidate = self.sensors[s].isolate_contact(ee_force_torque, pose, q=q, visualizer=visualizer)
+            if pt_candidate is not None:
+                pt.append(pt_candidate)
+        if len(pt) == 0:
+            # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
+            rospy.loginfo("Non-bubble contact")
+            pt.append(self.sensors[0].isolate_contact(ee_force_torque, pose, q=q, visualizer=None))
+        pt = torch.stack(pt)
+
+        if visualizer is not None:
+            xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
+            pts = xr.transform_points(pt)
+            visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
+            visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
+                                    scale=0.2)
+        for artist in self.removable_artists:
+            artist.remove()
+        self.removable_artists = []
+        if cache_l is not None:
+            self._draw_deformation(self.imprint_ax_l, **cache_l)
+        if cache_r is not None:
+            self._draw_deformation(self.imprint_ax_r, **cache_r)
+
+        return pt
 
 
 class RealArmPointToConfig(PlanarPointToConfig):

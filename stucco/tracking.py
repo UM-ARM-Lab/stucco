@@ -1050,7 +1050,7 @@ class ContactSetSoft(ContactSet):
     def update(self, x, dx, p=None, info=None):
         d = self.device
         dtype = self.dtype
-        x, dx = tensor_utils.ensure_tensor(d, dtype, x, dx)
+        x = tensor_utils.ensure_tensor(d, dtype, x)
 
         if info is not None:
             u = info['u']
@@ -1058,11 +1058,12 @@ class ContactSetSoft(ContactSet):
             u = torch.zeros_like(x)
 
         cur_config = x
-        if p is None:
+        if p is None or dx is None:
             # step without contact, eliminate particles that conflict with this config in freespace
             self.update_particles(cur_config)
             return None, None
 
+        dx = tensor_utils.ensure_tensor(d, dtype, dx)
         # handle multiple number of points
         # where contact point would be without this movement
         if len(p.shape) < 2:

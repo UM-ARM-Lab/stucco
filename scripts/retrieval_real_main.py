@@ -179,10 +179,9 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
                 (type(self.u_history[-1]) is SpecialActions) or (len(self.u_history[-1]) > 2))
         if not skip_update:
             x = self.x_history[-1][:2]
-            dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+            pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
             info['u'] = torch.tensor(self.u_history[-1][:2])
-            self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(visualizer=visualizer),
-                                    info=info)
+            self.contact_set.update(x, dx, pt, info=info)
 
         self.u_history.append(u)
         return u, skip_update

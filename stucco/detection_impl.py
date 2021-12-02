@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import pybullet as p
 import torch
-from stucco.detection import ContactDetectorPlanar
+from stucco.detection import ResidualPlanarContactSensor
 from pytorch_kinematics import transforms as tf
 from stucco import cfg
 from stucco.env.pybullet_env import ContactInfo, closest_point_on_surface
@@ -13,10 +13,7 @@ import typing
 logger = logging.getLogger(__name__)
 
 
-class ContactDetectorPlanarPybulletGripper(ContactDetectorPlanar):
-    """Leverage pybullet to sample points on the robot;
-    if the sampled robot points and normals are cached then pybullet information can be omitted."""
-
+class PybulletResidualPlanarContactSensor(ResidualPlanarContactSensor):
     def __init__(self, name, *args, sample_pt_min_separation=0.005, num_sample_points=100, robot_id=None,
                  canonical_pos=None, canonical_orientation=None, default_joint_config=None, visualizer=None, **kwargs):
         self.name = name
@@ -105,12 +102,6 @@ class ContactDetectorPlanarPybulletGripper(ContactDetectorPlanar):
         cached_points, cached_normals = self._project_sample_points_to_surface([self.robot_id], canonical_pos,
                                                                                self._canonical_orientation, sample_pts,
                                                                                visualizer=visualizer)
-
-        # p.resetBasePositionAndOrientation(self.robot_id, [0, 0, 0], [0, 0, 0, 1])
-        # if visualizer is not None:
-        #     for i, min_pt_at_z in enumerate(self._cached_points):
-        #         t = i / len(self._cached_points)
-        #         visualizer.draw_point(f'c{t}', min_pt_at_z, color=(t, t, 1 - t))
 
         p.resetBasePositionAndOrientation(self.robot_id, orig_pos, orig_orientation)
         return cached_points, cached_normals

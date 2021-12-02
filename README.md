@@ -39,7 +39,8 @@ external wrench (force and torque) at the end effector. In simulation, we can ge
 To manage the process, we have a `ContactDetector` object, created like:
 
 ```python
-from stucco.detection import ContactDetectorPlanar
+from stucco.detection import ContactDetector
+from stucco.detection import ResidualPlanarContactSensor
 import numpy as np
 
 # sample points on the robot surface and the associated surface normals (your function)
@@ -52,7 +53,9 @@ residual_precision = np.diag([1, 1, 1, 50, 50, 50])
 residual_threshold = 3
 
 # the Planar version is concretely implemented; a similar one could be implemented to handle more general cases
-contact_detector = ContactDetectorPlanar(surface_points, surface_normals, residual_precision, residual_threshold)
+contact_detector = ContactDetector(residual_precision)
+sensor = ResidualPlanarContactSensor(surface_points, surface_normals, residual_threshold)
+contact_detector.register_contact_sensor(sensor)
 ```
 
 You then feed this object high frequency residual data along with end-effector poses

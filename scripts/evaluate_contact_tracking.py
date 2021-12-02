@@ -103,7 +103,7 @@ class OurMethodFactory:
 
             xx = x[i + 1][:2]
             dx = tensor_utils.ensure_tensor(d, dtype, info[InfoKeys.DEE_IN_CONTACT][i][:2])
-            c, cc = contact_set.update(xx, dx, contact_detector.get_last_contact_location(), this_info)
+            c, cc = contact_set.update(xx, dx.view(1, -1), contact_detector.get_last_contact_location()[0], this_info)
 
             if c is None:
                 labels[i] = NO_CONTACT_ID

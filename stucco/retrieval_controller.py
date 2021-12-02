@@ -1,5 +1,4 @@
 import abc
-import os
 import typing
 
 import numpy as np
@@ -13,7 +12,6 @@ from pynput import keyboard
 from stucco import detection, tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco import cfg
-from stucco.env.env import InfoKeys
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
 
 from stucco.baselines.cluster import process_labels_with_noise
@@ -58,9 +56,9 @@ class RetrievalController(Controller):
         if self.contact_detector.in_contact():
             self.remaining_random_actions = self.max_walk_length
             x = self.x_history[-1][:2]
-            dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+            pt, dx = self.contact_detector.get_last_contact_location()
             info['u'] = torch.tensor(self.u_history[-1][:2])
-            self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(), info=info)
+            self.contact_set.update(x, dx, pt, info=info)
 
         if self.remaining_random_actions > 0:
             u = np.random.uniform(low=self.u_min, high=self.u_max, size=self.nu)
@@ -131,10 +129,12 @@ class OursRetrievalPredeterminedController(RetrievalPredeterminedController):
             self.contact_indices.append(self.i)
 
         x = self.x_history[-1][:2]
-        dx = info[InfoKeys.DEE_IN_CONTACT][:2]
+        pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
+        # from stucco.tracking import InfoKeys
+        # if dx is not None:
+        #     assert torch.allclose(dx, torch.tensor(info[InfoKeys.DEE_IN_CONTACT][:2], dtype=dx.dtype, device=dx.device))
         info['u'] = torch.tensor(self.u_history[-1])
-        self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(visualizer=visualizer),
-                                info=info)
+        self.contact_set.update(x, dx, pt, info=info)
 
 
 def rot_2d_mat_to_angle(T):
@@ -316,11 +316,10 @@ class SklearnPredeterminedController(RetrievalPredeterminedController):
         self.in_contact = []
 
     def update(self, obs, info, visualizer=None):
-        contact_point = self.contact_detector.get_last_contact_location(visualizer=visualizer)
+        contact_point, dobj = self.contact_detector.get_last_contact_location(visualizer=visualizer)
         if contact_point is not None:
             self.in_contact.append(True)
             contact_point = contact_point.cpu().numpy()
-            dobj = info[InfoKeys.DEE_IN_CONTACT]
             self.online_method.update(contact_point - dobj, self.u_history[-1], dobj)
         else:
             self.in_contact.append(False)
@@ -391,11 +390,10 @@ class PHDPredeterminedController(RetrievalPredeterminedController):
         self.in_contact = []
 
     def update(self, obs, info, visualizer=None):
-        contact_point = self.contact_detector.get_last_contact_location(visualizer=visualizer)
+        contact_point, dobj = self.contact_detector.get_last_contact_location(visualizer=visualizer)
         if contact_point is not None:
             self.in_contact.append(True)
             contact_point = contact_point.cpu().numpy()
-            dobj = info[InfoKeys.DEE_IN_CONTACT]
             pt = contact_point - dobj
             self.g.update(pt, dobj)
         else:
@@ -516,9 +514,9 @@ class KeyboardController(Controller):
     @abc.abstractmethod
     def update(self, obs, info):
         x = self.x_history[-1][:2]
-        dx = info[InfoKeys.DEE_IN_CONTACT][:2]
         info['u'] = torch.tensor(self.u_history[-1])
-        self.contact_set.update(x, dx, self.contact_detector.get_last_contact_location(), info=info)
+        pt, dx = self.contact_detector.get_last_contact_location()
+        self.contact_set.update(x, dx, pt, info=info)
 
     def command(self, obs, info=None):
         self.x_history.append(obs)

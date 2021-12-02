@@ -202,7 +202,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             contact_id.append(info[InfoKeys.CONTACT_ID])
             all_configs = torch.tensor(ctrl.x_history, dtype=dtype, device=mph.device).view(-1, env.nx)
             dist_per_est_obj = []
-            for this_pts in method:
+            for k, this_pts in enumerate(method):
                 this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
                 T, distances, _ = icp.icp_3(this_pts.view(-1, 2), model_points[:, :2],
                                             given_init_pose=best_tsf_guess, batch=30)
@@ -221,6 +221,14 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
                     best_distance = best_tsf_distances
                     best_tsf_guess = T[best_tsf_index].inverse()
 
+                for j in range(len(T)):
+                    tf_bb = bb @ T[j].transpose(-1, -2)
+                    for i in range(len(tf_bb)):
+                        pt = [tf_bb[i][0], tf_bb[i][1], z]
+                        next_pt = [tf_bb[(i + 1) % len(tf_bb)][0], tf_bb[(i + 1) % len(tf_bb)][1], z]
+                        env.vis.draw_2d_line(f"tmptbestline{k}-{j}.{i}", pt, np.subtract(next_pt, pt), color=(0, 1, 0),
+                                             size=0.5, scale=1)
+
             logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
             best_T = best_tsf_guess.inverse()
 
@@ -234,14 +242,8 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             pose_error_per_step[simTime] = pos_err + 0.3 * yaw_err
             logger.debug(f"pose error {simTime}: {pos_err} {yaw_err} {pose_error_per_step[simTime]}")
 
-            # plot current best estimate of object pose (first block samples points, next one is the full perimeter)
-            # transformed_model_points = mph @ best_T.transpose(-1, -2)
-            # for i, pt in enumerate(transformed_model_points):
-            #     if i % 2 == 0:
-            #         continue
-            #     pt = [pt[0], pt[1], z]
-            #     env.vis.draw_point(f"tmptbest.{i}", pt, color=(0, 0, 1), length=0.008)
 
+            # plot current best estimate of object pose (first block samples points, next one is the full perimeter)
             tf_bb = bb @ best_T.transpose(-1, -2)
             for i in range(len(tf_bb)):
                 pt = [tf_bb[i][0], tf_bb[i][1], z]
