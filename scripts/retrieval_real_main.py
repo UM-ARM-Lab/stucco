@@ -4,16 +4,17 @@ import enum
 import time
 
 import colorama
+import moveit_commander
 import numpy as np
 import logging
 import torch
 import copy
 
 from arm_pytorch_utilities import tensor_utils
+from geometry_msgs.msg import PoseStamped
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
-from stucco.env.env import InfoKeys
 from stucco.evaluation import object_robot_penetration_score
 from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
     SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed
@@ -27,11 +28,12 @@ from stucco import cfg
 from stucco.env import arm_real
 from stucco import tracking, icp
 from arm_pytorch_utilities.math_utils import rotate_wrt_origin
+from victor_hardware_interface_msgs.msg import ControlMode
 
 try:
     import rospy
 
-    rospy.init_node("victor_retrieval", log_level=rospy.DEBUG)
+    rospy.init_node("victor_retrieval", log_level=rospy.INFO)
     # without this we get not logging from the library
     import importlib
 
@@ -40,6 +42,7 @@ except RuntimeError as e:
     print("Proceeding without ROS: {}".format(e))
 
 ask_before_moving = True
+CONTACT_POINT_SIZE = (0.01, 0.01, 0.3)
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -162,6 +165,7 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
     def __init__(self, contact_detector, contact_set, controls, nu=None):
         self.contact_detector = contact_detector
         self.contact_set = contact_set
+        self.contact_indices = []
         super().__init__(controls, nu=nu)
 
     def command(self, obs, info=None, visualizer=None):
@@ -178,6 +182,9 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
         skip_update = (type(u) is SpecialActions) or (len(self.x_history) < 2) or (
                 (type(self.u_history[-1]) is SpecialActions) or (len(self.u_history[-1]) > 2))
         if not skip_update:
+            if self.contact_detector.in_contact():
+                self.contact_indices.append(self.i)
+
             x = self.x_history[-1][:2]
             pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
             info['u'] = torch.tensor(self.u_history[-1][:2])
@@ -311,18 +318,36 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
         # after estimating pose, plan a grasp to it and attempt a grasp
         if best_tsf_guess is not None:
             guess_pose = [best_T[0, 2].item(), best_T[1, 2].item(), rot_2d_mat_to_angle(best_T.view(1, 3, 3)).item()]
+
+            moveit_scene = moveit_commander.PlanningSceneInterface(ns=env.robot.robot_namespace)
+            _, pts = method.get_labelled_moved_points(None)
+
+            for pt_index, pt in enumerate(pts):
+                pose = PoseStamped()
+                pose.header.frame_id = "world"
+                pose.pose.position.x = pt[0]
+                pose.pose.position.y = pt[1]
+                pose.pose.position.z = env.REST_POS[2]
+                pose.pose.orientation.w = 1.0
+                moveit_scene.add_box(f"contact_pt_{pt_index}", pose, size=CONTACT_POINT_SIZE)
+
             grasp_at_pose(env, guess_pose, ret_ctrl=ret_ctrl)
+
+            for pt_index, pt in enumerate(pts):
+                moveit_scene.remove_world_object(f"contact_pt_{pt_index}")
 
         rospy.sleep(1)
 
 
 def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40):
+    rospy.loginfo(f"grasp pose {pose}")
+
     # should be safe to return to original pose
     z_extra = 0.05
     z = self.REST_POS[2] + z_extra
     self.vis.ros.draw_point("grasptarget", [pose[0], pose[1], z], color=(0.7, 0, 0.7), scale=3)
 
-    grasp_offset = np.array([0.35, 0])
+    grasp_offset = np.array([0.42, 0])
     yaw = copy.copy(pose[2])
     yaw += np.pi / 2
     # bring between [-np.pi, 0]
@@ -334,7 +359,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
     grasp_offset = rotate_wrt_origin(grasp_offset, yaw)
 
     offset_pos = [pose[0] + grasp_offset[0], pose[1] + grasp_offset[1], z]
-    orientation = [self.REST_ORIENTATION[0], self.REST_ORIENTATION[1] + np.pi / 4,
+    orientation = [self.REST_ORIENTATION[0], self.REST_ORIENTATION[1],
                    yaw + np.pi / 2 + self.REST_ORIENTATION[2]]
     self.vis.ros.draw_point("pregrasp", offset_pos, color=(1, 0, 0), scale=3)
 
@@ -345,6 +370,9 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
     # first get to a location where planning to the previous joint config is ok
     for u in ret_ctrl:
         self.step(u)
+    # self.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
+    # self.robot.plan_to_pose(self.robot.arm_group, self.EE_LINK_NAME, offset_pos + orientation)
+    # self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
 
     # cartesian to target
     obs = self._obs()
@@ -357,16 +385,19 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
         return
 
     # self.robot.open_right_gripper(0.15)
-    self.robot.gripper.move(50)
+    self.robot.gripper.move(100)
     rospy.sleep(1)
 
     goal_pos = [pose[0] + grasp_offset[0] * 0.6, pose[1] + grasp_offset[1] * 0.6, z]
     self.vis.ros.draw_point("graspgoal", goal_pos, color=(0.5, 0.5, 0), scale=3)
 
+    obs = self._obs()
     diff = np.subtract(goal_pos[:2], obs)
     start = time.time()
     while np.linalg.norm(diff) > 0.01 and time.time() - start < timeout:
-        obs, _, _, _ = self.step(diff / self.MAX_PUSH_DIST, dz=z_extra, orientation=orientation)
+        u = diff / self.MAX_PUSH_DIST
+        u /= max(u)
+        obs, _, _, _ = self.step(u, dz=z_extra, orientation=orientation)
         diff = np.subtract(goal_pos[:2], obs)
     if time.time() - start > timeout:
         return
@@ -375,7 +406,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
     self.robot.gripper.move(0)
     rospy.sleep(5)
     # self.robot.open_right_gripper(0)
-    self.robot.gripper.move(50)
+    self.robot.gripper.move(100)
     rospy.sleep(1)
 
 
@@ -383,6 +414,7 @@ class Levels(enum.IntEnum):
     NO_CLUTTER = 0
     FLAT_BOX = 1
     CAN_IN_FRONT = 2
+    CALIBRATION = 3
 
 
 class SpecialActions(enum.Enum):
@@ -409,6 +441,11 @@ def create_predetermined_controls(level: Levels):
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
         ctrl += [[0.0, -0.3, None], [0.1, 0.1], SpecialActions.RECALIBRATE]
         ctrl += [[1.0, 1.0], [0.3, -0.5, None]] * 3
+
+        ctrl += [[0.6, 1.0]]
+        ctrl += [[0.3, 0.6]]
+        ctrl += [[-0.3, -0.6, None]]
+        ctrl += [[-0.6, -1.0, None]]
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
 
         # poke kettle
@@ -427,9 +464,10 @@ def create_predetermined_controls(level: Levels):
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
 
         # move in front of cheezit box
-        ctrl += [[0, -1.0], SpecialActions.RECALIBRATE] * 3
-        ctrl += [[1.0, 0], SpecialActions.RECALIBRATE] * 10
-        ctrl += [SpecialActions.WAIT_FOR_INPUT]
+        ctrl += [[0, -1.0], SpecialActions.RECALIBRATE] * 4
+        ctrl += [[1.0, 0], SpecialActions.RECALIBRATE] * 9
+        ctrl += [[0.5, 0], SpecialActions.RECALIBRATE] * 1
+
         ctrl += [[0, 0.7], SpecialActions.RECALIBRATE] * 1
         # poke cheezit box
         ctrl += [[0, 1.0], [-0.85, -0.3, None]] * 3
@@ -443,21 +481,25 @@ def create_predetermined_controls(level: Levels):
         ctrl += [[0.0, 0.5], SpecialActions.RECALIBRATE]
         ctrl += [[0.0, 1.0]] * 4
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
-        ctrl += [[0.5, 0], SpecialActions.RECALIBRATE]
-        ctrl += [[1, 0]]
+        ctrl += [[0.9, 0], SpecialActions.RECALIBRATE]
+        # ctrl += [[1, 0]]
+        # ctrl += [SpecialActions.WAIT_FOR_INPUT]
         # ctrl += [[0.2, 0], None]
         # ctrl += [[1, 0], None, [1.0, 0], [0.5, 0]]
-        ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 4
+        ctrl += [[0.6, 0], [-0.2, 1.0, None]] * 5
 
         # ctrl += [None]
         # ctrl += [[0, 1], None]
 
         # ret_ctrl = [[0.9, 0]]
 
-        ret_ctrl = [[-0.9, 0]]
-        ret_ctrl += [[-1., -0.3]] * 4
-        ret_ctrl += [[0, -1.0]] * 4
-        ret_ctrl += [[0.7, -1.0]] * 4
+        ret_ctrl = [[-0.9, 0]] * 2
+        ret_ctrl += [[0, -1.0]] * 9
+        ret_ctrl += [[0.4, -1.0]] * 4
+    elif level is Levels.CALIBRATION:
+        ctrl = [SpecialActions.RECALIBRATE]
+        ctrl += [[0, 1.0]] * 3
+        ctrl += [SpecialActions.WAIT_FOR_INPUT]
 
     # last one to force redraw of everything
     ctrl += [[0.0, 0.]]
@@ -502,13 +544,13 @@ def main():
     # estimate_wrench_per_dir(env)
     # keyboard_control(env)
 
-    # test grasp at pose
-    # grasp_at_pose(env, [0.85, 0.03, 0.3], last_move_use_cartesian=False)
-
     # move to the actual left side
     env.vis.clear_visualizations(["0", "0a", "1", "1a", "c", "reaction", "tmptbest", "residualmag"])
 
-    run_retrieval(env, level, pt_to_config, methods_to_run[args.method], control_wait=1.)
+    # test grasp at pose
+    # grasp_at_pose(env, [0.6395749449729919, 0.4507047235965729, -0.04405221343040466])
+
+    run_retrieval(env, level, pt_to_config, methods_to_run[args.method])
     env.vis.clear_visualizations()
 
 
