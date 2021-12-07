@@ -1032,7 +1032,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
             pt = torch.stack(pt)
         dx = torch.stack(dx)
 
-        if visualizer is not None:
+        if visualizer is not None and pt is not None:
             xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
             pts = xr.transform_points(pt)
             visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)

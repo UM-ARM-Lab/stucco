@@ -320,7 +320,8 @@ class SklearnPredeterminedController(RetrievalPredeterminedController):
         contact_point, dobj = self.contact_detector.get_last_contact_location(visualizer=visualizer)
         if contact_point is not None:
             self.in_contact.append(True)
-            contact_point = contact_point.cpu().numpy()
+            contact_point = contact_point.cpu().numpy()[:, :2]
+            dobj = dobj.cpu().numpy()
             self.online_method.update(contact_point - dobj, self.u_history[-1], dobj)
         else:
             self.in_contact.append(False)
@@ -410,13 +411,7 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
 
         self.i = 0
         self.tmp_save_folder = "/home/zhsh/Documents/results/tmp"
-        self.f = plt.figure(figsize=(8, 4))
-        self.ax = plt.gca()
-        self.ax.set_ylim(0., 0.8)
-        self.ax.set_xlim(-0.8, 0.8)
-        self.ax.set_aspect('equal')
-        plt.ion()
-        plt.show()
+        self.f = None
 
     @property
     def method(self):
@@ -428,6 +423,14 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
 
     def visualize_contact_points(self, env):
         super(PHDFilterTrackingMethod, self).visualize_contact_points(env)
+        if self.f is None:
+            self.f = plt.figure(figsize=(8, 4))
+            self.ax = plt.gca()
+            self.ax.set_ylim(0., 0.8)
+            self.ax.set_xlim(-0.8, 0.8)
+            self.ax.set_aspect('equal')
+            plt.ion()
+            plt.show()
 
         # visualize the intensity
         clear_ax_content(self.ax)

@@ -38,21 +38,29 @@ class OnlineSklearnContactSet:
         self.data = None
 
     def update(self, x, u, dx):
-        xx = x[:2].reshape(1, -1)
         if self.data is None:
-            self.data = xx
+            self.data = x
             self.cluster_method.fit(self.data)
         else:
-            self.data = np.concatenate([self.data, xx], axis=0)
+            self.data = np.concatenate([self.data, x], axis=0)
             self._fit_online()
 
-        # filter by moving all members of the current cluster by dx
-        this_cluster = self.cluster_method.labels_[-1]
+        movement_per_cluster = {}
+        for i in range(len(dx)):
+            this_cluster = self.cluster_method.labels_[-1 - i]
+            this_dx = dx[-1 - i]
+            if this_cluster != -1:
+                if this_cluster not in movement_per_cluster:
+                    movement_per_cluster[this_cluster] = []
+                movement_per_cluster[this_cluster].append(this_dx)
 
+        # filter by moving all members of the current cluster by dx
         # noise labels aren't actually clusters
-        if this_cluster != -1:
-            members_of_this_cluster = self.cluster_method.labels_ == this_cluster
-            self.data[members_of_this_cluster, :2] += dx[:2]
+        for this_cluster, dxs in movement_per_cluster.items():
+            this_dx = np.mean(dxs, axis=0)
+            if this_cluster != -1:
+                members_of_this_cluster = self.cluster_method.labels_ == this_cluster
+                self.data[members_of_this_cluster, :2] += this_dx
         return self.cluster_method.labels_
 
     def _fit_online(self):
