@@ -220,7 +220,7 @@ class TrackingMethod:
         """Render the tracked contact points in the given environment"""
 
     @abc.abstractmethod
-    def get_labelled_moved_points(self, labels):
+    def get_labelled_moved_points(self, labels=None):
         """Return the final position of the tracked points as well as their object label"""
 
 
@@ -267,15 +267,16 @@ class OurSoftTrackingMethod(OurTrackingMethod):
         to_iter = self.contact_set.get_hard_assignment(self.contact_set.p.hard_assignment_threshold)
         return SoftTrackingIterator(pts, iter(to_iter))
 
-    def get_labelled_moved_points(self, labels):
-        groups = self.contact_set.get_hard_assignment(self.contact_params.hard_assignment_threshold)
-        contact_indices = torch.tensor(self.ctrl.contact_indices, device=groups[0].device)
-        # self.ctrl.contact_indices = []
-
-        for group_id, group in enumerate(groups):
-            labels[contact_indices[group].cpu().numpy()] = group_id + 1
-
+    def get_labelled_moved_points(self, labels=None):
         contact_pts = self.contact_set.get_posterior_points()
+        if labels is not None:
+            groups = self.contact_set.get_hard_assignment(self.contact_params.hard_assignment_threshold)
+            contact_indices = torch.tensor(self.ctrl.contact_indices, device=groups[0].device)
+            # self.ctrl.contact_indices = []
+
+            for group_id, group in enumerate(groups):
+                labels[contact_indices[group].cpu().numpy()] = group_id + 1
+
         return labels, contact_pts
 
 
@@ -375,9 +376,10 @@ class SklearnTrackingMethod(CommonBaselineTrackingMethod):
         self.ctrl = SklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 
-    def get_labelled_moved_points(self, labels):
-        labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
+    def get_labelled_moved_points(self, labels=None):
         moved_pts = self.method.moved_data()
+        if labels is not None:
+            labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
         return labels, moved_pts
 
 
@@ -444,9 +446,10 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         plt.savefig(self.tmp_save_folder + "/file{:02d}.png".format(self.i))
         self.i += 1
 
-    def get_labelled_moved_points(self, labels):
-        labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
+    def get_labelled_moved_points(self, labels=None):
         moved_pts = self.method.moved_data()
+        if labels is not None:
+            labels[1:][self.ctrl.in_contact] = process_labels_with_noise(self.method.final_labels())
 
         # save intensity plot images to video
         plt.close(self.f)
