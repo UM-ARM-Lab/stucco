@@ -670,11 +670,12 @@ class RealArmEnvMedusa(RealArmEnv):
 
     def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
         self._need_to_force_planar = False
-        med = BubbleMed(display_goals=False,
-                        base_kwargs={'cartesian_impedance_controller_kwargs': {'pose_distance_fn': xy_pose_distance}})
-        self.robot = med
         # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
-        self.robot.cartesian._timeout_per_m = 40 / self.vel
+        med = BubbleMed(display_goals=False,
+                        base_kwargs={'cartesian_impedance_controller_kwargs': {'pose_distance_fn': xy_pose_distance,
+                                                                               'timeout_per_m': 40 / self.vel,
+                                                                               'position_close_enough': 0.003}})
+        self.robot = med
         self.robot.connect()
         self.vis.init_ros(world_frame="world")
         self.gripper = WSG50Gripper()
@@ -964,7 +965,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
                  camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
                  ee_link_frame: str, imprint_threshold=0.004, deform_number_threshold=20,
                  window_size=5, dtype=torch.float, device='cpu', **kwargs):
-
+        super().__init__(residual_precision, window_size=window_size, dtype=dtype, device=device)
         self.register_contact_sensor(BubbleResidualContactSensor(name, residual_threshold, **kwargs))
         if camera_l is not None:
             self.register_contact_sensor(BubbleCameraContactSensor(camera_l, ee_link_frame,
@@ -990,8 +991,6 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
         else:
             rospy.logwarn("Creating contact detector without camera")
 
-        super().__init__(residual_precision, window_size=window_size, dtype=dtype, device=device)
-
     def _draw_deformation(self, ax, **cache_content):
         imprint = cache_content['imprint']
         # debug visualization of depth images and imprints
@@ -1012,15 +1011,26 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
         cache_l = self.sensors[1].cache
         cache_r = self.sensors[2].cache
         pt = []
+        dx = []
+
         for s in range(1, len(self.sensors)):
-            pt_candidate = self.sensors[s].isolate_contact(ee_force_torque, pose, q=q, visualizer=visualizer)
+            pt_candidate = self.sensors[s].isolate_contact(ee_force_torque, pose, q=q,
+                                                           visualizer=visualizer)
             if pt_candidate is not None:
                 pt.append(pt_candidate)
+                dx.append(self.sensors[s].get_dx())
         if len(pt) == 0:
             # can pass points for no bubble deformation into normal pipeline, instead of always selecting it
             rospy.loginfo("Non-bubble contact")
-            pt.append(self.sensors[0].isolate_contact(ee_force_torque, pose, q=q, visualizer=None))
-        pt = torch.stack(pt)
+            pt_candidate = self.sensors[0].isolate_contact(ee_force_torque, pose, q=q, visualizer=None)
+            pt.append(pt_candidate)
+            dx.append(self.sensors[0].get_dx())
+
+        if pt[0] is None:
+            pt = None
+        else:
+            pt = torch.stack(pt)
+        dx = torch.stack(dx)
 
         if visualizer is not None:
             xr = tf.Transform3d(device=self.device, dtype=self.dtype, pos=pose[0], rot=tf.xyzw_to_wxyz(pose[1]))
@@ -1036,7 +1046,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
         if cache_r is not None:
             self._draw_deformation(self.imprint_ax_r, **cache_r)
 
-        return pt
+        return pt, dx
 
 
 class RealArmPointToConfig(PlanarPointToConfig):
