@@ -160,6 +160,12 @@ def keyboard_control(env):
                 print(f"pushed {push} state {obs}")
             rospy.sleep(0.1)
 
+def _skip_update(x_history, u_history, u):
+    # 3 elements in a control means to perform it but not calibrate (and ignore whether we think we're in contact or not)
+    # skip if we were calibrating with the last control, or if we are currently calibrating
+    return (type(u) is SpecialActions) or (len(x_history) < 2) or (
+            (type(u_history[-1]) is SpecialActions) or (len(u_history[-1]) > 2))
+
 
 class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
     def __init__(self, contact_detector, contact_set, controls, nu=None):
@@ -177,10 +183,7 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
             u = self.controls[self.i]
             self.i += 1
 
-        # 3 elements in a control means to perform it but not calibrate (and ignore whether we think we're in contact or not)
-        # skip if we were calibrating with the last control, or if we are currently calibrating
-        skip_update = (type(u) is SpecialActions) or (len(self.x_history) < 2) or (
-                (type(self.u_history[-1]) is SpecialActions) or (len(self.u_history[-1]) > 2))
+        skip_update = _skip_update(self.x_history, self.u_history, u)
         if not skip_update:
             if self.contact_detector.in_contact():
                 self.contact_indices.append(self.i)
@@ -205,8 +208,7 @@ class RealSklearnPredeterminedController(SklearnPredeterminedController):
             u = self.controls[self.i]
             self.i += 1
 
-        skip_update = (u is None) or (len(self.x_history) < 2) or (
-                (self.u_history[-1] is None) or (len(self.u_history[-1]) > 2))
+        skip_update = _skip_update(self.x_history, self.u_history, u)
         if not skip_update:
             self.update(obs, info, visualizer=visualizer)
 
@@ -251,7 +253,6 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
 
             with env.motion_status_input_lock:
                 u, skip_update = ctrl.command(obs, info, env.vis.ros)
-            # debug_pt_to_config(env, ctrl.contact_set.pxpen, env.state, torch.tensor([[0.6432, 0.2542]]))
             method.visualize_contact_points(env)
 
             if env.contact_detector.in_contact() and not skip_update:
@@ -396,7 +397,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
     start = time.time()
     while np.linalg.norm(diff) > 0.01 and time.time() - start < timeout:
         u = diff / self.MAX_PUSH_DIST
-        u /= max(u)
+        u /= max(abs(u))
         obs, _, _, _ = self.step(u, dz=z_extra, orientation=orientation)
         diff = np.subtract(goal_pos[:2], obs)
     if time.time() - start > timeout:
@@ -404,7 +405,18 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
 
     # self.robot.close_right_gripper()
     self.robot.gripper.move(0)
-    rospy.sleep(5)
+    rospy.sleep(3)
+
+    # actually retrieve the object to demonstrate we have a good grasp of it
+    obs = self._obs()
+    diff = np.subtract(offset_pos[:2], obs)
+    start = time.time()
+    while np.linalg.norm(diff) > 0.01 and time.time() - start < timeout:
+        u = diff / self.MAX_PUSH_DIST
+        u /= max(abs(u))
+        obs, _, _, _ = self.step(u, dz=z_extra, orientation=orientation)
+        diff = np.subtract(offset_pos[:2], obs)
+
     # self.robot.open_right_gripper(0)
     self.robot.gripper.move(100)
     rospy.sleep(1)
@@ -534,9 +546,9 @@ def main():
     methods_to_run = {
         'ours': RealOurSoftTrackingMethod(env, contact_params, pt_to_config),
         'online-birch': RealSklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
-                                                  inertia_ratio=0.2, threshold=0.05),
+                                                  inertia_ratio=0.2, threshold=0.08),
         'online-dbscan': RealSklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.1, min_samples=1),
-        'online-kmeans': RealSklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2,
+        'online-kmeans': RealSklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.1,
                                                    n_clusters=1, random_state=0)
     }
 
