@@ -368,26 +368,33 @@ class GMPHDWrapper:
         self.fp_fn_bias = fp_fn_bias
 
     def update(self, x, dx):
-        xx = x[:2].reshape(1, -1)
         if self.data is None:
-            self.data = xx
+            self.data = x
         else:
-            self.data = np.concatenate([self.data, xx], axis=0)
+            self.data = np.concatenate([self.data, x], axis=0)
 
-        # single observation (expects column input)
-        self.g.update([xx.reshape(-1, 1)])
+        # observation (expects column input)
+        self.g.update([xx.reshape(-1, 1) for xx in x])
         self.g.prune(maxcomponents=10, mergethresh=0.005)
 
         # extract discrete targets
         indices = self.final_labels()
+        movement_per_cluster = {}
+        for i in range(len(dx)):
+            this_cluster = indices[-1 - i]
+            this_dx = dx[-1 - i]
+            if this_cluster != -1:
+                if this_cluster not in movement_per_cluster:
+                    movement_per_cluster[this_cluster] = []
+                movement_per_cluster[this_cluster].append(this_dx)
 
         # filter by moving all members of the current cluster by dx
-        this_cluster = indices[-1]
-
         # noise labels aren't actually clusters
-        if this_cluster != -1:
-            members_of_this_cluster = indices == this_cluster
-            self.data[members_of_this_cluster, :2] += dx[:2]
+        for this_cluster, dxs in movement_per_cluster.items():
+            this_dx = np.mean(dxs, axis=0)
+            if this_cluster != -1:
+                members_of_this_cluster = indices == this_cluster
+                self.data[members_of_this_cluster, :2] += this_dx
         return indices
 
     def final_labels(self):

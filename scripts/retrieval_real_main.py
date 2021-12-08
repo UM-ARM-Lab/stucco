@@ -17,7 +17,8 @@ from sklearn.cluster import Birch, DBSCAN, KMeans
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.evaluation import object_robot_penetration_score
 from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
-    SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed
+    SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed, \
+    PHDFilterTrackingMethod, PHDPredeterminedController
 from stucco.env.real_env import VideoLogger
 from stucco.env.arm import Levels
 from stucco.env_getters.getter import EnvGetter
@@ -160,6 +161,7 @@ def keyboard_control(env):
                 print(f"pushed {push} state {obs}")
             rospy.sleep(0.1)
 
+
 def _skip_update(x_history, u_history, u):
     # 3 elements in a control means to perform it but not calibrate (and ignore whether we think we're in contact or not)
     # skip if we were calibrating with the last control, or if we are currently calibrating
@@ -216,6 +218,24 @@ class RealSklearnPredeterminedController(SklearnPredeterminedController):
         return u, skip_update
 
 
+class RealPHDPredeterminedController(PHDPredeterminedController):
+    def command(self, obs, info=None, visualizer=None):
+        self.x_history.append(obs)
+
+        if self.done():
+            u = [0 for _ in range(self.nu)]
+        else:
+            u = self.controls[self.i]
+            self.i += 1
+
+        skip_update = _skip_update(self.x_history, self.u_history, u)
+        if not skip_update:
+            self.update(obs, info, visualizer=visualizer)
+
+        self.u_history.append(u)
+        return u, skip_update
+
+
 class RealOurSoftTrackingMethod(OurSoftTrackingMethod):
     def create_predetermined_controller(self, controls):
         self.ctrl = RealRetrievalPredeterminedController(self.env.contact_detector, self.contact_set, controls, nu=2)
@@ -225,6 +245,12 @@ class RealOurSoftTrackingMethod(OurSoftTrackingMethod):
 class RealSklearnTrackingMethod(SklearnTrackingMethod):
     def create_predetermined_controller(self, controls):
         self.ctrl = RealSklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
+        return self.ctrl
+
+
+class RealPHDTrackingMethod(PHDFilterTrackingMethod):
+    def create_predetermined_controller(self, controls):
+        self.ctrl = RealPHDPredeterminedController(self.g, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 
 
@@ -365,7 +391,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
     self.vis.ros.draw_point("pregrasp", offset_pos, color=(1, 0, 0), scale=3)
 
     resp = input("is the planned grasp good?")
-    if resp == "n":
+    if resp == "n" or (len(resp) > 0 and resp[0] == "n"):
         return
 
     # first get to a location where planning to the previous joint config is ok
@@ -404,6 +430,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
         return
 
     # self.robot.close_right_gripper()
+    self.robot.gripper.set_grasping_force(50)
     self.robot.gripper.move(0)
     rospy.sleep(3)
 
@@ -520,7 +547,7 @@ def create_predetermined_controls(level: Levels):
 
 parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
 parser.add_argument('method',
-                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans'],
+                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
                     help='which method to run')
 args = parser.parse_args()
 
@@ -549,7 +576,8 @@ def main():
                                                   inertia_ratio=0.2, threshold=0.08),
         'online-dbscan': RealSklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.1, min_samples=1),
         'online-kmeans': RealSklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.1,
-                                                   n_clusters=1, random_state=0)
+                                                   n_clusters=1, random_state=0),
+        'gmphd': RealPHDTrackingMethod(env, fp_fn_bias=4, q_mag=0.00001, r_mag=0.00001, birth=0.001, detection=0.3)
     }
 
     # confirm_pt_to_config(env, pt_to_config)
