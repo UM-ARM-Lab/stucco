@@ -60,7 +60,7 @@ class OnlineSklearnContactSet:
             this_dx = np.mean(dxs, axis=0)
             if this_cluster != -1:
                 members_of_this_cluster = self.cluster_method.labels_ == this_cluster
-                self.data[members_of_this_cluster, :2] += this_dx
+                self.data[members_of_this_cluster] += this_dx
         return self.cluster_method.labels_
 
     def _fit_online(self):

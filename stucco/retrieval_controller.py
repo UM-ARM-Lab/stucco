@@ -413,7 +413,8 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         self.ctrl = None
 
         self.i = 0
-        self.tmp_save_folder = "/home/zhsh/results/tmp"
+        self.tmp_save_folder = os.path.join(cfg.DATA_DIR, "gmphd")
+        os.makedirs(self.tmp_save_folder, exist_ok=True)
         self.f = None
 
     @property

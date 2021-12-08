@@ -105,7 +105,7 @@ def evaluate_on_file(datafile, show_in_place=False, log_video=False):
             this_contact = env.contact_detector.observe_residual(residual, pose=pose)
             in_contact = in_contact or this_contact
             if this_contact:
-                pt = env.contact_detector.get_last_contact_location(pose)
+                pt = env.contact_detector.get_last_contact_location(pose)[0]
                 if show_in_place:
                     env._dd.draw_point(f'c', pt, height=pt[2] + 0.001, color=(0, 0, 1))
                     env._dd.draw_point(f'true_c', c[j], height=pt[2] + 0.001, color=(0.7, 0.7, 0))

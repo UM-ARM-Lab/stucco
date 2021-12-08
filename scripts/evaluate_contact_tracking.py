@@ -21,7 +21,8 @@ from sklearn.cluster import KMeans, DBSCAN, Birch
 from stucco.defines import NO_CONTACT_ID, RunKey, CONTACT_RES_FILE, RUN_AMBIGUITY, CONTACT_ID, CONTACT_POINT_CACHE
 from stucco.evaluation import dict_to_namespace_str, plot_cluster_res, load_runs_results, get_file_metainfo, \
     clustering_metrics, compute_contact_error
-from stucco.detection_impl import ContactDetectorPlanarPybulletGripper
+from stucco.detection_impl import PybulletResidualPlanarContactSensor
+from stucco.detection import ContactDetector
 
 from arm_pytorch_utilities.optim import get_device
 
@@ -67,7 +68,7 @@ class OurMethodFactory:
     def update_labels_single_res(self, labels, i, latest_obj_id, *update_return):
         return latest_obj_id
 
-    def __call__(self, X, U, reactions, env_class, info, contact_detector: ContactDetectorPlanarPybulletGripper,
+    def __call__(self, X, U, reactions, env_class, info, contact_detector: ContactDetector,
                  contact_pts):
         self.env_class = env_class
         # TODO select getter based on env class
@@ -214,12 +215,12 @@ def online_sklearn_method_factory(online_class, method, inertia_ratio=0.5, **kwa
     def sklearn_method(X, U, reactions, env_class, info, contact_detector, contact_pts):
         online_method = online_class(method(**kwargs), inertia_ratio=inertia_ratio)
         valid = np.linalg.norm(contact_pts, axis=1) > 0.
-        dobj = info[InfoKeys.DEE_IN_CONTACT]
+        dobj = info[InfoKeys.DEE_IN_CONTACT].cpu().numpy()
         for i in range(len(X) - 1):
             if not valid[i]:
                 continue
             # intermediate labels in case we want plotting of movement
-            labels = online_method.update(contact_pts[i] - dobj[i], U[i], dobj[i])
+            labels = online_method.update((contact_pts[i] - dobj[i]).reshape(1, -1), U[i], dobj[i].reshape(1, -1))
         labels = np.ones(len(valid)) * NO_CONTACT_ID
         labels[valid] = process_labels_with_noise(online_method.final_labels())
         moved_pts = online_method.moved_data()
@@ -237,7 +238,7 @@ def phd_filter_factory(**kwargs):
         for i in range(len(contact_pts)):
             if not valid[i]:
                 continue
-            method.update(contact_pts[i] - dobj[i], dobj[i])
+            method.update((contact_pts[i] - dobj[i]).reshape(1, -1), dobj[i].reshape(1, -1))
 
         labels = np.ones(len(valid)) * NO_CONTACT_ID
         labels[valid] = process_labels_with_noise(method.final_labels())
@@ -249,7 +250,9 @@ def phd_filter_factory(**kwargs):
 
 def get_contact_point_history(data, filename):
     """Return the contact points; for each pts[i], report the point of contact before u[i]"""
-    contact_detector = ContactDetectorPlanarPybulletGripper("floating_gripper", np.diag([1, 1, 1, 50, 50, 50]), 1.)
+    contact_detector = ContactDetector(np.diag([1, 1, 1, 50, 50, 50]))
+    sensor = PybulletResidualPlanarContactSensor("floating_gripper", 1.)
+    contact_detector.register_contact_sensor(sensor)
     if os.path.exists(CONTACT_POINT_CACHE):
         with open(CONTACT_POINT_CACHE, 'rb') as f:
             cache = pickle.load(f)
@@ -266,12 +269,12 @@ def get_contact_point_history(data, filename):
                 data[InfoKeys.HIGH_FREQ_REACTION_F][i][j], data[InfoKeys.HIGH_FREQ_REACTION_T][i][j]]
             pose = (data[InfoKeys.HIGH_FREQ_EE_POSE][i][j][:3], data[InfoKeys.HIGH_FREQ_EE_POSE][i][j][3:])
             contact_detector.observe_residual(ee_force_torque, pose)
-        pt = contact_detector.get_last_contact_location()
+        pt = contact_detector.get_last_contact_location()[0]
         if pt is None:
             pt = np.r_[0, 0, 0]
         else:
             # get the point before this action
-            pt = pt.cpu().numpy() - data[InfoKeys.DEE_IN_CONTACT][i]
+            pt = pt.cpu().numpy()[0] - data[InfoKeys.DEE_IN_CONTACT][i]
         pts.append(pt)
 
     pts = np.stack(pts)
@@ -356,7 +359,8 @@ def evaluate_methods_on_file(datafile, run_res, methods, show_in_place=False):
     def cluster_id_to_str(cluster_id):
         return 'no contact' if cluster_id == NO_CONTACT_ID else 'contact {}'.format(cluster_id)
 
-    save_loc = "/home/zhsh/Documents/results/cluster_res/"
+    save_loc = os.path.join(cfg.DATA_DIR, "cluster_res")
+    os.makedirs(save_loc, exist_ok=True)
 
     def save_and_close_fig(f, name):
         plt.savefig(os.path.join(save_loc, f"{level} {seed} {name}.png"))
@@ -429,34 +433,36 @@ if __name__ == "__main__":
 
     dirs = ['arm/gripper10', 'arm/gripper11', 'arm/gripper12', 'arm/gripper13']
     methods_to_run = {
-        # 'ours fix x': [
-        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
-        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
-        #     OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
-        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
-        # ],
         # 'ours UKF': OurMethodHard(length=0.1),
         # 'ours UKF convexity merge constraint': OurMethodHard(length=0.1),
         # 'ours PF': OurMethodHard(contact_object_class=tracking.ContactPF, length=0.1),
         # 'kmeans': sklearn_method_factory(KMeansWithAutoK),
         # 'dbscan': sklearn_method_factory(DBSCAN, eps=1.0, min_samples=10),
         # 'birch': sklearn_method_factory(Birch, n_clusters=None, threshold=1.5),
+        # 'ours': [
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.2),
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.3),
+        #     OurMethodSoft(length=0.02, hard_assignment_threshold=0.4),
+        #     # OurMethodSoft(length=0.02, hard_assignment_threshold=0.5),
+        # ],
         # 'online-kmeans': online_sklearn_method_factory(OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2,
         #                                                n_clusters=1, random_state=0),
         # 'online-dbscan': online_sklearn_method_factory(OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
         # 'online-birch': online_sklearn_method_factory(OnlineAgglomorativeClustering, Birch, n_clusters=None,
-        #                                               threshold=0.08)
-        'gmphd t1': [
-            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01),
-            phd_filter_factory(fp_fn_bias=2, q_mag=0.5, birth=0.01),
-            phd_filter_factory(fp_fn_bias=2, q_mag=1., birth=0.01),
-            phd_filter_factory(fp_fn_bias=2, q_mag=2., birth=0.01),
-            phd_filter_factory(fp_fn_bias=1, q_mag=0.5, birth=0.01),
-            phd_filter_factory(fp_fn_bias=1, q_mag=1., birth=0.01),
-            phd_filter_factory(fp_fn_bias=1, q_mag=2., birth=0.01),
-            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, detection=0.95),
-            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.1),
-            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.01),
+        #                                               threshold=0.08),
+        'gmphd': [
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01),
+            # phd_filter_factory(fp_fn_bias=2, q_mag=0.5, birth=0.01),
+            # phd_filter_factory(fp_fn_bias=2, q_mag=1., birth=0.01),
+            # phd_filter_factory(fp_fn_bias=2, q_mag=2., birth=0.01),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.5, birth=0.01),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=1., birth=0.01),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=2., birth=0.01),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, detection=0.95),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.1),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.1, birth=0.01, r_mag=0.01),
+            phd_filter_factory(fp_fn_bias=1, q_mag=0.1, r_mag=0.1, birth=0.001, detection=0.3),
+            # phd_filter_factory(fp_fn_bias=1, q_mag=0.001, r_mag=0.001, birth=0.001, detection=0.3),
         ]
     }
 

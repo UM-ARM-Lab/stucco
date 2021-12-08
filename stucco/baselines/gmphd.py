@@ -338,17 +338,18 @@ class GMPHDWrapper:
     def __init__(self, birth=0.1, birth_spread=20, birth_cov=1e-3, survival=0.95, detection=0.7,
                  q_mag=1e-3, r_mag=1e-3, clutter=3, fp_fn_bias=2, X=None, bounds=None):
 
+        self.nx = 2
         # find workspace limits
         if bounds is not None:
             x_min, y_min, x_max, y_max = bounds
         elif X is not None:
-            x_min, y_min = X.min(axis=0)[:2]
-            x_max, y_max = X.max(axis=0)[:2]
+            x_min, y_min = X.min(axis=0)[:self.nx]
+            x_max, y_max = X.max(axis=0)[:self.nx]
         else:
             raise RuntimeError("Either bounds or data have to be given to figure out bounds")
 
         # cover the entire workspace
-        birthgmm = [GmphdComponent(1.0, [x, y], np.eye(2) * birth_cov)
+        birthgmm = [GmphdComponent(1.0, [x, y], np.eye(self.nx) * birth_cov)
                     for y in np.linspace(y_min, y_max, birth_spread)
                     for x in np.linspace(x_min, x_max, birth_spread)]
         birthintensity1 = birth / len(birthgmm)
@@ -356,11 +357,11 @@ class GMPHDWrapper:
             comp.weight = birthintensity1
 
         # x_next = Fx; assume stationary
-        f = np.eye(2)
-        q = np.eye(2) * q_mag
+        f = np.eye(self.nx)
+        q = np.eye(self.nx) * q_mag
         # observe contact point and treat that as the target directly
-        h = np.eye(2)
-        r = np.eye(2) * r_mag
+        h = np.eye(self.nx)
+        r = np.eye(self.nx) * r_mag
         span = (x_max - x_min) * (y_max - y_min)
 
         self.g = Gmphd(birthgmm, survival, detection, f, q, h, r, clutter / span)
@@ -374,7 +375,7 @@ class GMPHDWrapper:
             self.data = np.concatenate([self.data, x], axis=0)
 
         # observation (expects column input)
-        self.g.update([xx.reshape(-1, 1) for xx in x])
+        self.g.update([xx[:self.nx].reshape(-1, 1) for xx in x])
         self.g.prune(maxcomponents=10, mergethresh=0.005)
 
         # extract discrete targets
@@ -394,7 +395,7 @@ class GMPHDWrapper:
             this_dx = np.mean(dxs, axis=0)
             if this_cluster != -1:
                 members_of_this_cluster = indices == this_cluster
-                self.data[members_of_this_cluster, :2] += this_dx
+                self.data[members_of_this_cluster] += this_dx
         return indices
 
     def final_labels(self):
@@ -410,7 +411,7 @@ class GMPHDWrapper:
 
         objects = np.concatenate(estitems, axis=1).T
         nbrs = NearestNeighbors(n_neighbors=1).fit(objects)
-        distances, indices = nbrs.kneighbors(self.data)
+        distances, indices = nbrs.kneighbors(self.data[:, :self.nx])
         indices = indices.reshape(-1)
 
         return indices
