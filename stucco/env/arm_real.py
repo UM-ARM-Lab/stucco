@@ -14,8 +14,9 @@ from threading import Lock
 
 import numpy as np
 from pytorch_kinematics import transforms as tf
+from stucco.util import move_figure
 
-from mmint_camera_utils.camera_utils import project_depth_image, project_depth_points
+from mmint_camera_utils.camera_utils import project_depth_points
 from stucco import tracking
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.detection import ContactSensor
@@ -526,6 +527,7 @@ class RealArmEnv(Env):
             if actions is not None:
                 actions = actions.cpu()
         debug_names_created = []
+        j = -1
         for j in range(len(states)):
             p = self.get_ee_pos(states[j])
             p = [p[0], p[1], self.REST_POS[2]]
@@ -537,6 +539,8 @@ class RealArmEnv(Env):
                 name = '{}a.{}'.format(base_name, j)
                 self.vis.draw_2d_line(name, p, actions[j], color=action_c, scale=action_scale)
                 debug_names_created.append(name)
+        self.vis.clear_visualization_after(base_name, j + 1)
+        self.vis.clear_visualization_after('{}a'.format(base_name), j + 1)
         return debug_names_created
 
     @classmethod
@@ -873,19 +877,6 @@ class BubbleResidualContactSensor(PybulletResidualPlanarContactSensor):
 
         p.disconnect()
         return cached_points, cached_normals
-
-
-def move_figure(f, x, y):
-    """Move figure's upper left corner to pixel (x, y)"""
-    backend = matplotlib.get_backend()
-    if backend == 'TkAgg':
-        f.canvas.manager.window.wm_geometry("+%d+%d" % (x, y))
-    elif backend == 'WXAgg':
-        f.canvas.manager.window.SetPosition((x, y))
-    else:
-        # This works for QT and GTK
-        # You can also use window.setGeometry
-        f.canvas.manager.window.move(x, y)
 
 
 class BubbleCameraContactSensor(ContactSensor):

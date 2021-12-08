@@ -1,4 +1,5 @@
 # utilities for real environments that are typically using ROS
+import copy
 import os.path
 from datetime import datetime
 
@@ -64,7 +65,7 @@ class DebugRvizDrawer(Visualizer):
         self.action_scale = action_scale
         self.max_nom_model_error = max_nominal_model_error
         self.world_frame = world_frame
-        self._ns = set()
+        self._ns = {}
 
     def _extract_ns_id_from_name(self, name):
         tokens = name.split('.')
@@ -74,8 +75,7 @@ class DebugRvizDrawer(Visualizer):
     def draw_point(self, name, point, color=(0, 0, 0), length=0.01, length_ratio=1, rot=0, height=None, label=None,
                    scale=1):
         ns, this_id = self._extract_ns_id_from_name(name)
-        marker = self.make_marker(ns, scale=self.BASE_SCALE * scale)
-        marker.id = this_id
+        marker = self.make_marker(ns, scale=self.BASE_SCALE * scale, id=this_id)
         z = height if height is not None else point[2]
 
         p = Point()
@@ -100,8 +100,7 @@ class DebugRvizDrawer(Visualizer):
 
     def draw_2d_line(self, name, start, diff, color=(0, 0, 0), size=2., scale=0.4, arrow=True):
         ns, this_id = self._extract_ns_id_from_name(name)
-        marker = self.make_marker(ns, marker_type=Marker.ARROW if arrow else Marker.LINE_LIST)
-        marker.id = int(this_id)
+        marker = self.make_marker(ns, marker_type=Marker.ARROW if arrow else Marker.LINE_LIST, id=int(this_id))
         z = start[2] if len(start) > 2 else 0
 
         p = Point()
@@ -128,13 +127,19 @@ class DebugRvizDrawer(Visualizer):
         self.marker_pub.publish(marker)
         return p
 
-    def make_marker(self, ns, scale=BASE_SCALE, marker_type=Marker.POINTS, adding_ns=True):
+    def make_marker(self, ns, scale=BASE_SCALE, marker_type=Marker.POINTS, adding_ns=True, id=0):
         marker = Marker()
         marker.ns = ns
+        marker.id = id
         if adding_ns:
-            self._ns.add(ns)
+            if ns not in self._ns:
+                self._ns[ns] = set()
+            self._ns[ns].add(id)
         elif ns in self._ns:
-            self._ns.remove(ns)
+            if ns in self._ns:
+                self._ns[ns].remove(id)
+                if len(self._ns[ns]) == 0:
+                    del self._ns[ns]
         marker.header.frame_id = self.world_frame
         marker.type = marker_type
         marker.action = Marker.ADD
@@ -150,7 +155,6 @@ class DebugRvizDrawer(Visualizer):
                             height=height)
         if action is not None:
             action_marker = self.make_marker("action", marker_type=Marker.LINE_LIST)
-            action_marker.id = 0
             action_marker.points.append(p)
             p = Point()
             p.x = state[0] + action[0] * self.action_scale
@@ -169,7 +173,6 @@ class DebugRvizDrawer(Visualizer):
 
     def draw_goal(self, goal):
         marker = self.make_marker("goal", scale=self.BASE_SCALE * 2)
-        marker.id = 0
         p = Point()
         p.x = goal[0]
         p.y = goal[1]
@@ -187,7 +190,6 @@ class DebugRvizDrawer(Visualizer):
         if rollouts is None:
             return
         marker = self.make_marker("rollouts")
-        marker.id = 0
         # assume states is iterable, so could be a bunch of row vectors
         T = len(rollouts)
         for t in range(T):
@@ -209,10 +211,7 @@ class DebugRvizDrawer(Visualizer):
         if trap_set is None:
             return
         state_marker = self.make_marker("trap_state", scale=self.BASE_SCALE * 2)
-        state_marker.id = 0
-
         action_marker = self.make_marker("trap_action", marker_type=Marker.LINE_LIST)
-        action_marker.id = 0
 
         T = len(trap_set)
         for t in range(T):
@@ -255,8 +254,18 @@ class DebugRvizDrawer(Visualizer):
         for name in names:
             self.clear_markers(name)
 
-    def clear_markers(self, ns, delete_all=True):
-        marker = self.make_marker(ns, adding_ns=False)
+    def clear_visualization_after(self, prefix, index):
+        ns = self._ns.get(prefix, None)
+        if ns not in self._ns:
+            return
+        ns = copy.deepcopy(ns)
+
+        while index in ns:
+            self.clear_markers(prefix, delete_all=False, id=index)
+            index += 1
+
+    def clear_markers(self, ns, delete_all=True, id=0):
+        marker = self.make_marker(ns, adding_ns=False, id=id)
         marker.action = Marker.DELETEALL if delete_all else Marker.DELETE
         self.marker_pub.publish(marker)
 

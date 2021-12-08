@@ -110,6 +110,10 @@ class Visualizer:
     def clear_visualizations(self, names=None):
         pass
 
+    @abc.abstractmethod
+    def clear_visualization_after(self, prefix, index):
+        pass
+
 
 class Env:
     @property

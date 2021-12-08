@@ -24,6 +24,8 @@ import os
 import subprocess
 import glob
 
+from stucco.util import move_figure
+
 
 class RetrievalController(Controller):
 
@@ -396,7 +398,8 @@ class PHDPredeterminedController(RetrievalPredeterminedController):
         contact_point, dobj = self.contact_detector.get_last_contact_location(visualizer=visualizer)
         if contact_point is not None:
             self.in_contact.append(True)
-            contact_point = contact_point.cpu().numpy()
+            contact_point = contact_point.cpu().numpy()[:, :2]
+            dobj = dobj.cpu().numpy()
             pt = contact_point - dobj
             self.g.update(pt, dobj)
         else:
@@ -410,7 +413,7 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         self.ctrl = None
 
         self.i = 0
-        self.tmp_save_folder = "/home/zhsh/Documents/results/tmp"
+        self.tmp_save_folder = "/home/zhsh/results/tmp"
         self.f = None
 
     @property
@@ -425,6 +428,8 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         super(PHDFilterTrackingMethod, self).visualize_contact_points(env)
         if self.f is None:
             self.f = plt.figure(figsize=(8, 4))
+            move_figure(self.f, 0, 1000)
+
             self.ax = plt.gca()
             self.ax.set_ylim(0., 0.8)
             self.ax.set_xlim(-0.8, 0.8)
@@ -442,7 +447,7 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         Z = self.g.g.gmmeval(XX.reshape(-1, 2, 1))
         Z = np.stack(Z).astype(float).reshape(X.shape)
         # axes corresponds to the debug camera in pybullet
-        plt.contour(-Y, X, Z)
+        plt.contour(Y, 1 - X, Z)
 
         self.f.canvas.draw()
         plt.pause(0.0001)
