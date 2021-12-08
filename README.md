@@ -1,5 +1,7 @@
 # Soft Tracking Using Contacts for Cluttered Objects (STUCCO) to Perform Blind Object Retrieval
 
+![real_bubble_min](https://user-images.githubusercontent.com/5508542/145291731-1b17c313-16d8-4003-90da-be2fa1756c6c.png)
+
 ## Requirements
 
 - python 3.6+
