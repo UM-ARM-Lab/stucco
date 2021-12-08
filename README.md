@@ -1,7 +1,5 @@
 # Soft Tracking Using Contacts for Cluttered Objects (STUCCO) to Perform Blind Object Retrieval
 
-![real-min](https://user-images.githubusercontent.com/5508542/133346489-cc83db1c-28d3-4a69-8ae2-865b12b4cbd7.png)
-
 ## Requirements
 
 - python 3.6+
@@ -26,10 +24,11 @@ distance between contact points and robot surfaces in given configurations need 
 on how to implement them. The other key function, `pxdyn`, just needs to be callable with signature
 
 ```
-(B x 3 points, B x SE(3) poses, B x se(3) change in poses) -> (B x 3 new points, B x SE(3) new poses)
+(B x N x 3 points, B x N x SE(3) poses, B x N x se(3) change in poses) -> (B x N x 3 new points, B x N x SE(3) new poses)
 ```
 
-Where `B` represent arbitrary batch dimension(s).
+Where `B` represent arbitrary batch dimension(s), `N` represent a number of contact points per step, some of which
+may be missing or 1 and should behave under standard broadcasting rules.
 
 ### Contact Detection and Isolation
 
@@ -63,7 +62,8 @@ You then feed this object high frequency residual data along with end-effector p
 ```python
 # get reaction force and reaction torque at end-effector 
 if contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
-# other book-keeping in case of making a contact
+   contact_detector.observe_dx(dx)
+   # other book-keeping in case of making a contact
 ```
 
 This object can later be queried like `contact_detector.in_contact()` and passed to update the tracking
@@ -97,8 +97,9 @@ You then update it every control step with robot pose and contact point info
 # get latest contact point through the contact detector 
 # (or can be supplied manually through other means)
 # supplying None indicates we are not in contact
-p = contact_detector.get_last_contact_location()
-# observed x and dx 
+# also retrieve dx for each p
+p, dx = contact_detector.get_last_contact_location()
+# observed current x
 contact_set.update(x, dx, p)
 ```
 
@@ -181,10 +182,10 @@ class SamplePointToConfig(PlanarPointToConfig):
 1. collect training data
 
 ```shell
-python collect_tracking_training_data --task SELECT1 --gui
-python collect_tracking_training_data --task SELECT2 --gui
-python collect_tracking_training_data --task SELECT3 --gui
-python collect_tracking_training_data --task SELECT4 --gui
+python collect_tracking_training_data.py --task SELECT1 --gui
+python collect_tracking_training_data.py --task SELECT2 --gui
+python collect_tracking_training_data.py --task SELECT3 --gui
+python collect_tracking_training_data.py --task SELECT4 --gui
 ```
 
 2. evaluate all tracking methods on this data
