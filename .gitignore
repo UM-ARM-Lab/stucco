@@ -4,6 +4,7 @@ __pycache__
 examples
 *.mp4
 *.png
+!meshes/**/*.png
 *.pyc
 0_VRDemoSettings.txt
 constraint.py
