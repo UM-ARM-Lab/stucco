@@ -29,8 +29,8 @@ on how to implement them. The other key function, `pxdyn`, just needs to be call
 (B x N x 3 points, B x N x SE(3) poses, B x N x se(3) change in poses) -> (B x N x 3 new points, B x N x SE(3) new poses)
 ```
 
-Where `B` represent arbitrary batch dimension(s), `N` represent a number of contact points per step, some of which
-may be missing or 1 and should behave under standard broadcasting rules.
+Where `B` represent arbitrary batch dimension(s), `N` represent a number of contact points per step, some of which may
+be missing or 1 and should behave under standard broadcasting rules.
 
 ### Contact Detection and Isolation
 
@@ -64,8 +64,8 @@ You then feed this object high frequency residual data along with end-effector p
 ```python
 # get reaction force and reaction torque at end-effector 
 if contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
-   contact_detector.observe_dx(dx)
-   # other book-keeping in case of making a contact
+    contact_detector.observe_dx(dx)
+    # other book-keeping in case of making a contact
 ```
 
 This object can later be queried like `contact_detector.in_contact()` and passed to update the tracking
@@ -190,7 +190,8 @@ python collect_tracking_training_data.py --task SELECT3 --gui
 python collect_tracking_training_data.py --task SELECT4 --gui
 ```
 
-2. evaluate all tracking methods on this data
+2. evaluate all tracking methods on this data; you can find the clustering result and ground truth for each trial
+   in `data/cluster_res`
 
 ```shell
 python evaluate_contact_tracking.py
