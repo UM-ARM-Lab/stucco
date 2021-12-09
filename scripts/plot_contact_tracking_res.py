@@ -160,10 +160,10 @@ class PlotContactErrorVsFMI(ContactTrackingResultsPlot):
             xlabel.append('(relative to max penetration dist)')
             ax.set_xlim(0, 1)
         else:
-            ax.set_xlim(0, 5)
+            ax.set_xlim(0, 6)
         ax.set_xlabel(' '.join(xlabel))
         ax.set_ylabel('FMI')
-        ax.set_ylim(0.5, 1.1)
+        ax.set_ylim(0.6, 1.05)
 
     def _select_x_y(self, data) -> typing.Tuple[np.array, np.array]:
         x = data['wcme'] if self.weight_cme else np.array(data['cme']) * 100
@@ -176,29 +176,11 @@ if __name__ == "__main__":
     all_methods = set([k.method for k in all_runs.keys() if k.method not in RUN_INFO_KEYWORDS])
     logger.info(f"all methods: {all_methods}")
     methods = [
-        # "ours UKF convexity merge constraint",
-        # "ours UKF all cluster",
-        # "ours UKF 0 dyn",
-        # "ours soft",
-        # "ours soft sq dist",
-        # "ours soft sq dist sub tol",
-        # "ours UKF",
-        # "ours soft cached pts",
-        # "ours soft full check",
-        # "ours soft replace pts",
-        # "ours soft replace",
-        # "ours soft good",
         "ours",
-        # "ours no replace",
-        # "ours full",
-        # "ours soft sq dist elim freespace"
-        # "ours PF",
-        # "kmeans",
-        # "birch",
-        # "dbscan",
         "online-kmeans",
         "online-dbscan",
-        "online-birch"
+        "online-birch",
+        "gmphd"
     ]
 
 
@@ -209,7 +191,7 @@ if __name__ == "__main__":
     contact_error_vs_fmi = PlotContactErrorVsFMI(all_runs, methods, plot_aggregate=True, weight_cme=False,
                                                  represent_cme_as_ratio=False, aggregate_perturbation=0.00,
                                                  plot_only_best_params_on_metric='<cme',
-                                                 filter_on_ambiguity=only_high_ambiguity
+                                                 # filter_on_ambiguity=only_high_ambiguity
                                                  )
 
     plt.show()
