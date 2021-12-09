@@ -57,6 +57,7 @@ class Levels(enum.IntEnum):
     FLAT_BOX = 22
     BEHIND_CAN = 23
     IN_BETWEEN = 24
+    TOMATO_CAN = 25
 
 
 selected_levels = [Levels.SELECT1, Levels.SELECT2, Levels.SELECT3, Levels.SELECT4]
@@ -1494,10 +1495,18 @@ class ObjectRetrievalEnv(FloatingGripperEnv):
         self.immovable.append(make_box([0.7, 0.1, h], [0.5, -separation, z], [0, 0, 0]))
         self.immovable.append(make_box([0.7, 0.1, h], [0.5, separation, z], [0, 0, 0]))
         flags = p.URDF_USE_INERTIA_FROM_FILE
-        self.target_object_id = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbCrackerBox', "model.urdf"),
-                                           [self.goal[0], self.goal[1], z],
-                                           p.getQuaternionFromEuler([0, 0, self.goal[2]]), flags=flags)
-        p.changeDynamics(self.target_object_id, -1, mass=10)
+        target_pos = [self.goal[0], self.goal[1], z]
+        target_rot = p.getQuaternionFromEuler([0, 0, self.goal[2]])
+
+        if self.level in [Levels.TOMATO_CAN]:
+            self.target_object_id = p.loadURDF(
+                os.path.join(ycb_objects.getDataPath(), 'YcbTomatoSoupCan', "model.urdf"),
+                target_pos, target_rot, flags=flags, globalScaling=1.2)
+            p.changeDynamics(self.target_object_id, -1, mass=2)
+        else:
+            self.target_object_id = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbCrackerBox', "model.urdf"),
+                                               target_pos, target_rot, flags=flags)
+            p.changeDynamics(self.target_object_id, -1, mass=10)
         p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.8)
 
         self.movable.append(self.target_object_id)
@@ -1543,6 +1552,18 @@ class ObjectRetrievalEnv(FloatingGripperEnv):
             self.movable.append(p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbPottedMeatCan', "model.urdf"),
                                            [0.3, -0.05, z],
                                            p.getQuaternionFromEuler([0, 0, 0.6]), flags=flags, globalScaling=1.5))
+        elif self.level == Levels.TOMATO_CAN:
+            p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.01)
+            self.movable.append(p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMasterChefCan', "model.urdf"),
+                                           [0.15, -0.1, z],
+                                           p.getQuaternionFromEuler([0, 0, 0]), flags=flags, globalScaling=2))
+            self.movable.append(p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbCrackerBox', "model.urdf"),
+                                           [0.23, 0.15, z],
+                                           p.getQuaternionFromEuler([0, 0, 0.5]), flags=flags))
+            self.movable.append(p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbPottedMeatCan', "model.urdf"),
+                                           [0.3, -0.15, z],
+                                           p.getQuaternionFromEuler([0, 0, 0.]), flags=flags, globalScaling=1.5))
+
 
         for objId in self.immovable:
             p.changeVisualShape(objId, -1, rgbaColor=[0.2, 0.2, 0.2, 0.8])

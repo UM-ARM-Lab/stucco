@@ -86,6 +86,9 @@ class RetrievalGetter(ArmGetter):
         elif level is Levels.IN_BETWEEN:
             init = [0, 0.05]
             goal = [0.18, 0, 1.7]
+        elif level is Levels.TOMATO_CAN:
+            init = [0, 0.05]
+            goal = [0.18, 0.05, 0]
 
         env = arm.ObjectRetrievalEnv(environment_level=level, log_video=log_video, init=init, goal=goal, **kwargs)
         cls.env_dir = '{}/gripper'.format(cls.dynamics_prefix())

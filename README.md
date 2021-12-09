@@ -210,6 +210,7 @@ python plot_contact_tracking_res.py
 python retrieval_main.py ours --task FB --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task FB --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task FB --seed 16 17 18 19
 python retrieval_main.py ours --task BC --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task BC --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task BC --seed 16 17 18 19
 python retrieval_main.py ours --task IB --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task IB --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task IB --seed 16 17 18 19
+python retrieval_main.py ours --task TC --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task TC --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task TC --seed 16 17 18 19
 ```
 
 repeat with baselines by replacing `ours` with `online-birch` and other baselines
