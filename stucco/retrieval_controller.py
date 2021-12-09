@@ -144,7 +144,8 @@ def rot_2d_mat_to_angle(T):
     return torch.atan2(T[:, 1, 0], T[:, 0, 0])
 
 
-def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, seed=0, name=""):
+def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, seed=0, name="",
+                        sample_in_order=False):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -154,6 +155,18 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
             return cache[name][seed]
     else:
         cache = {name: {}}
+
+    def retrieve_valid_surface_pt(tester_pos, points):
+        closest = closest_point_on_surface(object_id, tester_pos)
+        pt = closest[ContactInfo.POS_A]
+        if force_z is not None:
+            pt = (pt[0], pt[1], force_z)
+        if len(points) > 0:
+            d = np.subtract(points, pt)
+            d = np.linalg.norm(d, axis=1)
+            if np.any(d < reject_too_close):
+                return None
+        return pt
 
     with rand.SavedRNG():
         rand.seed(seed)
@@ -172,25 +185,39 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
         bb[3] = [aabb_max[0], aabb_min[1], 1]
 
         points = []
-        sigma = 0.1
-        while len(points) < num_points:
-            tester_pos = np.r_[np.random.randn(2) * sigma, z]
-            # sample an object at random points around this object and find closest point to it
-            closest = closest_point_on_surface(object_id, tester_pos)
-            pt = closest[ContactInfo.POS_A]
-            if force_z is not None:
-                pt = (pt[0], pt[1], force_z)
-            if len(points) > 0:
-                d = np.subtract(points, pt)
-                d = np.linalg.norm(d, axis=1)
-                if np.any(d < reject_too_close):
+        if sample_in_order:
+            r = max(aabb_max[0], aabb_max[1])
+            # sample evenly in terms of angles, but leave out the section in between the fingers
+            leave_out = 0
+            start_angle = 0
+            angles = np.linspace(start_angle + leave_out, np.pi * 2 - leave_out + start_angle, num_points)
+
+            for angle in angles:
+                tester_pos = [np.cos(angle) * r, np.sin(angle) * r, z]
+                pt = retrieve_valid_surface_pt(tester_pos, points)
+                if pt is None:
                     continue
-            points.append(pt)
+                points.append(pt)
+        else:
+            sigma = 0.1
+            while len(points) < num_points:
+                tester_pos = np.r_[np.random.randn(2) * sigma, z]
+                pt = retrieve_valid_surface_pt(tester_pos, points)
+                if pt is None:
+                    continue
+                points.append(pt)
 
     p.resetBasePositionAndOrientation(object_id, orig_pos, orig_orientation)
 
+    # if sampled in order, the ordered points themselves can be used for visualization, otherwise use the bounding box
     points = torch.tensor(points)
-    bb = torch.tensor(bb)
+    if sample_in_order:
+        # reduce fidelity to speed up drawing of estimated pose
+        bb = points.clone()[::3]
+        bb = torch.cat((bb, points[0].view(1, -1)))
+        bb[:, -1] = 1
+    else:
+        bb = torch.tensor(bb)
 
     cache[name][seed] = points, bb
     torch.save(cache, fullname)
@@ -448,7 +475,9 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
         Z = self.g.g.gmmeval(XX.reshape(-1, 2, 1))
         Z = np.stack(Z).astype(float).reshape(X.shape)
         # axes corresponds to the debug camera in pybullet
-        plt.contour(Y, 1 - X, Z)
+        plt.contour(-Y, X, Z)
+        # axes corresponding to rviz for real robot
+        # plt.contour(Y, 1 - X, Z)
 
         self.f.canvas.draw()
         plt.pause(0.0001)
