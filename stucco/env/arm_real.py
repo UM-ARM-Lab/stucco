@@ -998,9 +998,25 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
                                                       verticalalignment='top'))
         plt.pause(0.0001)
 
-    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+    def draw_deformation(self):
+        # always draw deformations even if we don't have an isolated contact (why moved outside isolate_contact)
         cache_l = self.sensors[1].cache
         cache_r = self.sensors[2].cache
+        for artist in self.removable_artists:
+            artist.remove()
+        self.removable_artists = []
+        if cache_l is not None:
+            self._draw_deformation(self.imprint_ax_l, **cache_l)
+        if cache_r is not None:
+            self._draw_deformation(self.imprint_ax_r, **cache_r)
+
+    def get_last_contact_location(self, pose=None, **kwargs):
+        # call this first to process the caches
+        ret = super(ContactDetectorPlanarRealArmBubble, self).get_last_contact_location(pose=pose, **kwargs)
+        self.draw_deformation()
+        return ret
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
         pt = []
         dx = []
 
@@ -1029,13 +1045,6 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
             visualizer.draw_point(f'most likely contact', pts[0], color=(0, 1, 0), scale=2)
             visualizer.draw_2d_line('reaction', pts[0], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
                                     scale=0.2)
-        for artist in self.removable_artists:
-            artist.remove()
-        self.removable_artists = []
-        if cache_l is not None:
-            self._draw_deformation(self.imprint_ax_l, **cache_l)
-        if cache_r is not None:
-            self._draw_deformation(self.imprint_ax_r, **cache_r)
 
         return pt, dx
 

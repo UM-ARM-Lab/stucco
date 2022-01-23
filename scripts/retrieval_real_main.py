@@ -194,6 +194,8 @@ class RealRetrievalPredeterminedController(RetrievalPredeterminedController):
             pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
             info['u'] = torch.tensor(self.u_history[-1][:2])
             self.contact_set.update(x, dx, pt, info=info)
+        else:
+            self.contact_detector.draw_deformation()
 
         self.u_history.append(u)
         return u, skip_update
@@ -430,7 +432,7 @@ def grasp_at_pose(self: arm_real.RealArmEnvMedusa, pose, ret_ctrl=(), timeout=40
         return
 
     # self.robot.close_right_gripper()
-    self.robot.gripper.set_grasping_force(50)
+    self.robot.gripper.set_grasping_force(70)
     self.robot.gripper.move(0)
     rospy.sleep(3)
 
@@ -521,7 +523,7 @@ def create_predetermined_controls(level: Levels):
         ctrl += [[0.0, 1.0]] * 4
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
         ctrl += [[0.9, 0], SpecialActions.RECALIBRATE]
-        # ctrl += [[1, 0]]
+        ctrl += [[0.8, 0]]
         # ctrl += [SpecialActions.WAIT_FOR_INPUT]
         # ctrl += [[0.2, 0], None]
         # ctrl += [[1, 0], None, [1.0, 0], [0.5, 0]]
