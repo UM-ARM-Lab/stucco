@@ -71,6 +71,28 @@ def closest_point_on_surface(object_id, query_point):
     return pts_on_surface[0]
 
 
+def surface_normal_at_point(object_id, query_point):
+    # find contact normal on point of object closest to query point
+    query_point = closest_point_on_surface(object_id, query_point)[ContactInfo.POS_A]
+
+    global _CONTACT_TESTER_ID
+    if _CONTACT_TESTER_ID == -1:
+        col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=1e-8)
+        vis_id = p.createVisualShape(p.GEOM_SPHERE, radius=0.003, rgbaColor=[0.1, 0.9, 0.3, 0.6])
+        _CONTACT_TESTER_ID = p.createMultiBody(0, col_id, vis_id, basePosition=query_point)
+
+    p.resetBasePositionAndOrientation(_CONTACT_TESTER_ID, query_point, [0, 0, 0, 1])
+    p.performCollisionDetection()
+    pts_on_surface = p.getContactPoints(object_id, _CONTACT_TESTER_ID, linkIndexB=-1)
+    # if the pybullet environment is reset and the object doesn't exist; this will not catch all cases
+    if len(pts_on_surface) < 1:
+        return np.zeros(3)
+
+    # move out the way
+    p.resetBasePositionAndOrientation(_CONTACT_TESTER_ID, [0, 0, 100], [0, 0, 0, 1])
+    return pts_on_surface[0][ContactInfo.NORMAL_DIR_B]
+
+
 class PybulletEnv(Env):
     def __init__(self, mode=Mode.DIRECT, log_video=False, default_debug_height=0, camera_dist=1.5):
         self.log_video = log_video
