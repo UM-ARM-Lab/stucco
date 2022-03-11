@@ -130,6 +130,18 @@ class GPModelWithDerivatives(gpytorch.models.ExactGP):
         return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
 
 
+class ExactGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood):
+        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
 def project_to_plane(n, v):
     """Project vector v onto plane defined by its normal vector n"""
     # ensure unit vector
@@ -139,14 +151,13 @@ def project_to_plane(n, v):
 
 
 from stucco.env.pybullet_env import make_box, DebugDrawer, closest_point_on_surface, surface_normal_at_point, \
-    ContactInfo
+    ContactInfo, make_sphere
 import pybullet_data
 from pybullet_object_models import ycb_objects
 
 
-def test_existing_method_3d():
+def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=True):
     extrude_objects_in_z = False
-    alpha = 0.01
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
 
@@ -160,9 +171,10 @@ def test_existing_method_3d():
 
     planeId = p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
     # objId = make_box([0.4, 0.15, h], [-0.4, 0, z], [0, 0, -np.pi / 2])
-    objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
-                       [0., 0., z * 3],
-                       p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
+    objId = make_sphere(h, [-0.4, 0, z])
+    # objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
+    #                    [0., 0., z * 3],
+    #                    p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
 
     for _ in range(1000):
         p.stepSimulation()
@@ -180,17 +192,45 @@ def test_existing_method_3d():
     xs = [x]
     df = [n]
     for t in range(200):
-        likelihood, model = fit_gpis(xs, df, threedimensional=True)
+        likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale)
 
         def gp_var(cx):
-            pred = likelihood(model(cx))
+            pred = likelihood(model(cx * gpscale))
             return pred.variance
 
         # query for next place to go based on gradient of variance
         gp_var_jacobian = jacobian(gp_var, x)
         gp_var_grad = gp_var_jacobian[0]  # first dimension corresponds to SDF, other 2 are for the SDF gradient
-
+        # choose random direction if it's the 0 vector
+        if torch.allclose(gp_var_grad, torch.zeros_like(gp_var_grad)):
+            gp_var_grad = torch.rand_like(gp_var_grad)
         dx = project_to_plane(n, gp_var_grad)
+
+        if verify_numerical_gradients:
+            with rand.SavedRNG():
+                # try numerically computing the gradient along valid directions only
+                # pick any vector not parallel to the normal
+                v0 = n.clone()
+                v0[0] += 1
+                v1 = torch.cross(n, v0)
+                v2 = torch.cross(n, v1)
+                v1 /= v1.norm()
+                v2 /= v2.norm()
+                num_samples = 100
+                angles = torch.linspace(0, math.pi * 2, num_samples)
+                dx_samples = (torch.cos(angles).view(-1, 1) * v1 + torch.sin(angles).view(-1, 1) * v2) * alpha
+                new_x_samples = x + dx_samples
+                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False, covar_root_decomposition=False):
+                    pred_samples = likelihood(model(new_x_samples * gpscale))
+                    # select dx corresponding to largest var in first dimension
+                    sample_ordering = torch.argsort(pred_samples.variance[:, 0], descending=True)
+                    # sample_ordering = torch.argsort(pred_samples.variance, descending=True)
+                dx_numerical = dx_samples[sample_ordering[0]]
+                for k in range(10):
+                    strength = (10 - k) / 10
+                    dd.draw_2d_line(f'dx{k}', x, dx_samples[sample_ordering[k]], (strength, 1 - strength, 1 - strength),
+                                    scale=3)
+
         # normalize to be magnitude alpha
         dx = dx / dx.norm() * alpha
         dd.draw_2d_line('a', x, dx, (1, 0., 0), scale=1)
@@ -209,22 +249,22 @@ def test_existing_method_3d():
         df.append(n)
 
 
-def fit_gpis(x, df, threedimensional=True, training_iter=50):
+def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5):
     x = torch.stack(x)
     df = torch.stack(df)
-    # if not torch.is_tensor(x):
-    #     x = torch.tensor(x)
-    #     df = torch.tensor(df, dtype=x.dtype)
     f = torch.zeros(x.shape[0], dtype=x.dtype)
 
     # scale to be about the same magnitude
-    scale = 5
     train_x = x * scale
-    train_y = torch.cat((f.view(-1, 1), df), dim=1)
-
-    likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
-        num_tasks=4 if threedimensional else 3)  # Value + x-derivative + y-derivative
-    model = GPModelWithDerivatives(train_x, train_y, likelihood)
+    if use_df:
+        train_y = torch.cat((f.view(-1, 1), df), dim=1)
+        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
+            num_tasks=4 if threedimensional else 3)  # Value + x-derivative + y-derivative
+        model = GPModelWithDerivatives(train_x, train_y, likelihood)
+    else:
+        train_y = f
+        likelihood = gpytorch.likelihoods.GaussianLikelihood()
+        model = ExactGPModel(train_x, train_y, likelihood)
 
     # Find optimal model hyperparameters
     model.train()
@@ -241,12 +281,16 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50):
         output = model(train_x)
         loss = -mll(output, train_y)
         loss.backward()
-        print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
+        print('Iter %d/%d - Loss: %.3f   noise: %.3f' % (
             i + 1, training_iter, loss.item(),
-            model.covar_module.base_kernel.lengthscale.squeeze()[0],
-            model.covar_module.base_kernel.lengthscale.squeeze()[1],
             model.likelihood.noise.item()
         ))
+        # print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
+        #     i + 1, training_iter, loss.item(),
+        #     model.covar_module.base_kernel.lengthscale.squeeze()[0],
+        #     model.covar_module.base_kernel.lengthscale.squeeze()[1],
+        #     model.likelihood.noise.item()
+        # ))
         optimizer.step()
     # Set into eval mode
     model.eval()
@@ -443,23 +487,3 @@ if __name__ == "__main__":
 
     # direct_fit()
     test_existing_method_3d()
-    exit(0)
-
-    fmis = []
-    cmes = []
-    # backup video logging in case ffmpeg and nvidia driver are not compatible
-    # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
-    #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
-    for seed in args.seed:
-        m, cme = main(env, method_name, seed=seed)
-        fmi = m[0]
-        fmis.append(fmi)
-        cmes.append(cme)
-        logger.info(f"{method_name} fmi {fmi} cme {cme}")
-        env.vis.clear_visualizations()
-        env.reset()
-
-    logger.info(
-        f"{method_name} mean fmi {np.mean(fmis)} median fmi {np.median(fmis)} std fmi {np.std(fmis)} {fmis}\n"
-        f"mean cme {np.mean(cmes)} median cme {np.median(cmes)} std cme {np.std(cmes)} {cmes}")
-    env.close()
