@@ -33,6 +33,9 @@ from stucco.retrieval_controller import rot_2d_mat_to_angle, \
     sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod
 
+import open3d as o3d
+from torchmcubes import marching_cubes, grid_interp
+
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
@@ -156,7 +159,7 @@ import pybullet_data
 from pybullet_object_models import ycb_objects
 
 
-def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=True):
+def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=False, timesteps=200, training_iter=100):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -171,10 +174,10 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=Tr
 
     planeId = p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
     # objId = make_box([0.4, 0.15, h], [-0.4, 0, z], [0, 0, -np.pi / 2])
-    objId = make_sphere(h, [-0.4, 0, z])
-    # objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
-    #                    [0., 0., z * 3],
-    #                    p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
+    # objId = make_sphere(h, [-0.4, 0, z])
+    objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
+                       [0., 0., z * 3],
+                       p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
 
     for _ in range(1000):
         p.stepSimulation()
@@ -191,12 +194,18 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=Tr
 
     xs = [x]
     df = [n]
-    for t in range(200):
-        likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale)
+    likelihood = None
+    model = None
+    for t in range(timesteps):
+        likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale,
+                                     training_iter=training_iter, likelihood=likelihood, model=model)
+
+        def gp(cx):
+            pred = likelihood(model(cx * gpscale))
+            return pred
 
         def gp_var(cx):
-            pred = likelihood(model(cx * gpscale))
-            return pred.variance
+            return gp(cx).variance
 
         # query for next place to go based on gradient of variance
         gp_var_jacobian = jacobian(gp_var, x)
@@ -220,8 +229,9 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=Tr
                 angles = torch.linspace(0, math.pi * 2, num_samples)
                 dx_samples = (torch.cos(angles).view(-1, 1) * v1 + torch.sin(angles).view(-1, 1) * v2) * alpha
                 new_x_samples = x + dx_samples
-                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False, covar_root_decomposition=False):
-                    pred_samples = likelihood(model(new_x_samples * gpscale))
+                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
+                                                                          covar_root_decomposition=False):
+                    pred_samples = gp(new_x_samples)
                     # select dx corresponding to largest var in first dimension
                     sample_ordering = torch.argsort(pred_samples.variance[:, 0], descending=True)
                     # sample_ordering = torch.argsort(pred_samples.variance, descending=True)
@@ -248,8 +258,98 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, verify_numerical_gradients=Tr
         xs.append(x)
         df.append(n)
 
+        if t > 0 and t % 50 == 0:
+            print('evaluating shape')
+            # n1, n2, n3 = 80, 80, 50
+            num = [80, 80, 50]
+            ranges = np.array([[-.2, .2], [-.2, .2], [0, .5]])
+            xv, yv, zv = torch.meshgrid(
+                [torch.linspace(*ranges[0], num[0]), torch.linspace(*ranges[1], num[1]),
+                 torch.linspace(*ranges[2], num[2])])
 
-def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5):
+            # Make predictions
+            with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False, covar_root_decomposition=False):
+                test_x = torch.stack(
+                    [xv.reshape(np.prod(num), 1), yv.reshape(np.prod(num), 1), zv.reshape(np.prod(num), 1)],
+                    -1).squeeze(1)
+                PER_BATCH = 256
+                vars = []
+                us = []
+                for i in range(0, test_x.shape[0], PER_BATCH):
+                    predictions = gp(test_x[i:i + PER_BATCH])
+                    mean = predictions.mean
+                    var = predictions.variance
+
+                    vars.append(var[:, 0])
+                    us.append(mean[:, 0])
+
+                var = torch.cat(vars).contiguous()
+                u = torch.cat(us).contiguous()
+                imprint_norm = matplotlib.colors.Normalize(vmin=0, vmax=torch.quantile(var, .90))
+                color_map = matplotlib.cm.ScalarMappable(norm=imprint_norm)
+                rgb = color_map.to_rgba(var.reshape(-1))
+                rgb = torch.from_numpy(rgb[:, :-1].reshape((*var.shape, 3))).to(dtype=u.dtype, device=u.device)
+
+                THRESH = 0.001
+                surface = torch.abs(u) < THRESH
+
+                valid_test_x = test_x[surface]
+                valid_rgb = rgb[surface]
+
+                for i in range(valid_test_x.shape[0]):
+                    dd.draw_point(f'grad.{i}', valid_test_x[i], valid_rgb[i], length=0.002)
+                input('input to clear visualization')
+
+                u = torch.cat(us).reshape(*num).contiguous()
+
+                verts, faces = marching_cubes(u, 0.0)
+
+                # var = torch.cat(vars).reshape(n1, n2, n3).contiguous()
+                # rgb = color_map.to_rgba(var.reshape(-1))
+                # rgb = np.transpose(rgb[:, :-1].reshape((*var.shape, 3)), axes=(3, 2, 1, 0))
+                # rgb = torch.from_numpy(rgb).to(dtype=u.dtype, device=u.device)
+                # colrs = grid_interp(rgb, verts)
+
+                # re-get the colour at the vertices instead of grid interpolation since that introduces artifacts
+                verts_xyz = verts.clone()
+                verts_xyz[:, 0] = verts[:, 2]
+                verts_xyz[:, 2] = verts[:, 0]
+                for dim in range(ranges.shape[0]):
+                    verts_xyz[:, dim] /= num[dim]
+                    verts_xyz[:, dim] = verts_xyz[:, dim] * (ranges[dim][1] - ranges[dim][0]) + ranges[dim][0]
+
+                vars = []
+                for i in range(0, verts.shape[0], PER_BATCH):
+                    predictions = gp(verts_xyz[i:i + PER_BATCH])
+                    var = predictions.variance
+                    vars.append(var[:, 0])
+                var = torch.cat(vars).contiguous()
+
+                verts = verts.cpu().numpy()
+                faces = faces.cpu().numpy()
+                colrs = color_map.to_rgba(var.reshape(-1))[:, :-1]
+
+                # Use Open3D for visualization
+                mesh = o3d.geometry.TriangleMesh()
+                mesh.vertices = o3d.utility.Vector3dVector(verts_xyz)
+                mesh.triangles = o3d.utility.Vector3iVector(faces)
+                mesh.vertex_colors = o3d.utility.Vector3dVector(colrs)
+                fn = os.path.join(cfg.DATA_DIR, f"test_mesh_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}.obj")
+                o3d.io.write_triangle_mesh(fn, mesh, write_triangle_uvs=True)
+
+                print('plotting mesh')
+                # wire = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
+                # o3d.visualization.draw_geometries([mesh, wire], window_name='Marching cubes (CUDA)')
+
+                visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
+                meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
+
+                input('enter to clear visuals')
+                dd.clear_visualization_after('grad', 0)
+                p.removeBody(meshId)
+
+
+def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
     x = torch.stack(x)
     df = torch.stack(df)
     f = torch.zeros(x.shape[0], dtype=x.dtype)
@@ -258,13 +358,19 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=
     train_x = x * scale
     if use_df:
         train_y = torch.cat((f.view(-1, 1), df), dim=1)
-        likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
-            num_tasks=4 if threedimensional else 3)  # Value + x-derivative + y-derivative
-        model = GPModelWithDerivatives(train_x, train_y, likelihood)
+        if likelihood is None:
+            likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
+                num_tasks=4 if threedimensional else 3)  # Value + x-derivative + y-derivative
+            model = GPModelWithDerivatives(train_x, train_y, likelihood)
+        else:
+            model.set_train_data(train_x, train_y, strict=False)
     else:
         train_y = f
-        likelihood = gpytorch.likelihoods.GaussianLikelihood()
-        model = ExactGPModel(train_x, train_y, likelihood)
+        if likelihood is None:
+            likelihood = gpytorch.likelihoods.GaussianLikelihood()
+            model = ExactGPModel(train_x, train_y, likelihood)
+        else:
+            model.set_train_data(train_x, train_y, strict=False)
 
     # Find optimal model hyperparameters
     model.train()
