@@ -157,7 +157,7 @@ def project_to_plane(n, v):
     return v - along_n * nhat
 
 
-def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=202, training_iter=100, verify_numerical_gradients=False,
+def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
                             plot_point_surface=False, mesh_surface_alpha=1.):
     extrude_objects_in_z = False
     z = 0.1
@@ -173,10 +173,12 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=202, training_iter=
 
     planeId = p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
     # objId = make_box([0.4, 0.15, h], [-0.4, 0, z], [0, 0, -np.pi / 2])
-    # objId = make_sphere(h, [-0.4, 0, z])
+    # objId = make_sphere(h, [0., 0, z])
+    # ranges = np.array([[-.2, .2], [-.2, .2], [-.1, .4]])
     objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
                        [0., 0., z * 3],
                        p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
+    ranges = np.array([[-.2, .2], [-.2, .2], [0, .5]])
 
     for _ in range(1000):
         p.stepSimulation()
@@ -261,9 +263,11 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=202, training_iter=
         # after a period of time evaluate current level set
         if t > 0 and t % 50 == 0:
             print('evaluating shape')
+            # see what's the range of values we've actually traversed
+            xx = torch.stack(xs)
+            print(f'ranges: {torch.min(xx, dim=0)} - {torch.max(xx, dim=0)}')
             # n1, n2, n3 = 80, 80, 50
             num = [80, 80, 50]
-            ranges = np.array([[-.2, .2], [-.2, .2], [0, .5]])
             xv, yv, zv = torch.meshgrid(
                 [torch.linspace(*ranges[0], num[0]), torch.linspace(*ranges[1], num[1]),
                  torch.linspace(*ranges[2], num[2])])
@@ -390,18 +394,22 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=
     for i in range(training_iter):
         optimizer.zero_grad()
         output = model(train_x)
-        loss = -mll(output, train_y)
+        try:
+            loss = -mll(output, train_y)
+        except RuntimeError as e:
+            print(e)
+            continue
         loss.backward()
-        print('Iter %d/%d - Loss: %.3f   noise: %.3f' % (
-            i + 1, training_iter, loss.item(),
-            model.likelihood.noise.item()
-        ))
-        # print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
+        # print('Iter %d/%d - Loss: %.3f   noise: %.3f' % (
         #     i + 1, training_iter, loss.item(),
-        #     model.covar_module.base_kernel.lengthscale.squeeze()[0],
-        #     model.covar_module.base_kernel.lengthscale.squeeze()[1],
         #     model.likelihood.noise.item()
         # ))
+        print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
+            i + 1, training_iter, loss.item(),
+            model.covar_module.base_kernel.lengthscale.squeeze()[0],
+            model.covar_module.base_kernel.lengthscale.squeeze()[1],
+            model.likelihood.noise.item()
+        ))
         optimizer.step()
     # Set into eval mode
     model.eval()
