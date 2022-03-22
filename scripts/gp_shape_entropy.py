@@ -14,6 +14,7 @@ from sklearn.cluster import Birch, DBSCAN, KMeans
 import gpytorch
 from matplotlib import cm
 from matplotlib import pyplot as plt
+import pymeshlab
 
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
@@ -33,8 +34,11 @@ from stucco.retrieval_controller import rot_2d_mat_to_angle, \
     sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod
 
-import open3d as o3d
 from torchmcubes import marching_cubes, grid_interp
+from stucco.env.pybullet_env import make_box, DebugDrawer, closest_point_on_surface, surface_normal_at_point, \
+    ContactInfo, make_sphere
+import pybullet_data
+from pybullet_object_models import ycb_objects
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -153,13 +157,8 @@ def project_to_plane(n, v):
     return v - along_n * nhat
 
 
-from stucco.env.pybullet_env import make_box, DebugDrawer, closest_point_on_surface, surface_normal_at_point, \
-    ContactInfo, make_sphere
-import pybullet_data
-from pybullet_object_models import ycb_objects
-
-
-def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=False, timesteps=200, training_iter=100):
+def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=200, training_iter=100, verify_numerical_gradients=False,
+                            plot_point_surface=False, mesh_surface_alpha=1.):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -258,6 +257,7 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=Fa
         xs.append(x)
         df.append(n)
 
+        # after a period of time evaluate current level set
         if t > 0 and t % 50 == 0:
             print('evaluating shape')
             # n1, n2, n3 = 80, 80, 50
@@ -284,21 +284,19 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=Fa
                     us.append(mean[:, 0])
 
                 var = torch.cat(vars).contiguous()
-                u = torch.cat(us).contiguous()
                 imprint_norm = matplotlib.colors.Normalize(vmin=0, vmax=torch.quantile(var, .90))
                 color_map = matplotlib.cm.ScalarMappable(norm=imprint_norm)
-                rgb = color_map.to_rgba(var.reshape(-1))
-                rgb = torch.from_numpy(rgb[:, :-1].reshape((*var.shape, 3))).to(dtype=u.dtype, device=u.device)
 
-                THRESH = 0.001
-                surface = torch.abs(u) < THRESH
-
-                valid_test_x = test_x[surface]
-                valid_rgb = rgb[surface]
-
-                for i in range(valid_test_x.shape[0]):
-                    dd.draw_point(f'grad.{i}', valid_test_x[i], valid_rgb[i], length=0.002)
-                input('input to clear visualization')
+                if plot_point_surface:
+                    rgb = color_map.to_rgba(var.reshape(-1))
+                    rgb = torch.from_numpy(rgb[:, :-1].reshape((*var.shape, 3))).to(dtype=u.dtype, device=u.device)
+                    u = torch.cat(us).contiguous()
+                    THRESH = 0.001
+                    surface = torch.abs(u) < THRESH
+                    valid_test_x = test_x[surface]
+                    valid_rgb = rgb[surface]
+                    for i in range(valid_test_x.shape[0]):
+                        dd.draw_point(f'grad.{i}', valid_test_x[i], valid_rgb[i], length=0.002)
 
                 u = torch.cat(us).reshape(*num).contiguous()
 
@@ -311,11 +309,12 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=Fa
                 # colrs = grid_interp(rgb, verts)
 
                 # re-get the colour at the vertices instead of grid interpolation since that introduces artifacts
+                # output of vertices need to be converted back to original space
                 verts_xyz = verts.clone()
                 verts_xyz[:, 0] = verts[:, 2]
                 verts_xyz[:, 2] = verts[:, 0]
                 for dim in range(ranges.shape[0]):
-                    verts_xyz[:, dim] /= num[dim]
+                    verts_xyz[:, dim] /= num[dim] - 1
                     verts_xyz[:, dim] = verts_xyz[:, dim] * (ranges[dim][1] - ranges[dim][0]) + ranges[dim][0]
 
                 vars = []
@@ -325,21 +324,25 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, verify_numerical_gradients=Fa
                     vars.append(var[:, 0])
                 var = torch.cat(vars).contiguous()
 
-                verts = verts.cpu().numpy()
                 faces = faces.cpu().numpy()
-                colrs = color_map.to_rgba(var.reshape(-1))[:, :-1]
+                colrs = color_map.to_rgba(var.reshape(-1))
+                # note, can control alpha on last column here
+                colrs[:, -1] = mesh_surface_alpha
 
-                # Use Open3D for visualization
-                mesh = o3d.geometry.TriangleMesh()
-                mesh.vertices = o3d.utility.Vector3dVector(verts_xyz)
-                mesh.triangles = o3d.utility.Vector3iVector(faces)
-                mesh.vertex_colors = o3d.utility.Vector3dVector(colrs)
-                fn = os.path.join(cfg.DATA_DIR, f"test_mesh_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}.obj")
-                o3d.io.write_triangle_mesh(fn, mesh, write_triangle_uvs=True)
+                # create and save mesh
+                m = pymeshlab.Mesh(verts_xyz, faces, v_color_matrix=colrs)
+                ms = pymeshlab.MeshSet()
+                ms.add_mesh(m, "level_set")
+                # UV map and turn vertex coloring into a texture
+                base_name = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}"
+                ms.compute_texcoord_parametrization_triangle_trivial_per_wedge()
+                ms.compute_texmap_from_color(textname=f"tex_{base_name}")
+
+                fn = os.path.join(cfg.DATA_DIR, f"mesh_{base_name}.obj")
+                ms.save_current_mesh(fn)
 
                 print('plotting mesh')
                 # wire = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
-                # o3d.visualization.draw_geometries([mesh, wire], window_name='Marching cubes (CUDA)')
 
                 visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
                 meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
