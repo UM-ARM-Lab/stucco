@@ -56,7 +56,7 @@ def make_sphere(radius, position, mass=1., lateral_friction=1.5, spinning_fricti
 _CONTACT_TESTER_ID = -1
 
 
-def closest_point_on_surface(object_id, query_point):
+def closest_point_on_surface(object_id, query_point, return_full_contact_info=True):
     # create query object if it doesn't exist
     global _CONTACT_TESTER_ID
     if _CONTACT_TESTER_ID == -1:
@@ -70,18 +70,21 @@ def closest_point_on_surface(object_id, query_point):
     # if the pybullet environment is reset and the object doesn't exist; this will not catch all cases
     if len(pts_on_surface) < 1:
         _CONTACT_TESTER_ID = -1
-        return closest_point_on_surface(object_id, query_point)
+        return closest_point_on_surface(object_id, query_point, return_full_contact_info=return_full_contact_info)
 
     pts_on_surface = sorted(pts_on_surface, key=lambda c: c[ContactInfo.DISTANCE])
 
     # move out the way
     p.resetBasePositionAndOrientation(_CONTACT_TESTER_ID, [0, 0, 100], [0, 0, 0, 1])
-    return pts_on_surface[0]
+    ret = pts_on_surface[0]
+    if not return_full_contact_info:
+        ret = ret[ContactInfo.POS_A]
+    return ret
 
 
 def surface_normal_at_point(object_id, query_point):
     # find contact normal on point of object closest to query point
-    query_point = closest_point_on_surface(object_id, query_point)[ContactInfo.POS_A]
+    query_point = closest_point_on_surface(object_id, query_point, return_full_contact_info=False)
 
     global _CONTACT_TESTER_ID
     if _CONTACT_TESTER_ID == -1:
