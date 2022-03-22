@@ -157,7 +157,7 @@ def project_to_plane(n, v):
     return v - along_n * nhat
 
 
-def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=200, training_iter=100, verify_numerical_gradients=False,
+def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=202, training_iter=100, verify_numerical_gradients=False,
                             plot_point_surface=False, mesh_surface_alpha=1.):
     extrude_objects_in_z = False
     z = 0.1
@@ -195,6 +195,7 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=200, training_iter=
     df = [n]
     likelihood = None
     model = None
+    meshId = None
     for t in range(timesteps):
         likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale,
                                      training_iter=training_iter, likelihood=likelihood, model=model)
@@ -344,12 +345,13 @@ def test_existing_method_3d(gpscale=3, alpha=0.01, timesteps=200, training_iter=
                 print('plotting mesh')
                 # wire = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
 
+                if meshId is not None:
+                    p.removeBody(meshId)
                 visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
                 meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
 
                 input('enter to clear visuals')
                 dd.clear_visualization_after('grad', 0)
-                p.removeBody(meshId)
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
