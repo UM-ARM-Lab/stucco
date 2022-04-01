@@ -25,6 +25,7 @@ import subprocess
 import glob
 
 from stucco.util import move_figure
+from stucco.env.env import Visualizer
 
 
 class RetrievalController(Controller):
@@ -144,12 +145,13 @@ def rot_2d_mat_to_angle(T):
     return torch.atan2(T[:, 1, 0], T[:, 0, 0])
 
 
-def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, seed=0, name="",
-                        sample_in_order=False):
+def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, mid_z=0, seed=0, name="",
+                        sample_in_order=False, clean_cache=False, random_sample_sigma=0.1, vis: Visualizer = None,
+                        restricted_points=()):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
-        if name not in cache:
+        if name not in cache or clean_cache:
             cache[name] = {}
         if seed in cache[name]:
             return cache[name][seed]
@@ -159,32 +161,35 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
     def retrieve_valid_surface_pt(tester_pos, points):
         closest = closest_point_on_surface(object_id, tester_pos)
         pt = closest[ContactInfo.POS_A]
+        normal = closest[ContactInfo.NORMAL_DIR_B]
         if force_z is not None:
             pt = (pt[0], pt[1], force_z)
+            normal = (normal[0], normal[1], 0)
         if len(points) > 0:
-            d = np.subtract(points, pt)
+            d = np.subtract(points + restricted_points, pt)
             d = np.linalg.norm(d, axis=1)
             if np.any(d < reject_too_close):
-                return None
-        return pt
+                return None, None
+        return pt, normal
 
     with rand.SavedRNG():
         rand.seed(seed)
         orig_pos, orig_orientation = p.getBasePositionAndOrientation(object_id)
-        z = orig_pos[2]
         # first reset to canonical location
-        canonical_pos = [0, 0, z]
+        canonical_pos = [0, 0, 0]
         p.resetBasePositionAndOrientation(object_id, canonical_pos, [0, 0, 0, 1])
 
         # box is rectilinear, so can just get bounding box
         aabb_min, aabb_max = p.getAABB(object_id)
         bb = np.zeros((4, 3))
+        # 2D planar bounding box
         bb[0] = [aabb_min[0], aabb_min[1], 1]
         bb[1] = [aabb_min[0], aabb_max[1], 1]
         bb[2] = [aabb_max[0], aabb_max[1], 1]
         bb[3] = [aabb_max[0], aabb_min[1], 1]
 
         points = []
+        normals = []
         if sample_in_order:
             r = max(aabb_max[0], aabb_max[1])
             # sample evenly in terms of angles, but leave out the section in between the fingers
@@ -193,24 +198,38 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
             angles = np.linspace(start_angle + leave_out, np.pi * 2 - leave_out + start_angle, num_points)
 
             for angle in angles:
-                tester_pos = [np.cos(angle) * r, np.sin(angle) * r, z]
-                pt = retrieve_valid_surface_pt(tester_pos, points)
+                tester_pos = [np.cos(angle) * r, np.sin(angle) * r, 0]
+                pt, normal = retrieve_valid_surface_pt(tester_pos, points)
                 if pt is None:
                     continue
                 points.append(pt)
+                normals.append(normal)
         else:
-            sigma = 0.1
             while len(points) < num_points:
-                tester_pos = np.r_[np.random.randn(2) * sigma, z]
-                pt = retrieve_valid_surface_pt(tester_pos, points)
+                tester_pos = np.random.randn(3) * random_sample_sigma
+                if force_z is not None:
+                    tester_pos[2] = force_z
+                else:
+                    tester_pos[2] += mid_z
+                pt, normal = retrieve_valid_surface_pt(tester_pos, points)
                 if pt is None:
                     continue
+                if vis is not None:
+                    vis.draw_point(f"tpt", tester_pos, color=(1, 0, 0), length=0.005)
+                    vis.draw_point(f"mpt.{len(points)}", pt, color=(0, 0, 1), length=0.003)
+                    vis.draw_2d_line(f"mn.{len(points)}", pt, normal, color=(0, 0, 0), size=2., scale=0.03)
                 points.append(pt)
+                normals.append(normal)
+
+        if vis is not None:
+            input('enter to finish visualization')
+            vis.clear_visualizations()
 
     p.resetBasePositionAndOrientation(object_id, orig_pos, orig_orientation)
 
     # if sampled in order, the ordered points themselves can be used for visualization, otherwise use the bounding box
     points = torch.tensor(points)
+    normals = torch.tensor(normals)
     if sample_in_order:
         # reduce fidelity to speed up drawing of estimated pose
         bb = points.clone()[::3]
@@ -219,10 +238,10 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
     else:
         bb = torch.tensor(bb)
 
-    cache[name][seed] = points, bb
+    cache[name][seed] = points, normals, bb
     torch.save(cache, fullname)
 
-    return points, bb
+    return points, normals, bb
 
 
 def pose_error(target_pose, guess_pose):

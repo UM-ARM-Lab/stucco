@@ -266,7 +266,7 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
 
     z = env._observe_ee(return_z=True)[-1]
 
-    model_points, bb = sample_model_points(None, num_points=50, force_z=z, seed=0, name="cheezit")
+    model_points, model_normals, bb = sample_model_points(None, num_points=50, force_z=z, seed=0, name="cheezit")
     bb = bb.to(dtype=dtype)
     mph = model_points.clone().to(dtype=dtype)
     # make homogeneous [x, y, 1]

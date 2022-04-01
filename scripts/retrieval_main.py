@@ -76,7 +76,8 @@ def test_icp(env):
     state_c, action_c = state_action_color_pairs[0]
     env.visualize_state_actions("fixed", contact_points, actions, state_c, action_c, 0.05)
 
-    model_points, _ = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
+    model_points, model_normals, _ = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0,
+                                                         name="cheezit")
     for i, pt in enumerate(model_points):
         env.vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
 
@@ -161,7 +162,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             (0, -1), (1, -1), (-1, 0), (0, -1), (-1, 0), (0, -1), (1, 0), (-1, 0),
             (0, 1), (1, 1), (1, 1), (1, 1), (-1, 0), (0, 1), (1, 1), (-1, 0),
             (0, 1), (1, 0), (1, 0), (-1, 0), (0, -1), (0, -1), (0, -1), (0, -1),
-            (0, 1), (0, -1), (1, -1), (0, 1), (1, -1), (1, -1), (0, 1), (0, -1),]
+            (0, 1), (0, -1), (1, -1), (0, 1), (1, -1), (1, -1), (0, 1), (0, -1), ]
     # ctrl += [(1., -1)]
     # ctrl += [(0., 0.7)] * 2
     # ctrl += [(-0.6, 0.1), (0.8, 0.4)] * 3
@@ -178,8 +179,9 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
 
     model_name = "tomato_can" if env.level in [Levels.TOMATO_CAN] else "cheezit"
     sample_in_order = env.level in [Levels.TOMATO_CAN]
-    model_points, bb = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name=model_name,
-                                           sample_in_order=sample_in_order)
+    model_points, model_normals, bb = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0,
+                                                          name=model_name,
+                                                          sample_in_order=sample_in_order)
     mph = model_points.clone().to(dtype=dtype)
     bb = bb.to(dtype=dtype)
     # make homogeneous [x, y, 1]
