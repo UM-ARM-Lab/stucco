@@ -10,7 +10,6 @@ import logging
 import os
 from datetime import datetime
 
-from sklearn.cluster import Birch, DBSCAN, KMeans
 import gpytorch
 from matplotlib import cm
 from matplotlib import pyplot as plt
@@ -39,6 +38,7 @@ from stucco.env.pybullet_env import make_box, DebugDrawer, closest_point_on_surf
     ContactInfo, make_sphere
 import pybullet_data
 from pybullet_object_models import ycb_objects
+import pytorch_kinematics.transforms as tf
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -52,61 +52,70 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
-def test_icp(env):
-    z = env._observe_ee(return_z=True)[-1]
-    # test ICP using fixed set of points
-    o = p.getBasePositionAndOrientation(env.target_object_id)[0]
-    contact_points = np.stack([
-        [o[0] - 0.045, o[1] - 0.05],
-        [o[0] - 0.05, o[1] - 0.01],
-        [o[0] - 0.045, o[1] + 0.02],
-        [o[0] - 0.045, o[1] + 0.04],
-        [o[0] - 0.01, o[1] + 0.05]
-    ])
-    actions = np.stack([
-        [0.7, -0.7],
-        [0.9, 0.2],
-        [0.8, 0],
-        [0.5, 0.6],
-        [0, -0.8]
-    ])
-    contact_points = np.stack(contact_points)
+def test_icp(target_obj_id, vis):
+    # z = env._observe_ee(return_z=True)[-1]
+    # # test ICP using fixed set of points
+    # o = p.getBasePositionAndOrientation(env.target_object_id)[0]
+    # contact_points = np.stack([
+    #     [o[0] - 0.045, o[1] - 0.05],
+    #     [o[0] - 0.05, o[1] - 0.01],
+    #     [o[0] - 0.045, o[1] + 0.02],
+    #     [o[0] - 0.045, o[1] + 0.04],
+    #     [o[0] - 0.01, o[1] + 0.05]
+    # ])
+    # actions = np.stack([
+    #     [0.7, -0.7],
+    #     [0.9, 0.2],
+    #     [0.8, 0],
+    #     [0.5, 0.6],
+    #     [0, -0.8]
+    # ])
+    # contact_points = np.stack(contact_points)
+    #
+    # angle = 0.5
+    # dx = -0.4
+    # dy = 0.2
+    # c, s = math.cos(angle), math.sin(angle)
+    # rot = np.array([[c, -s],
+    #                 [s, c]])
+    # contact_points = np.dot(contact_points, rot.T)
+    # contact_points[:, 0] += dx
+    # contact_points[:, 1] += dy
+    # actions = np.dot(actions, rot.T)
+    #
+    # state_c, action_c = state_action_color_pairs[0]
+    # env.visualize_state_actions("fixed", contact_points, actions, state_c, action_c, 0.05)
 
-    angle = 0.5
-    dx = -0.4
-    dy = 0.2
-    c, s = math.cos(angle), math.sin(angle)
-    rot = np.array([[c, -s],
-                    [s, c]])
-    contact_points = np.dot(contact_points, rot.T)
-    contact_points[:, 0] += dx
-    contact_points[:, 1] += dy
-    actions = np.dot(actions, rot.T)
+    # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
+    model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None, mid_z=0.05,
+                                                         seed=0, clean_cache=False, random_sample_sigma=0.2,
+                                                         name="mustard_normal", vis=vis, restricted_points=(
+            [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
-    state_c, action_c = state_action_color_pairs[0]
-    env.visualize_state_actions("fixed", contact_points, actions, state_c, action_c, 0.05)
+    device, dtype = model_points.device, model_points.dtype
+    pose = p.getBasePositionAndOrientation(target_obj_id)
+    link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+    model_points = link_to_current_tf.transform_points(model_points)
+    model_normals = link_to_current_tf.transform_normals(model_normals)
 
-    model_points, _ = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0, name="cheezit")
     for i, pt in enumerate(model_points):
-        env.vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+        vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+        vis.draw_2d_line(f"mn.{i}", pt, -model_normals[i], color=(0, 0, 0), size=2., scale=0.03)
 
     # perform ICP and visualize the transformed points
     # history, transformed_contact_points = icp.icp(model_points[:, :2], contact_points,
     #                                               point_pairs_threshold=len(contact_points), verbose=True)
 
     # better to have few A than few B and then invert the transform
-    T, distances, i = icp.icp_2(contact_points, model_points[:, :2])
+    # T, distances, i = icp.icp_2(contact_points, model_points[:, :2])
     # transformed_contact_points = np.dot(np.c_[contact_points, np.ones((contact_points.shape[0], 1))], T.T)
     # T, distances, i = icp.icp_2(model_points[:, :2], contact_points)
-    transformed_model_points = np.dot(np.c_[model_points[:, :2], np.ones((model_points.shape[0], 1))],
-                                      np.linalg.inv(T).T)
-    for i, pt in enumerate(transformed_model_points):
-        pt = [pt[0], pt[1], z]
-        env.vis.draw_point(f"tmpt.{i}", pt, color=(0, 1, 0), length=0.003)
-
-    while True:
-        env.step([0, 0])
-        time.sleep(0.2)
+    # transformed_model_points = np.dot(np.c_[model_points[:, :2], np.ones((model_points.shape[0], 1))],
+    #                                   np.linalg.inv(T).T)
+    # for i, pt in enumerate(transformed_model_points):
+    #     pt = [pt[0], pt[1], z]
+    #     env.vis.draw_point(f"tmpt.{i}", pt, color=(0, 1, 0), length=0.003)
 
 
 def franke(X, Y):
@@ -182,6 +191,11 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
     for _ in range(1000):
         p.stepSimulation()
+
+    test_icp(objId, dd)
+    while True:
+        p.stepSimulation()
+        time.sleep(0.2)
 
     # start at a point on the surface of the bottle
     randseed = rand.seed(0)
@@ -347,7 +361,6 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                 ms.save_current_mesh(fn)
 
                 print('plotting mesh')
-                # wire = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
 
                 if meshId is not None:
                     p.removeBody(meshId)
@@ -418,7 +431,7 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=
     return likelihood, model
 
 
-def direct_fit():
+def direct_fit_2d():
     x = torch.tensor([
         [0.05, 0.01],
         [0.1, 0.02],
@@ -546,21 +559,6 @@ def direct_fit():
     print('done')
 
 
-def main(env, method_name, seed=0):
-    methods_to_run = {
-        'ours': OurSoftTrackingMethod(env, RetrievalGetter.contact_parameters(env), arm.ArmPointToConfig(env)),
-        'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
-                                              inertia_ratio=0.2,
-                                              threshold=0.08),
-        'online-dbscan': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
-        'online-kmeans': SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
-                                               random_state=0),
-        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.00005, r_mag=0.00005, birth=0.001, detection=0.3)
-    }
-    env.draw_user_text(f"{method_name} seed {seed}", xy=[-0.1, 0.28, -0.5])
-    return run_retrieval(env, methods_to_run[method_name], seed=seed)
-
-
 def keyboard_control(env):
     print("waiting for arrow keys to be pressed to command a movement")
     contact_params = RetrievalGetter.contact_parameters(env)
@@ -604,5 +602,5 @@ if __name__ == "__main__":
 
     # env = RetrievalGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI)
 
-    # direct_fit()
+    # direct_fit_2d()
     test_existing_method_3d()
