@@ -182,7 +182,8 @@ def create_sdf(path):
 
 
 def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
-                            plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False):
+                            plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False,
+                            eval_period=10, plot_per_eval_period=5, model_name="mustard_normal", run_name="icp"):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -212,11 +213,11 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
     target_obj_id = objId
     vis = dd
-    name = "mustard_normal"
+    name = f"{model_name} {run_name}".strip()
 
     model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None, mid_z=0.05,
                                                          seed=0, clean_cache=build_model, random_sample_sigma=0.2,
-                                                         name=name, vis=vis, restricted_points=(
+                                                         name=model_name, vis=vis, restricted_points=(
             [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
     if build_model:
@@ -320,7 +321,7 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
         df.append(n)
 
         # after a period of time evaluate current level set
-        if t > 0 and t % 10 == 0:
+        if t > 0 and t % eval_period == 0:
             print('evaluating shape')
             # see what's the range of values we've actually traversed
             xx = torch.stack(xs)
@@ -392,9 +393,14 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                 dist = torch.abs(torch.tensor(dists)).mean()
                 error_at_gp_surface.append(dist)
                 error_t.append(t)
+                # save every time in case we break somewhere in between
+                cache[name][randseed] = {'t': error_t,
+                                         'error_at_model_points': error_at_model_points,
+                                         'error_at_gp_surface': error_at_gp_surface}
+                torch.save(cache, fullname)
 
                 # plot mesh
-                if t > 0 and t % 50 == 0:
+                if t > 0 and t % (eval_period * plot_per_eval_period) == 0:
                     vars = []
                     for i in range(0, verts.shape[0], PER_BATCH):
                         predictions = gp(verts_xyz[i:i + PER_BATCH])
@@ -429,18 +435,27 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     input('enter to clear visuals')
                     dd.clear_visualization_after('grad', 0)
 
-    cache[name][randseed] = {'t': error_t,
-                             'error_at_model_points': error_at_model_points,
-                             'error_at_gp_surface': error_at_gp_surface}
-    torch.save(cache, fullname)
-
-    fig, axs = plt.subplots(1, 2, sharex="col", figsize=(8, 8), constrained_layout=True)
+    fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
     axs[0].plot(error_t, error_at_model_points)
     axs[1].plot(error_t, error_at_gp_surface)
-    axs[0].set_xlabel('step')
+    avg_err = torch.stack([torch.tensor(error_at_gp_surface), torch.tensor(error_at_model_points)])
+
+    # arithmetic mean
+    # avg_err = avg_err.mean(dim=0)
+    # harmonic mean
+    avg_err = 1 / avg_err
+    avg_err = 2 / (avg_err.sum(dim=0))
+
+    axs[2].plot(error_t, avg_err)
     axs[0].set_ylabel('error at model points')
     axs[1].set_ylabel('error at gp surface')
+    axs[2].set_ylabel('average error')
+    axs[-1].set_xlabel('step')
+    axs[0].set_ylim(bottom=0)
+    axs[1].set_ylim(bottom=0)
+    axs[2].set_ylim(bottom=0)
     plt.show()
+
     return error_at_model_points
 
 
