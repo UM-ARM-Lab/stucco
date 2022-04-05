@@ -166,8 +166,23 @@ def project_to_plane(n, v):
     return v - along_n * nhat
 
 
+from mesh_to_sdf import mesh_to_voxels
+import trimesh
+import skimage
+
+
+def create_sdf(path):
+    mesh = trimesh.load(path)
+    voxels = mesh_to_voxels(mesh, 64, pad=True)
+
+    vertices, faces, normals, _ = skimage.measure.marching_cubes(voxels, level=0)
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_normals=normals)
+    mesh.show()
+    return voxels
+
+
 def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
-                            plot_point_surface=False, mesh_surface_alpha=1.):
+                            plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -184,23 +199,49 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
     # objId = make_box([0.4, 0.15, h], [-0.4, 0, z], [0, 0, -np.pi / 2])
     # objId = make_sphere(h, [0., 0, z])
     # ranges = np.array([[-.2, .2], [-.2, .2], [-.1, .4]])
+
     objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
                        [0., 0., z * 3],
                        p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
     ranges = np.array([[-.2, .2], [-.2, .2], [0, .5]])
 
+    # sdf = create_sdf(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', 'collision_vhacd.obj'))
+
     for _ in range(1000):
         p.stepSimulation()
 
-    test_icp(objId, dd)
-    while True:
-        p.stepSimulation()
-        time.sleep(0.2)
+    target_obj_id = objId
+    vis = dd
+    name = "mustard_normal"
+
+    model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None, mid_z=0.05,
+                                                         seed=0, clean_cache=build_model, random_sample_sigma=0.2,
+                                                         name=name, vis=vis, restricted_points=(
+            [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
+
+    if build_model:
+        device, dtype = model_points.device, model_points.dtype
+        pose = p.getBasePositionAndOrientation(target_obj_id)
+        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+        mp = link_to_current_tf.transform_points(model_points)
+        mn = link_to_current_tf.transform_normals(model_normals)
+
+        for i, pt in enumerate(mp):
+            vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+            vis.draw_2d_line(f"mn.{i}", pt, -mn[i], color=(0, 0, 0), size=2., scale=0.03)
 
     # start at a point on the surface of the bottle
     randseed = rand.seed(0)
     p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, "{}_{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S'),
                                                                       randseed))
+    fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
+    if os.path.exists(fullname):
+        cache = torch.load(fullname)
+        if name not in cache or clean_cache:
+            cache[name] = {}
+    else:
+        cache = {name: {}}
 
     x = torch.tensor(closest_point_on_surface(objId, np.random.rand(3))[ContactInfo.POS_A])
     dd.draw_point('x', x, height=x[2])
@@ -212,6 +253,10 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
     likelihood = None
     model = None
     meshId = None
+    error_t = []
+    error_at_model_points = []
+    error_at_gp_surface = []
+
     for t in range(timesteps):
         likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale,
                                      training_iter=training_iter, likelihood=likelihood, model=model)
@@ -275,13 +320,13 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
         df.append(n)
 
         # after a period of time evaluate current level set
-        if t > 0 and t % 50 == 0:
+        if t > 0 and t % 10 == 0:
             print('evaluating shape')
             # see what's the range of values we've actually traversed
             xx = torch.stack(xs)
             print(f'ranges: {torch.min(xx, dim=0)} - {torch.max(xx, dim=0)}')
             # n1, n2, n3 = 80, 80, 50
-            num = [80, 80, 50]
+            num = [40, 40, 30]
             xv, yv, zv = torch.meshgrid(
                 [torch.linspace(*ranges[0], num[0]), torch.linspace(*ranges[1], num[1]),
                  torch.linspace(*ranges[2], num[2])])
@@ -321,12 +366,6 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
                 verts, faces = marching_cubes(u, 0.0)
 
-                # var = torch.cat(vars).reshape(n1, n2, n3).contiguous()
-                # rgb = color_map.to_rgba(var.reshape(-1))
-                # rgb = np.transpose(rgb[:, :-1].reshape((*var.shape, 3)), axes=(3, 2, 1, 0))
-                # rgb = torch.from_numpy(rgb).to(dtype=u.dtype, device=u.device)
-                # colrs = grid_interp(rgb, verts)
-
                 # re-get the colour at the vertices instead of grid interpolation since that introduces artifacts
                 # output of vertices need to be converted back to original space
                 verts_xyz = verts.clone()
@@ -336,39 +375,73 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     verts_xyz[:, dim] /= num[dim] - 1
                     verts_xyz[:, dim] = verts_xyz[:, dim] * (ranges[dim][1] - ranges[dim][0]) + ranges[dim][0]
 
-                vars = []
-                for i in range(0, verts.shape[0], PER_BATCH):
-                    predictions = gp(verts_xyz[i:i + PER_BATCH])
-                    var = predictions.variance
-                    vars.append(var[:, 0])
-                var = torch.cat(vars).contiguous()
+                # evaluate surface error
+                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
+                                                                          covar_root_decomposition=False):
+                    predictions = gp(model_points)
+                mean = predictions.mean
+                err = torch.abs(mean[:, 0]).mean()
+                error_at_model_points.append(err)
 
-                faces = faces.cpu().numpy()
-                colrs = color_map.to_rgba(var.reshape(-1))
-                # note, can control alpha on last column here
-                colrs[:, -1] = mesh_surface_alpha
+                # evaluation of estimated SDF surface points on ground truth
+                # TODO make distance computation a cached SDF lookup to speed it up
+                dists = []
+                for vert in verts_xyz:
+                    closest = closest_point_on_surface(objId, vert)
+                    dists.append(closest[ContactInfo.DISTANCE])
+                dist = torch.abs(torch.tensor(dists)).mean()
+                error_at_gp_surface.append(dist)
+                error_t.append(t)
 
-                # create and save mesh
-                m = pymeshlab.Mesh(verts_xyz, faces, v_color_matrix=colrs)
-                ms = pymeshlab.MeshSet()
-                ms.add_mesh(m, "level_set")
-                # UV map and turn vertex coloring into a texture
-                base_name = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}"
-                ms.compute_texcoord_parametrization_triangle_trivial_per_wedge()
-                ms.compute_texmap_from_color(textname=f"tex_{base_name}")
+                # plot mesh
+                if t > 0 and t % 50 == 0:
+                    vars = []
+                    for i in range(0, verts.shape[0], PER_BATCH):
+                        predictions = gp(verts_xyz[i:i + PER_BATCH])
+                        var = predictions.variance
+                        vars.append(var[:, 0])
+                    var = torch.cat(vars).contiguous()
 
-                fn = os.path.join(cfg.DATA_DIR, f"mesh_{base_name}.obj")
-                ms.save_current_mesh(fn)
+                    faces = faces.cpu().numpy()
+                    colrs = color_map.to_rgba(var.reshape(-1))
+                    # note, can control alpha on last column here
+                    colrs[:, -1] = mesh_surface_alpha
 
-                print('plotting mesh')
+                    # create and save mesh
+                    m = pymeshlab.Mesh(verts_xyz, faces, v_color_matrix=colrs)
+                    ms = pymeshlab.MeshSet()
+                    ms.add_mesh(m, "level_set")
+                    # UV map and turn vertex coloring into a texture
+                    base_name = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}"
+                    ms.compute_texcoord_parametrization_triangle_trivial_per_wedge()
+                    ms.compute_texmap_from_color(textname=f"tex_{base_name}")
 
-                if meshId is not None:
-                    p.removeBody(meshId)
-                visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
-                meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
+                    fn = os.path.join(cfg.DATA_DIR, f"mesh_{base_name}.obj")
+                    ms.save_current_mesh(fn)
 
-                input('enter to clear visuals')
-                dd.clear_visualization_after('grad', 0)
+                    print('plotting mesh')
+
+                    if meshId is not None:
+                        p.removeBody(meshId)
+                    visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
+                    meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
+
+                    input('enter to clear visuals')
+                    dd.clear_visualization_after('grad', 0)
+
+    cache[name][randseed] = {'t': error_t,
+                             'error_at_model_points': error_at_model_points,
+                             'error_at_gp_surface': error_at_gp_surface}
+    torch.save(cache, fullname)
+
+    fig, axs = plt.subplots(1, 2, sharex="col", figsize=(8, 8), constrained_layout=True)
+    axs[0].plot(error_t, error_at_model_points)
+    axs[1].plot(error_t, error_at_gp_surface)
+    axs[0].set_xlabel('step')
+    axs[0].set_ylabel('error at model points')
+    axs[1].set_ylabel('error at gp surface')
+    plt.show()
+    return error_at_model_points
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
