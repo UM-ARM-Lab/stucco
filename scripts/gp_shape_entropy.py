@@ -183,6 +183,7 @@ def create_sdf(path):
 
 def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
                             plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False,
+                            icp_period=5,
                             eval_period=10, plot_per_eval_period=5, model_name="mustard_normal", run_name="icp"):
     extrude_objects_in_z = False
     z = 0.1
@@ -251,15 +252,26 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
     xs = [x]
     df = [n]
+    # augmented x and df
+    aug_xs = None
+    aug_df = None
     likelihood = None
     model = None
     meshId = None
+    # error data
     error_t = []
     error_at_model_points = []
     error_at_gp_surface = []
+    # ICP data
+    best_tsf_guess = None
 
     for t in range(timesteps):
-        likelihood, model = fit_gpis(xs, df, threedimensional=True, use_df=True, scale=gpscale,
+        train_xs = xs
+        train_df = df
+        if aug_xs is not None:
+            train_xs = torch.cat([torch.stack(xs), aug_xs.view(-1, 3)], dim=0)
+            train_df = torch.cat([torch.stack(df), aug_df.view(-1, 3)], dim=0)
+        likelihood, model = fit_gpis(train_xs, train_df, threedimensional=True, use_df=True, scale=gpscale,
                                      training_iter=training_iter, likelihood=likelihood, model=model)
 
         def gp(cx):
@@ -319,6 +331,67 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
         xs.append(x)
         df.append(n)
+
+        # augment data with ICP shape pseudo-observations
+        if t > 0 and t % icp_period == 0:
+            print('conditioning exploration on ICP results')
+            # perform ICP and visualize the transformed points
+            this_pts = torch.stack(xs).reshape(-1, 3)
+            T, distances, _ = icp.icp_3(this_pts, model_points,
+                                        given_init_pose=best_tsf_guess, batch=30)
+            T = T.inverse()
+            link_to_current_tf = tf.Transform3d(matrix=T)
+            all_points = link_to_current_tf.transform_points(model_points)
+            all_normals = link_to_current_tf.transform_normals(model_normals)
+
+            # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
+            score = score_icp(all_points, all_normals, distances).numpy()
+            best_tsf_index = np.argmin(score)
+            best_tsf_guess = T[best_tsf_index].inverse()
+
+            # TODO remove after debugging?
+            color = (1, 0, 0)
+            for i, pt in enumerate(all_points[best_tsf_index]):
+                vis.draw_point(f"best.{i}", pt, color=color, length=0.003)
+
+            # for j in range(len(T)):
+            #     if j == best_tsf_index:
+            #         continue
+            #     color = (0, 1, 0)
+            #     for i, pt in enumerate(all_points[j]):
+            #         if i % 2 == 0:
+            #             continue
+            #         vis.draw_point(f"tmpt.{j}.{i}", pt, color=color, length=0.003)
+
+            # evaluate variance across each point
+            vars = torch.var(all_points, dim=0)
+            # sum variance across dimensions of point
+            vars = vars.sum(dim=1)
+
+            # vars_cutoff = torch.quantile(vars, .25)
+            vars_cutoff = 0.03
+            ok_to_aug = vars < vars_cutoff
+            print(
+                f"vars avg {vars.mean()} 25th percentile {torch.quantile(vars, .25)} cutoff {vars_cutoff} num passed {ok_to_aug.sum()}")
+
+            # augment points and normals
+            if torch.any(ok_to_aug):
+                transformed_model_points = all_points[best_tsf_index][ok_to_aug]
+                aug_xs = transformed_model_points
+                aug_df = all_normals[best_tsf_index][ok_to_aug]
+                # visualize points that are below some variance threshold to be added
+                for i, pt in enumerate(transformed_model_points):
+                    vis.draw_point(f"aug.{i}", pt, color=(1, 1, 0), length=0.015)
+                    vis.draw_2d_line(f"augn.{i}", pt, aug_df[i], color=(0, 0, 0), scale=0.05)
+                vis.clear_visualization_after("aug", i + 1)
+                vis.clear_visualization_after("augn", i + 1)
+            else:
+                aug_xs = None
+                aug_df = None
+                vis.clear_visualization_after("aug", 0)
+                vis.clear_visualization_after("augn", 0)
+
+            # TODO consider evaluating the fit GP without augmented data (so only use augmented data to guide sliding)
 
         # after a period of time evaluate current level set
         if t > 0 and t % eval_period == 0:
@@ -385,7 +458,6 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                 error_at_model_points.append(err)
 
                 # evaluation of estimated SDF surface points on ground truth
-                # TODO make distance computation a cached SDF lookup to speed it up
                 dists = []
                 for vert in verts_xyz:
                     closest = closest_point_on_surface(objId, vert)
@@ -422,7 +494,7 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     ms.compute_texcoord_parametrization_triangle_trivial_per_wedge()
                     ms.compute_texmap_from_color(textname=f"tex_{base_name}")
 
-                    fn = os.path.join(cfg.DATA_DIR, f"mesh_{base_name}.obj")
+                    fn = os.path.join(cfg.DATA_DIR, "shape_explore", f"mesh_{base_name}.obj")
                     ms.save_current_mesh(fn)
 
                     print('plotting mesh')
@@ -432,7 +504,7 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
                     meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
 
-                    input('enter to clear visuals')
+                    # input('enter to clear visuals')
                     dd.clear_visualization_after('grad', 0)
 
     fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
@@ -459,9 +531,19 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
     return error_at_model_points
 
 
+def score_icp(all_points, all_normals, distances):
+    distance_score = torch.mean(distances, dim=1)
+    # min z should be close to 0
+    physics_score = all_points[:, :, 2].min(dim=1).values.abs()
+    # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
+
+    return distance_score + physics_score
+
+
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
-    x = torch.stack(x)
-    df = torch.stack(df)
+    if not torch.is_tensor(x):
+        x = torch.stack(x)
+        df = torch.stack(df)
     f = torch.zeros(x.shape[0], dtype=x.dtype)
 
     # scale to be about the same magnitude
@@ -505,12 +587,12 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=
         #     i + 1, training_iter, loss.item(),
         #     model.likelihood.noise.item()
         # ))
-        print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
-            i + 1, training_iter, loss.item(),
-            model.covar_module.base_kernel.lengthscale.squeeze()[0],
-            model.covar_module.base_kernel.lengthscale.squeeze()[1],
-            model.likelihood.noise.item()
-        ))
+        # print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
+        #     i + 1, training_iter, loss.item(),
+        #     model.covar_module.base_kernel.lengthscale.squeeze()[0],
+        #     model.covar_module.base_kernel.lengthscale.squeeze()[1],
+        #     model.likelihood.noise.item()
+        # ))
         optimizer.step()
     # Set into eval mode
     model.eval()
