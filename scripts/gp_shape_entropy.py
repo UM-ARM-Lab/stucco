@@ -363,6 +363,23 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
             #             continue
             #         vis.draw_point(f"tmpt.{j}.{i}", pt, color=color, length=0.003)
 
+            # consider variance across the closest point (how consistent is this point with any contact point
+            B, N, d = all_points.shape
+            ap = all_points.reshape(B * N, d)
+            dists = torch.cdist(ap, ap)
+            # from every point of every batch to every point of every batch
+            dists = dists.reshape(B, N, B, N)
+            brange = torch.arange(B)
+            # nrange = torch.arange(N)
+            same_sample_dist = dists[brange, :, brange, :]
+            # set distance
+            same_sample_dist[:, :, :] = 100
+            # min across points
+            min_dist_for_each_sample, min_dist_idx = dists.min(dim=-1)
+            # TODO something wrong with the indexing here
+            ind = np.indices(min_dist_idx.shape)
+            ind[-1] = min_dist_idx.numpy()
+            min_pts_for_each_sample = all_points.unsqueeze(2).repeat(1, 1, N, 1)[tuple(ind)]
             # evaluate variance across each point
             vars = torch.var(all_points, dim=0)
             # sum variance across dimensions of point
