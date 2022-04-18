@@ -1,4 +1,5 @@
 import argparse
+import enum
 import time
 import math
 
@@ -193,11 +194,18 @@ def sample_dx_on_tange_plane(n, alpha, num_samples=100):
     return dx_samples
 
 
+class PlotPointType(enum.Enum):
+    NONE = 0
+    ICP_MODEL_POINTS = 1
+    ERROR_AT_MODEL_POINTS = 2
+    ERROR_AT_GP_SURFACE = 3
+
+
 def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
-                            plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False,
+                            mesh_surface_alpha=1., build_model=False, clean_cache=False,
                             icp_period=5, approximate_uncertainty_with_icp_error_variance=False,
                             eval_period=10, plot_per_eval_period=1, model_name="mustard_normal",
-                            run_name="icp_dist_debug"):
+                            plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, run_name="icp_dist_debug"):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -312,6 +320,7 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                                     scale=3)
 
         if t > 5 and approximate_uncertainty_with_icp_error_variance:
+            # query for next place to go based on approximated uncertainty using ICP error variance
             with rand.SavedRNG():
                 N = 100
                 B = 30
@@ -382,10 +391,10 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
             best_tsf_index = np.argmin(score)
             best_tsf_guess = T[best_tsf_index].inverse()
 
-            # TODO remove after debugging?
-            color = (1, 0, 0)
-            for i, pt in enumerate(all_points[best_tsf_index]):
-                vis.draw_point(f"best.{i}", pt, color=color, length=0.003)
+            if plot_point_type is PlotPointType.ICP_MODEL_POINTS:
+                color = (1, 0, 0)
+                for i, pt in enumerate(all_points[best_tsf_index]):
+                    vis.draw_point(f"best.{i}", pt, color=color, length=0.003)
 
             # for j in range(len(T)):
             #     if j == best_tsf_index:
@@ -491,17 +500,6 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                 imprint_norm = matplotlib.colors.Normalize(vmin=0, vmax=torch.quantile(var, .90))
                 color_map = matplotlib.cm.ScalarMappable(norm=imprint_norm)
 
-                if plot_point_surface:
-                    rgb = color_map.to_rgba(var.reshape(-1))
-                    rgb = torch.from_numpy(rgb[:, :-1].reshape((*var.shape, 3))).to(dtype=u.dtype, device=u.device)
-                    u = torch.cat(us).contiguous()
-                    THRESH = 0.001
-                    surface = torch.abs(u) < THRESH
-                    valid_test_x = test_x[surface]
-                    valid_rgb = rgb[surface]
-                    for i in range(valid_test_x.shape[0]):
-                        dd.draw_point(f'grad.{i}', valid_test_x[i], valid_rgb[i], length=0.002)
-
                 u = torch.cat(us).reshape(*num).contiguous()
 
                 verts, faces = marching_cubes(u, 0.0)
@@ -552,21 +550,34 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     dd.clear_visualization_after('grad', 0)
 
                 # evaluate surface error
+                error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.1)
+                color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
                 with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
                                                                           covar_root_decomposition=False):
                     predictions = gp(model_points)
                 mean = predictions.mean
-                err = torch.abs(mean[:, 0]).mean()
-                error_at_model_points.append(err)
+                err = torch.abs(mean[:, 0])
+                if plot_point_type is PlotPointType.ERROR_AT_MODEL_POINTS:
+                    rgb = color_map.to_rgba(err.reshape(-1))
+                    rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
+                    for i in range(model_points.shape[0]):
+                        dd.draw_point(f'pt.{i}', model_points[i], rgb[i], length=0.002)
+                    dd.clear_visualization_after("pt", verts.shape[0])
+                error_at_model_points.append(err.mean())
 
                 # evaluation of estimated SDF surface points on ground truth
                 dists = []
                 for vert in verts_xyz:
                     closest = closest_point_on_surface(objId, vert)
                     dists.append(closest[ContactInfo.DISTANCE])
-                    dd.draw_point("eval_pt", vert, color=(0, 1, 0), label=str(closest[ContactInfo.DISTANCE]))
-                dist = torch.abs(torch.tensor(dists)).mean()
-                error_at_gp_surface.append(dist)
+                dists = torch.tensor(dists).abs()
+                if plot_point_type is PlotPointType.ERROR_AT_GP_SURFACE:
+                    rgb = color_map.to_rgba(dists.reshape(-1))
+                    rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
+                    for i in range(verts_xyz.shape[0]):
+                        dd.draw_point(f'pt.{i}', verts_xyz[i], rgb[i], length=0.002)
+                    dd.clear_visualization_after("pt", verts.shape[0])
+                error_at_gp_surface.append(dists.mean())
                 error_t.append(t)
                 # save every time in case we break somewhere in between
                 cache[name][randseed] = {'t': error_t,
