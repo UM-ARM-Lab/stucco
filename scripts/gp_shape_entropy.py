@@ -237,22 +237,23 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
     vis = dd
     name = f"{model_name} {run_name}".strip()
 
+    # these are in object frame (aligned with [0,0,0], [0,0,0,1]
     model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None, mid_z=0.05,
                                                          seed=0, clean_cache=build_model, random_sample_sigma=0.2,
                                                          name=model_name, vis=vis, restricted_points=(
             [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
+    device, dtype = model_points.device, model_points.dtype
+    pose = p.getBasePositionAndOrientation(target_obj_id)
+    link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+    model_points_world_transformed_ground_truth = link_to_current_tf.transform_points(model_points)
+    model_normals_world_transformed_ground_truth = link_to_current_tf.transform_normals(model_normals)
     if build_model:
-        device, dtype = model_points.device, model_points.dtype
-        pose = p.getBasePositionAndOrientation(target_obj_id)
-        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
-            tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
-        mp = link_to_current_tf.transform_points(model_points)
-        mn = link_to_current_tf.transform_normals(model_normals)
-
-        for i, pt in enumerate(mp):
+        for i, pt in enumerate(model_points_world_transformed_ground_truth):
             vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-            vis.draw_2d_line(f"mn.{i}", pt, -mn[i], color=(0, 0, 0), size=2., scale=0.03)
+            vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_transformed_ground_truth[i], color=(0, 0, 0), size=2.,
+                             scale=0.03)
 
     # start at a point on the surface of the bottle
     randseed = rand.seed(0)
@@ -550,18 +551,18 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     dd.clear_visualization_after('grad', 0)
 
                 # evaluate surface error
-                error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.1)
+                error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.05)
                 color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
                 with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
                                                                           covar_root_decomposition=False):
-                    predictions = gp(model_points)
+                    predictions = gp(model_points_world_transformed_ground_truth)
                 mean = predictions.mean
                 err = torch.abs(mean[:, 0])
                 if plot_point_type is PlotPointType.ERROR_AT_MODEL_POINTS:
                     rgb = color_map.to_rgba(err.reshape(-1))
                     rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
-                    for i in range(model_points.shape[0]):
-                        dd.draw_point(f'pt.{i}', model_points[i], rgb[i], length=0.002)
+                    for i in range(model_points_world_transformed_ground_truth.shape[0]):
+                        dd.draw_point(f'pt.{i}', model_points_world_transformed_ground_truth[i], rgb[i], length=0.002)
                     dd.clear_visualization_after("pt", verts.shape[0])
                 error_at_model_points.append(err.mean())
 
