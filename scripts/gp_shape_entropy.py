@@ -181,10 +181,23 @@ def create_sdf(path):
     return voxels
 
 
+def sample_dx_on_tange_plane(n, alpha, num_samples=100):
+    v0 = n.clone()
+    v0[0] += 1
+    v1 = torch.cross(n, v0)
+    v2 = torch.cross(n, v1)
+    v1 /= v1.norm()
+    v2 /= v2.norm()
+    angles = torch.linspace(0, math.pi * 2, num_samples)
+    dx_samples = (torch.cos(angles).view(-1, 1) * v1 + torch.sin(angles).view(-1, 1) * v2) * alpha
+    return dx_samples
+
+
 def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=50, verify_numerical_gradients=False,
                             plot_point_surface=False, mesh_surface_alpha=1., build_model=False, clean_cache=False,
-                            icp_period=5,
-                            eval_period=10, plot_per_eval_period=5, model_name="mustard_normal", run_name="icp"):
+                            icp_period=5, approximate_uncertainty_with_icp_error_variance=False,
+                            eval_period=10, plot_per_eval_period=1, model_name="mustard_normal",
+                            run_name="icp_dist_debug"):
     extrude_objects_in_z = False
     z = 0.1
     h = 2 if extrude_objects_in_z else 0.15
@@ -281,27 +294,10 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
         def gp_var(cx):
             return gp(cx).variance
 
-        # query for next place to go based on gradient of variance
-        gp_var_jacobian = jacobian(gp_var, x)
-        gp_var_grad = gp_var_jacobian[0]  # first dimension corresponds to SDF, other 2 are for the SDF gradient
-        # choose random direction if it's the 0 vector
-        if torch.allclose(gp_var_grad, torch.zeros_like(gp_var_grad)):
-            gp_var_grad = torch.rand_like(gp_var_grad)
-        dx = project_to_plane(n, gp_var_grad)
-
         if verify_numerical_gradients:
             with rand.SavedRNG():
                 # try numerically computing the gradient along valid directions only
-                # pick any vector not parallel to the normal
-                v0 = n.clone()
-                v0[0] += 1
-                v1 = torch.cross(n, v0)
-                v2 = torch.cross(n, v1)
-                v1 /= v1.norm()
-                v2 /= v2.norm()
-                num_samples = 100
-                angles = torch.linspace(0, math.pi * 2, num_samples)
-                dx_samples = (torch.cos(angles).view(-1, 1) * v1 + torch.sin(angles).view(-1, 1) * v2) * alpha
+                dx_samples = sample_dx_on_tange_plane(n, alpha)
                 new_x_samples = x + dx_samples
                 with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
                                                                           covar_root_decomposition=False):
@@ -314,6 +310,43 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     strength = (10 - k) / 10
                     dd.draw_2d_line(f'dx{k}', x, dx_samples[sample_ordering[k]], (strength, 1 - strength, 1 - strength),
                                     scale=3)
+
+        if t > 5 and approximate_uncertainty_with_icp_error_variance:
+            with rand.SavedRNG():
+                N = 100
+                B = 30
+                dx_samples = sample_dx_on_tange_plane(n, alpha, num_samples=N)
+                new_x_samples = x + dx_samples
+                # do ICP
+                this_pts = torch.stack(xs).reshape(-1, 3)
+                T, distances, _ = icp.icp_3(this_pts, model_points,
+                                            given_init_pose=best_tsf_guess, batch=B)
+                # T = T.inverse()
+                # link_to_current_tf = tf.Transform3d(matrix=T)
+                # all_normals = link_to_current_tf.transform_normals(model_normals)
+                point_tf_to_link = tf.Transform3d(matrix=T)
+                all_points = point_tf_to_link.transform_points(new_x_samples)
+
+                # compute ICP error for new sampled points
+                query_icp_error = torch.zeros(B, N)
+                # TODO consider using cached SDF
+                for b in range(B):
+                    for i in range(N):
+                        closest = closest_point_on_surface(objId, all_points[b, i])
+                        query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
+                # find error variance for each sampled dx
+                icp_error_var = query_icp_error.var(dim=1)
+                most_informative_idx = icp_error_var.argmax()
+                # choose gradient based on this (basically throw out GP calculations)
+                dx = dx_samples[most_informative_idx]
+        else:
+            # query for next place to go based on gradient of variance
+            gp_var_jacobian = jacobian(gp_var, x)
+            gp_var_grad = gp_var_jacobian[0]  # first dimension corresponds to SDF, other 2 are for the SDF gradient
+            # choose random direction if it's the 0 vector
+            if torch.allclose(gp_var_grad, torch.zeros_like(gp_var_grad)):
+                gp_var_grad = torch.rand_like(gp_var_grad)
+            dx = project_to_plane(n, gp_var_grad)
 
         # normalize to be magnitude alpha
         dx = dx / dx.norm() * alpha
@@ -363,56 +396,72 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
             #             continue
             #         vis.draw_point(f"tmpt.{j}.{i}", pt, color=color, length=0.003)
 
-            # consider variance across the closest point (how consistent is this point with any contact point
-            B, N, d = all_points.shape
-            ap = all_points.reshape(B * N, d)
-            dists = torch.cdist(ap, ap)
-            # from every point of every batch to every point of every batch
-            dists = dists.reshape(B, N, B, N)
-            brange = torch.arange(B)
-            # nrange = torch.arange(N)
-            same_sample_dist = dists[brange, :, brange, :]
-            # set distance
-            same_sample_dist[:, :, :] = 100
-            # min across points
-            min_dist_for_each_sample, min_dist_idx = dists.min(dim=-1)
-            # TODO something wrong with the indexing here
-            ind = np.indices(min_dist_idx.shape)
-            ind[-1] = min_dist_idx.numpy()
-            min_pts_for_each_sample = all_points.unsqueeze(2).repeat(1, 1, N, 1)[tuple(ind)]
-            # evaluate variance across each point
-            vars = torch.var(all_points, dim=0)
-            # sum variance across dimensions of point
-            vars = vars.sum(dim=1)
-
-            # vars_cutoff = torch.quantile(vars, .25)
-            vars_cutoff = 0.03
-            ok_to_aug = vars < vars_cutoff
-            print(
-                f"vars avg {vars.mean()} 25th percentile {torch.quantile(vars, .25)} cutoff {vars_cutoff} num passed {ok_to_aug.sum()}")
-
-            # augment points and normals
-            if torch.any(ok_to_aug):
-                transformed_model_points = all_points[best_tsf_index][ok_to_aug]
-                aug_xs = transformed_model_points
-                aug_df = all_normals[best_tsf_index][ok_to_aug]
-                # visualize points that are below some variance threshold to be added
-                for i, pt in enumerate(transformed_model_points):
-                    vis.draw_point(f"aug.{i}", pt, color=(1, 1, 0), length=0.015)
-                    vis.draw_2d_line(f"augn.{i}", pt, aug_df[i], color=(0, 0, 0), scale=0.05)
-                vis.clear_visualization_after("aug", i + 1)
-                vis.clear_visualization_after("augn", i + 1)
-            else:
-                aug_xs = None
-                aug_df = None
-                vis.clear_visualization_after("aug", 0)
-                vis.clear_visualization_after("augn", 0)
+            # # consider variance across the closest point (how consistent is this point with any contact point
+            # B, N, d = all_points.shape
+            # ap = all_points.reshape(B * N, d)
+            # dists = torch.cdist(ap, ap)
+            # # from every point of every batch to every point of every batch
+            # dists = dists.reshape(B, N, B, N)
+            # brange = torch.arange(B)
+            # # nrange = torch.arange(N)
+            # # avoid considering intercluster distance
+            # # dists[b][n][b] should all be max dist (all distance inside cluster treated as max)
+            # # min distance of point b,n to bth sample; the index will allow us to query the actual min points
+            # # idx [b][n][i] will get us the index into all_points[b]
+            # # to return the closest point to point b,n from sample i
+            # min_dist_for_each_sample, min_dist_idx = dists.min(dim=-1)
+            #
+            # min_dist_idx = min_dist_idx.unsqueeze(2).repeat(1, 1, B, 1)
+            #
+            # # ind = np.indices(min_dist_idx.shape)
+            # # ind[-1] = min_dist_idx.numpy()
+            # # min_pts_for_each_sample = all_points.unsqueeze(2).repeat(1, 1, N, 1)[tuple(ind)]
+            #
+            # # for each b,n point, retrieve the min points of every other b sample
+            # # need to insert the index into all_points[b] since it wouldn't know that otherwise
+            # # batch_idx = torch.arange(B).reshape(B, 1, 1).repeat(1, N, B)
+            # # batch_idx = torch.arange(B).unsqueeze(-1).unsqueeze(-1).repeat_interleave(N, dim=-2).repeat_interleave(B, dim=-1)
+            # batch_idx = torch.arange(B).repeat(B, N, 1)
+            # min_pts_for_each_sample = all_points[batch_idx, min_dist_idx]
+            #
+            # # each point b,n will have 1 that is equal to mask weight, so need to remove that
+            # ignore_self_mask = torch.ones(B, N, B, dtype=torch.bool, device=dists.device)
+            # ignore_self_mask[brange, :, brange] = False
+            # min_dist_idx = min_dist_idx[ignore_self_mask].reshape(B, N, B - 1)
+            #
+            # # for each b,n point, evaluate variance across the B - 1 non-self batch closest points
+            # vars = torch.var(min_pts_for_each_sample, dim=-2)
+            # # sum variance across dimensions of point
+            # vars = vars.sum(dim=1)
+            #
+            # # vars_cutoff = torch.quantile(vars, .25)
+            # vars_cutoff = 0.03
+            # ok_to_aug = vars < vars_cutoff
+            # print(
+            #     f"vars avg {vars.mean()} 25th percentile {torch.quantile(vars, .25)} cutoff {vars_cutoff} num passed {ok_to_aug.sum()}")
+            #
+            # # augment points and normals
+            # if torch.any(ok_to_aug):
+            #     transformed_model_points = all_points[best_tsf_index][ok_to_aug]
+            #     aug_xs = transformed_model_points
+            #     aug_df = all_normals[best_tsf_index][ok_to_aug]
+            #     # visualize points that are below some variance threshold to be added
+            #     for i, pt in enumerate(transformed_model_points):
+            #         vis.draw_point(f"aug.{i}", pt, color=(1, 1, 0), length=0.015)
+            #         vis.draw_2d_line(f"augn.{i}", pt, aug_df[i], color=(0, 0, 0), scale=0.05)
+            #     vis.clear_visualization_after("aug", i + 1)
+            #     vis.clear_visualization_after("augn", i + 1)
+            # else:
+            #     aug_xs = None
+            #     aug_df = None
+            #     vis.clear_visualization_after("aug", 0)
+            #     vis.clear_visualization_after("augn", 0)
 
             # TODO consider evaluating the fit GP without augmented data (so only use augmented data to guide sliding)
 
         # after a period of time evaluate current level set
         if t > 0 and t % eval_period == 0:
-            print('evaluating shape')
+            print('evaluating shape ' + str(t))
             # see what's the range of values we've actually traversed
             xx = torch.stack(xs)
             print(f'ranges: {torch.min(xx, dim=0)} - {torch.max(xx, dim=0)}')
@@ -466,28 +515,6 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
                     verts_xyz[:, dim] /= num[dim] - 1
                     verts_xyz[:, dim] = verts_xyz[:, dim] * (ranges[dim][1] - ranges[dim][0]) + ranges[dim][0]
 
-                # evaluate surface error
-                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
-                                                                          covar_root_decomposition=False):
-                    predictions = gp(model_points)
-                mean = predictions.mean
-                err = torch.abs(mean[:, 0]).mean()
-                error_at_model_points.append(err)
-
-                # evaluation of estimated SDF surface points on ground truth
-                dists = []
-                for vert in verts_xyz:
-                    closest = closest_point_on_surface(objId, vert)
-                    dists.append(closest[ContactInfo.DISTANCE])
-                dist = torch.abs(torch.tensor(dists)).mean()
-                error_at_gp_surface.append(dist)
-                error_t.append(t)
-                # save every time in case we break somewhere in between
-                cache[name][randseed] = {'t': error_t,
-                                         'error_at_model_points': error_at_model_points,
-                                         'error_at_gp_surface': error_at_gp_surface}
-                torch.save(cache, fullname)
-
                 # plot mesh
                 if t > 0 and t % (eval_period * plot_per_eval_period) == 0:
                     vars = []
@@ -523,6 +550,29 @@ def test_existing_method_3d(gpscale=5, alpha=0.01, timesteps=202, training_iter=
 
                     # input('enter to clear visuals')
                     dd.clear_visualization_after('grad', 0)
+
+                # evaluate surface error
+                with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
+                                                                          covar_root_decomposition=False):
+                    predictions = gp(model_points)
+                mean = predictions.mean
+                err = torch.abs(mean[:, 0]).mean()
+                error_at_model_points.append(err)
+
+                # evaluation of estimated SDF surface points on ground truth
+                dists = []
+                for vert in verts_xyz:
+                    closest = closest_point_on_surface(objId, vert)
+                    dists.append(closest[ContactInfo.DISTANCE])
+                    dd.draw_point("eval_pt", vert, color=(0, 1, 0), label=str(closest[ContactInfo.DISTANCE]))
+                dist = torch.abs(torch.tensor(dists)).mean()
+                error_at_gp_surface.append(dist)
+                error_t.append(t)
+                # save every time in case we break somewhere in between
+                cache[name][randseed] = {'t': error_t,
+                                         'error_at_model_points': error_at_model_points,
+                                         'error_at_gp_surface': error_at_gp_surface}
+                torch.save(cache, fullname)
 
     fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
     axs[0].plot(error_t, error_at_model_points)
