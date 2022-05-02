@@ -208,7 +208,7 @@ def make_mustard_bottle(z):
     objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
                        [0., 0., z * 3],
                        p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
-    ranges = np.array([[-.2, .2], [-.2, .2], [0, .5]])
+    ranges = np.array([[-.3, .3], [-.3, .3], [-0.1, .8]])
     return objId, ranges
 
 
@@ -368,11 +368,13 @@ class ShapeExplorationExperiment(abc.ABC):
 
 
 class ICPErrorVarianceExploration(ShapeExplorationExperiment):
-    def __init__(self, alpha=0.01, alpha_evaluate=0.05, verify_icp_error=False, **kwargs):
+    def __init__(self, num_samples_each_action = 100, icp_batch = 30, alpha=0.01, alpha_evaluate=0.05, verify_icp_error=False, **kwargs):
         super(ICPErrorVarianceExploration, self).__init__(**kwargs)
         self.alpha = alpha
         self.alpha_evaluate = alpha_evaluate
         self.verify_icp_error = verify_icp_error
+        self.N = num_samples_each_action
+        self.B = icp_batch
 
         self.best_tsf_guess = None
         self.T = None
@@ -389,32 +391,34 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
     def _end_step(self, xs, df, t):
         pass
 
+    def _sample_dx(self, xs, df):
+        dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
+        return dx_samples
+
     def _get_next_dx(self, xs, df, t):
         x = xs[-1]
         n = df[-1]
         if t > 5:
             # query for next place to go based on approximated uncertainty using ICP error variance
             with rand.SavedRNG():
-                N = 100
-                B = 30
-                dx_samples = sample_dx_on_tange_plane(n, self.alpha_evaluate, num_samples=N)
-                new_x_samples = x + dx_samples
                 # do ICP
                 this_pts = torch.stack(xs).reshape(-1, 3)
                 self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
-                                                 batch=B)
-                # model points are given in link frame; new_x_sample points are in world frame
+                                                 batch=self.B)
 
-                # T = T.inverse()
+                # sample points and see how they evaluate against this ICP result
+                dx_samples = self._sample_dx(xs, df)
+                new_x_samples = x + dx_samples
+                # model points are given in link frame; new_x_sample points are in world frame
                 point_tf_to_link = tf.Transform3d(matrix=self.T)
                 all_points = point_tf_to_link.transform_points(new_x_samples)
 
                 # compute ICP error for new sampled points
-                query_icp_error = torch.zeros(B, N)
+                query_icp_error = torch.zeros(self.B, self.N)
                 # points are transformed to link frame, thus it needs to compare against the object in link frame
                 # objId is not in link frame and shouldn't be moved
-                for b in range(B):
-                    for i in range(N):
+                for b in range(self.B):
+                    for i in range(self.N):
                         closest = closest_point_on_surface(self.testObjId, all_points[b, i])
                         query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
                         if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
@@ -428,17 +432,17 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
 
                 if self.verify_icp_error:
                     # compare our method of transforming all points to link frame with transforming all objects
-                    query_icp_error_ground_truth = torch.zeros(B, N)
+                    query_icp_error_ground_truth = torch.zeros(self.B, self.N)
                     link_to_world = tf.Transform3d(matrix=self.T.inverse())
                     m = link_to_world.get_matrix()
-                    for b in range(B):
+                    for b in range(self.B):
                         pos = m[b, :3, 3]
                         rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
                         rot = tf.wxyz_to_xyzw(rot)
                         p.resetBasePositionAndOrientation(self.visId, pos, rot)
 
                         # transform our visual object to the pose
-                        for i in range(N):
+                        for i in range(self.N):
                             closest = closest_point_on_surface(self.visId, new_x_samples[i])
                             query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
                             if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
@@ -454,7 +458,7 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
                 most_informative_idx = icp_error_var.argmax()
                 # choose gradient based on this (basically throw out GP calculations)
                 dx = dx_samples[most_informative_idx]
-                print(f"chose action {most_informative_idx.item()} / {N} {dx} "
+                print(f"chose action {most_informative_idx.item()} / {self.N} {dx} "
                       f"error var {icp_error_var[most_informative_idx].item():.5f} "
                       f"avg error var {icp_error_var.mean().item():.5f}")
 
@@ -506,6 +510,30 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
             for i in range(self.model_points.shape[0]):
                 self.dd.draw_point(f'pt.{i}', model_pts_to_compare[i], rgb[i], length=0.002)
             self.dd.clear_visualization_after("pt", model_pts_to_compare.shape[0])
+
+class ICPEVSampleModelPoints(ICPErrorVarianceExploration):
+    """ICPEV exploration where we sample model points instead of fixed sliding around self"""
+    def __init__(self, capped=False, **kwargs):
+        super(ICPEVSampleModelPoints, self).__init__(**kwargs)
+        self.capped = capped
+
+    def _sample_dx(self, xs, df):
+        x = xs[-1]
+        pts = torch.zeros((self.N, 3))
+        # sample which ICP to use for each of the points
+        which_to_use = torch.randint(low=0, high=self.B-1, size=(self.N,), device=self.device)
+        for i in range(self.B):
+            selection = which_to_use == i
+            if torch.any(selection):
+                link_to_current_tf = tf.Transform3d(matrix=self.T[i].inverse())
+                pts[selection] = link_to_current_tf.transform_points(self.model_points[selection])
+
+        dx_samples = pts - x
+        if self.capped:
+            # cap step size
+            over_step = dx_samples.norm() > self.alpha_evaluate
+            dx_samples[over_step] = dx_samples[over_step] / dx_samples[over_step].norm() * self.alpha_evaluate
+        return dx_samples
 
 
 class GPVarianceExploration(ShapeExplorationExperiment):
@@ -1026,6 +1054,9 @@ if __name__ == "__main__":
     # env = RetrievalGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI)
 
     # direct_fit_2d()
-    experiment = ICPErrorVarianceExploration()
-    experiment.run(run_name="icp_var_debug_3")
+    # experiment = ICPErrorVarianceExploration()
+    # experiment.run(run_name="icp_var_debug_3")
+    experiment = ICPEVSampleModelPoints()
+    experiment.run(run_name="icp_var_sample_points_overstep")
     # experiment = GPVarianceExploration()
+    # experiment.run(run_name="gp_var")
