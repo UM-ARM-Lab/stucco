@@ -5,6 +5,7 @@ import time
 import math
 
 import matplotlib
+import pytorch_kinematics
 import torch
 import pybullet as p
 import numpy as np
@@ -200,6 +201,7 @@ class PlotPointType(enum.Enum):
     ICP_MODEL_POINTS = 1
     ERROR_AT_MODEL_POINTS = 2
     ERROR_AT_REP_SURFACE = 3
+    ICP_ERROR_POINTS = 4
 
 
 def make_mustard_bottle(z):
@@ -217,6 +219,9 @@ def make_sphere_preconfig(z):
 
 
 class ShapeExplorationExperiment(abc.ABC):
+    LINK_FRAME_POS = [0, 0, 0]
+    LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
+
     def __init__(self, eval_period=10, plot_per_eval_period=1, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
         self.plot_point_type = plot_point_type
         self.plot_per_eval_period = plot_per_eval_period
@@ -266,9 +271,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.objId, self.ranges = make_obj(z)
         # purely visual object to allow us to see estimated pose
         self.visId, _ = make_obj(z)
-        link_frame_pos = [0, 0, 0]
-        link_frame_orientation = [0, 0, 0, 1]
-        p.resetBasePositionAndOrientation(self.visId, link_frame_pos, link_frame_orientation)
+        p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.visId, -1, mass=0)
         p.changeVisualShape(self.visId, -1, rgbaColor=[0.2, 0.8, 1.0, 0.5])
         p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
@@ -365,12 +368,14 @@ class ShapeExplorationExperiment(abc.ABC):
 
 
 class ICPErrorVarianceExploration(ShapeExplorationExperiment):
-    def __init__(self, alpha=0.01, alpha_evaluate=0.05, **kwargs):
+    def __init__(self, alpha=0.01, alpha_evaluate=0.05, verify_icp_error=False, **kwargs):
         super(ICPErrorVarianceExploration, self).__init__(**kwargs)
         self.alpha = alpha
         self.alpha_evaluate = alpha_evaluate
+        self.verify_icp_error = verify_icp_error
 
         self.best_tsf_guess = None
+        self.T = None
 
     def _start_step(self, xs, df):
         pass
@@ -390,28 +395,71 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
                 new_x_samples = x + dx_samples
                 # do ICP
                 this_pts = torch.stack(xs).reshape(-1, 3)
-                T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess, batch=B)
+                self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess, batch=B)
                 # model points are given in link frame; new_x_sample points are in world frame
 
                 # T = T.inverse()
-                # link_to_current_tf = tf.Transform3d(matrix=T)
-                # all_normals = link_to_current_tf.transform_normals(model_normals)
-                point_tf_to_link = tf.Transform3d(matrix=T)
+                point_tf_to_link = tf.Transform3d(matrix=self.T)
                 all_points = point_tf_to_link.transform_points(new_x_samples)
 
                 # compute ICP error for new sampled points
                 query_icp_error = torch.zeros(B, N)
-                # TODO currently doing this wrong!!! Comparing points in object frame against object in world frame
-                # TODO consider using cached SDF
+                # points are transformed to link frame, thus it needs to compare against the object in link frame
+                # objId is not in link frame and shouldn't be moved
+                p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
                 for b in range(B):
                     for i in range(N):
-                        closest = closest_point_on_surface(self.objId, all_points[b, i])
+                        closest = closest_point_on_surface(self.visId, all_points[b, i])
                         query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
+                        if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+                            self.dd.draw_point("test_point", all_points[b, i], color=(1, 0, 0), length=0.005)
+                            self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+                                               length=0.005,
+                                               label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+
+                # don't care about sign of penetration or separation
+                query_icp_error = query_icp_error.abs()
+
+                if self.verify_icp_error:
+                    # compare our method of transforming all points to link frame with transforming all objects
+                    query_icp_error_ground_truth = torch.zeros(B, N)
+                    link_to_world = tf.Transform3d(matrix=self.T.inverse())
+                    m = link_to_world.get_matrix()
+                    for b in range(B):
+                        pos = m[b, :3, 3]
+                        rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
+                        rot = tf.wxyz_to_xyzw(rot)
+                        p.resetBasePositionAndOrientation(self.visId, pos, rot)
+
+                        # transform our visual object to the pose
+                        for i in range(N):
+                            closest = closest_point_on_surface(self.visId, new_x_samples[i])
+                            query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
+                            if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+                                self.dd.draw_point("test_point", new_x_samples[i], color=(1, 0, 0), length=0.005)
+                                self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+                                                   length=0.005,
+                                                   label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+                    query_icp_error_ground_truth = query_icp_error_ground_truth.abs()
+                    assert (query_icp_error_ground_truth - query_icp_error).sum() < 1e-4
+
                 # find error variance for each sampled dx
-                icp_error_var = query_icp_error.var(dim=1)
+                icp_error_var = query_icp_error.var(dim=0)
                 most_informative_idx = icp_error_var.argmax()
                 # choose gradient based on this (basically throw out GP calculations)
                 dx = dx_samples[most_informative_idx]
+                print(f"chose action {most_informative_idx.item()} / {N} {dx} "
+                      f"error var {icp_error_var[most_informative_idx].item():.5f} "
+                      f"avg error var {icp_error_var.mean().item():.5f}")
+
+                # score ICP and save best one to initialize for next step
+                link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
+                all_points = link_to_current_tf.transform_points(self.model_points)
+                all_normals = link_to_current_tf.transform_normals(self.model_normals)
+                # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
+                score = score_icp(all_points, all_normals, distances).numpy()
+                best_tsf_index = np.argmin(score)
+                self.best_tsf_guess = self.T[best_tsf_index].inverse()
         else:
             dx = torch.randn(3, dtype=self.dtype, device=self.device)
             dx = dx / dx.norm() * self.alpha
@@ -420,21 +468,36 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
     def _eval(self, xs, df, error_at_model_points, error_at_rep_surface, t):
         # get points after transforming with best ICP pose estimate
 
-        # note that error at model points will be equal to surface error since they are symmetrical
-        # evaluation of estimated SDF surface points on ground truth
-        # dists = []
-        # for pt in transformed_pts:
-        #     closest = closest_point_on_surface(objId, pt)
-        #     dists.append(closest[ContactInfo.DISTANCE])
-        # dists = torch.tensor(dists).abs()
-        # if plot_point_type is PlotPointType.ERROR_AT_GP_SURFACE:
-        #     rgb = color_map.to_rgba(dists.reshape(-1))
-        #     rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
-        #     for i in range(verts_xyz.shape[0]):
-        #         dd.draw_point(f'pt.{i}', transformed_pts[i], rgb[i], length=0.002)
-        #     dd.clear_visualization_after("pt", verts.shape[0])
-        # error_at_gp_surface.append(dists.mean())
-        pass
+        link_to_world = tf.Transform3d(matrix=self.best_tsf_guess)
+        m = link_to_world.get_matrix()
+        pos = m[:, :3, 3]
+        rot = pytorch_kinematics.matrix_to_quaternion(m[:, :3, :3])
+        rot = tf.wxyz_to_xyzw(rot)
+        p.resetBasePositionAndOrientation(self.visId, pos[0], rot[0])
+
+        # transform our visual object to the pose
+        dists = []
+        for i in range(len(self.model_points)):
+            closest = closest_point_on_surface(self.visId, self.model_points[i])
+            dists.append(closest[ContactInfo.DISTANCE])
+            # if self.plot_point_type == PlotPointType.ERROR_AT_MODEL_POINTS:
+            #     self.dd.draw_point("test_point", self.model_points[i], color=(1, 0, 0), length=0.005)
+            #     self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+            #                        length=0.005,
+            #                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+        dists = torch.tensor(dists).abs()
+        err = dists.mean()
+        error_at_model_points.append(err)
+        error_at_rep_surface.append(err)
+
+        if self.plot_point_type is PlotPointType.ERROR_AT_MODEL_POINTS:
+            error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.05)
+            color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+            rgb = color_map.to_rgba(dists.reshape(-1))
+            rgb = rgb[:, :-1]
+            for i in range(self.model_points.shape[0]):
+                self.dd.draw_point(f'pt.{i}', self.model_points[i], rgb[i], length=0.002)
+            self.dd.clear_visualization_after("pt", self.model_points.shape[0])
 
 
 class GPVarianceExploration(ShapeExplorationExperiment):
