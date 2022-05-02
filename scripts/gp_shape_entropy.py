@@ -222,7 +222,9 @@ class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, eval_period=10, plot_per_eval_period=1, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
+    def __init__(self, make_obj=make_mustard_bottle, eval_period=10, plot_per_eval_period=1,
+                 plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
+        self.make_obj = make_obj
         self.plot_point_type = plot_point_type
         self.plot_per_eval_period = plot_per_eval_period
         self.eval_period = eval_period
@@ -235,11 +237,19 @@ class ShapeExplorationExperiment(abc.ABC):
         self.dd = DebugDrawer(0.8, 0.8)
         self.dd.toggle_3d(True)
 
+        self.z = 0.1
+        self.objId, self.ranges = self.make_obj(self.z)
+        # purely visual object to allow us to see estimated pose
+        self.visId, _ = self.make_obj(self.z)
+        p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
+        p.changeDynamics(self.visId, -1, mass=0)
+        p.changeVisualShape(self.visId, -1, rgbaColor=[0.2, 0.8, 1.0, 0.5])
+        p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
+
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
         self.model_normals_world_transformed_ground_truth = None
-        self.objId = None
 
         self.best_tsf_guess = None
 
@@ -261,20 +271,10 @@ class ShapeExplorationExperiment(abc.ABC):
     def _eval(self, xs, df, error_at_model_points, error_at_rep_surface, t):
         """Evaluate errors and append to given lists"""
 
-    def run(self, seed=0, timesteps=202, make_obj=make_mustard_bottle, build_model=False, clean_cache=False,
-            model_name="mustard_normal", run_name="icp_var_debug"):
+    def run(self, seed=0, timesteps=202, build_model=False, clean_cache=False,
+            model_name="mustard_normal", run_name=""):
         if self.has_run:
             return RuntimeError("Experiment can only be run once for now; missing reset function")
-
-        z = 0.1
-
-        self.objId, self.ranges = make_obj(z)
-        # purely visual object to allow us to see estimated pose
-        self.visId, _ = make_obj(z)
-        p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
-        p.changeDynamics(self.visId, -1, mass=0)
-        p.changeVisualShape(self.visId, -1, rgbaColor=[0.2, 0.8, 1.0, 0.5])
-        p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
 
         # wait for it to settle
         for _ in range(1000):
@@ -377,6 +377,12 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
         self.best_tsf_guess = None
         self.T = None
 
+        self.testObjId, _ = self.make_obj(self.z)
+        p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
+        p.changeDynamics(self.testObjId, -1, mass=0)
+        p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
+        p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
+
     def _start_step(self, xs, df):
         pass
 
@@ -395,7 +401,8 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
                 new_x_samples = x + dx_samples
                 # do ICP
                 this_pts = torch.stack(xs).reshape(-1, 3)
-                self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess, batch=B)
+                self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
+                                                 batch=B)
                 # model points are given in link frame; new_x_sample points are in world frame
 
                 # T = T.inverse()
@@ -406,10 +413,9 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
                 query_icp_error = torch.zeros(B, N)
                 # points are transformed to link frame, thus it needs to compare against the object in link frame
                 # objId is not in link frame and shouldn't be moved
-                p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
                 for b in range(B):
                     for i in range(N):
-                        closest = closest_point_on_surface(self.visId, all_points[b, i])
+                        closest = closest_point_on_surface(self.testObjId, all_points[b, i])
                         query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
                         if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
                             self.dd.draw_point("test_point", all_points[b, i], color=(1, 0, 0), length=0.005)
@@ -475,10 +481,12 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
         rot = tf.wxyz_to_xyzw(rot)
         p.resetBasePositionAndOrientation(self.visId, pos[0], rot[0])
 
+        model_pts_to_compare = self.model_points_world_transformed_ground_truth
+
         # transform our visual object to the pose
         dists = []
-        for i in range(len(self.model_points)):
-            closest = closest_point_on_surface(self.visId, self.model_points[i])
+        for i in range(model_pts_to_compare.shape[0]):
+            closest = closest_point_on_surface(self.visId, model_pts_to_compare[i])
             dists.append(closest[ContactInfo.DISTANCE])
             # if self.plot_point_type == PlotPointType.ERROR_AT_MODEL_POINTS:
             #     self.dd.draw_point("test_point", self.model_points[i], color=(1, 0, 0), length=0.005)
@@ -496,8 +504,8 @@ class ICPErrorVarianceExploration(ShapeExplorationExperiment):
             rgb = color_map.to_rgba(dists.reshape(-1))
             rgb = rgb[:, :-1]
             for i in range(self.model_points.shape[0]):
-                self.dd.draw_point(f'pt.{i}', self.model_points[i], rgb[i], length=0.002)
-            self.dd.clear_visualization_after("pt", self.model_points.shape[0])
+                self.dd.draw_point(f'pt.{i}', model_pts_to_compare[i], rgb[i], length=0.002)
+            self.dd.clear_visualization_after("pt", model_pts_to_compare.shape[0])
 
 
 class GPVarianceExploration(ShapeExplorationExperiment):
@@ -1019,5 +1027,5 @@ if __name__ == "__main__":
 
     # direct_fit_2d()
     experiment = ICPErrorVarianceExploration()
+    experiment.run(run_name="icp_var_debug_3")
     # experiment = GPVarianceExploration()
-    experiment.run()
