@@ -1,7 +1,13 @@
+import abc
 import argparse
 import time
+import typing
 
 import matplotlib
+import numpy as np
+import pybullet_data
+import pymeshlab
+import pytorch_kinematics
 import torch
 import pybullet as p
 import logging
@@ -12,15 +18,21 @@ import gpytorch
 from matplotlib import cm
 from matplotlib import pyplot as plt
 
-from arm_pytorch_utilities import tensor_utils
+from arm_pytorch_utilities import tensor_utils, rand
 from arm_pytorch_utilities.grad import jacobian
+from pybullet_object_models import ycb_objects
+from pytorch_kinematics import transforms as tf
+from torchmcubes import marching_cubes
 
 from stucco import cfg
 from stucco import tracking
 from stucco.env import arm
 from stucco.env.arm import Levels
+from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_surface, ContactInfo, \
+    surface_normal_at_point
 from stucco.env_getters.arm import RetrievalGetter
-from stucco.exploration import GPModelWithDerivatives, ICPEVSampleModelPoints
+from stucco import exploration
+from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 
 from stucco.retrieval_controller import sample_model_points, KeyboardController
 
@@ -170,7 +182,7 @@ def direct_fit_2d():
     # train_y = torch.stack([f, dfx, dfy], -1).squeeze(1)
 
     likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=3)  # Value + x-derivative + y-derivative
-    model = GPModelWithDerivatives(train_x, train_y, likelihood)
+    model = exploration.GPModelWithDerivatives(train_x, train_y, likelihood)
 
     training_iter = 50
 
@@ -284,6 +296,329 @@ def keyboard_control(env):
     print(cleaned_u)
 
 
+def make_mustard_bottle(z):
+    objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
+                       [0., 0., z * 3],
+                       p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
+    ranges = np.array([[-.3, .3], [-.3, .3], [-0.1, .8]])
+    return objId, ranges
+
+
+def make_sphere_preconfig(z):
+    objId = make_sphere(z, [0., 0, z])
+    ranges = np.array([[-.2, .2], [-.2, .2], [-.1, .4]])
+    return objId, ranges
+
+
+class ShapeExplorationExperiment(abc.ABC):
+    LINK_FRAME_POS = [0, 0, 0]
+    LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
+
+    def __init__(self, make_obj=make_mustard_bottle, eval_period=10,
+                 plot_per_eval_period=1,
+                 plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
+        self.policy: typing.Optional[ShapeExplorationPolicy] = None
+        self.make_obj = make_obj
+        self.plot_point_type = plot_point_type
+        self.plot_per_eval_period = plot_per_eval_period
+        self.eval_period = eval_period
+
+        self.physics_client = p.connect(p.GUI)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
+        p.setGravity(0, 0, -10)
+        p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
+        self.dd = DebugDrawer(0.8, 0.8)
+        self.dd.toggle_3d(True)
+
+        self.z = 0.1
+        self.objId, self.ranges = self.make_obj(self.z)
+        # purely visual object to allow us to see estimated pose
+        self.visId, _ = self.make_obj(self.z)
+        p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
+        p.changeDynamics(self.visId, -1, mass=0)
+        p.changeVisualShape(self.visId, -1, rgbaColor=[0.2, 0.8, 1.0, 0.5])
+        p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
+
+        self.has_run = False
+
+    def set_policy(self, policy: ShapeExplorationPolicy):
+        self.policy = policy
+
+    @abc.abstractmethod
+    def _eval(self, xs, df, error_at_model_points, error_at_rep_surface, t):
+        """Evaluate errors and append to given lists"""
+
+    def run(self, seed=0, timesteps=202, build_model=False, clean_cache=False,
+            model_name="mustard_normal", run_name=""):
+        if self.has_run:
+            return RuntimeError("Experiment can only be run once for now; missing reset function")
+
+        # wait for it to settle
+        for _ in range(1000):
+            p.stepSimulation()
+
+        target_obj_id = self.objId
+        vis = self.dd
+        name = f"{model_name} {run_name}".strip()
+
+        # these are in object frame (aligned with [0,0,0], [0,0,0,1]
+        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None,
+                                                             mid_z=0.05,
+                                                             seed=0, clean_cache=build_model,
+                                                             random_sample_sigma=0.2,
+                                                             name=model_name, vis=vis, restricted_points=(
+                [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
+        pose = p.getBasePositionAndOrientation(target_obj_id)
+
+        self.policy.save_model_points(model_points, model_normals, pose)
+
+        if build_model:
+            for i, pt in enumerate(self.policy.model_points_world_transformed_ground_truth):
+                vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+                vis.draw_2d_line(f"mn.{i}", pt, -self.policy.model_normals_world_transformed_ground_truth[i],
+                                 color=(0, 0, 0),
+                                 size=2.,
+                                 scale=0.03)
+
+        # start at a point on the surface of the bottle
+        randseed = rand.seed(seed)
+        p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, "{}_{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S'),
+                                                                          randseed))
+        fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
+        if os.path.exists(fullname):
+            cache = torch.load(fullname)
+            if name not in cache or clean_cache:
+                cache[name] = {}
+        else:
+            cache = {name: {}}
+
+        x = torch.tensor(closest_point_on_surface(self.objId, np.random.rand(3))[ContactInfo.POS_A])
+        self.dd.draw_point('x', x, height=x[2])
+        n = -torch.tensor(surface_normal_at_point(self.objId, x))
+        self.dd.draw_2d_line('n', x, n, (0, 0.5, 0), scale=0.2)
+
+        xs = [x]
+        df = [n]
+
+        # error data
+        error_t = []
+        error_at_model_points = []
+        error_at_rep_surface = []
+
+        for t in range(timesteps):
+            self.policy.start_step(xs, df)
+            dx = self.policy.get_next_dx(xs, df, t)
+
+            self.dd.draw_2d_line('a', x, dx, (1, 0., 0), scale=1)
+
+            new_x = x + dx
+            # project onto object (via low level controller applying a force)
+            new_x = torch.tensor(closest_point_on_surface(self.objId, new_x)[ContactInfo.POS_A])
+
+            self.dd.draw_transition(x, new_x)
+            x = new_x
+            self.dd.draw_point('x', x, height=x[2])
+            n = -torch.tensor(surface_normal_at_point(self.objId, x))
+            self.dd.draw_2d_line('n', x, n, (0, 0.5, 0), scale=0.2)
+
+            xs.append(x)
+            df.append(n)
+
+            self.policy.end_step(xs, df, t)
+
+            # after a period of time evaluate current level set
+            if t > 0 and t % self.eval_period == 0:
+                print('evaluating shape ' + str(t))
+                self._eval(xs, df, error_at_model_points, error_at_rep_surface, t)
+
+                error_t.append(t)
+                # save every time in case we break somewhere in between
+                cache[name][randseed] = {'t': error_t,
+                                         'error_at_model_points': error_at_model_points,
+                                         'error_at_rep_surface': error_at_rep_surface}
+                torch.save(cache, fullname)
+
+        self.has_run = True
+        return error_at_model_points
+
+
+class ICPEVExperiment(ShapeExplorationExperiment):
+    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, **kwargs):
+        if policy_args is None:
+            policy_args = {}
+        super(ICPEVExperiment, self).__init__(**kwargs)
+
+        self.testObjId, _ = self.make_obj(self.z)
+        p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
+        p.changeDynamics(self.testObjId, -1, mass=0)
+        p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
+        p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
+
+        self.set_policy(policy_factory(test_obj_id=self.testObjId, **policy_args))
+
+    def _start_step(self, xs, df):
+        pass
+
+    def _end_step(self, xs, df, t):
+        pass
+
+    def _eval(self, xs, df, error_at_model_points, error_at_rep_surface, t):
+        # get points after transforming with best ICP pose estimate
+
+        link_to_world = tf.Transform3d(matrix=self.policy.best_tsf_guess)
+        m = link_to_world.get_matrix()
+        pos = m[:, :3, 3]
+        rot = pytorch_kinematics.matrix_to_quaternion(m[:, :3, :3])
+        rot = tf.wxyz_to_xyzw(rot)
+        p.resetBasePositionAndOrientation(self.visId, pos[0], rot[0])
+
+        model_pts_to_compare = self.policy.model_points_world_transformed_ground_truth
+
+        # transform our visual object to the pose
+        dists = []
+        for i in range(model_pts_to_compare.shape[0]):
+            closest = closest_point_on_surface(self.visId, model_pts_to_compare[i])
+            dists.append(closest[ContactInfo.DISTANCE])
+            # if self.plot_point_type == PlotPointType.ERROR_AT_MODEL_POINTS:
+            #     self.dd.draw_point("test_point", self.model_points[i], color=(1, 0, 0), length=0.005)
+            #     self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+            #                        length=0.005,
+            #                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+        dists = torch.tensor(dists).abs()
+        err = dists.mean()
+        error_at_model_points.append(err)
+        error_at_rep_surface.append(err)
+
+        if self.plot_point_type is PlotPointType.ERROR_AT_MODEL_POINTS:
+            error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.05)
+            color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+            rgb = color_map.to_rgba(dists.reshape(-1))
+            rgb = rgb[:, :-1]
+            for i in range(self.policy.model_points.shape[0]):
+                self.dd.draw_point(f'pt.{i}', model_pts_to_compare[i], rgb[i], length=0.002)
+            self.dd.clear_visualization_after("pt", model_pts_to_compare.shape[0])
+
+
+class GPVarianceExperiment(ShapeExplorationExperiment):
+    def __init__(self, gp_exploration_policy: GPVarianceExploration, **kwargs):
+        super(GPVarianceExperiment, self).__init__(**kwargs)
+        self.set_policy(gp_exploration_policy)
+
+    def _eval(self, xs, df, error_at_model_points, error_at_rep_surface, t):
+        if not isinstance(self.policy, GPVarianceExploration):
+            raise RuntimeError("This experiment requires GP Exploration Policy")
+        # see what's the range of values we've actually traversed
+        xx = torch.stack(xs)
+        print(f'ranges: {torch.min(xx, dim=0)} - {torch.max(xx, dim=0)}')
+        # n1, n2, n3 = 80, 80, 50
+        num = [40, 40, 30]
+        xv, yv, zv = torch.meshgrid(
+            [torch.linspace(*self.ranges[0], num[0]), torch.linspace(*self.ranges[1], num[1]),
+             torch.linspace(*self.ranges[2], num[2])])
+        # Make GP predictions
+        with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
+                                                                  covar_root_decomposition=False):
+            test_x = torch.stack(
+                [xv.reshape(np.prod(num), 1), yv.reshape(np.prod(num), 1), zv.reshape(np.prod(num), 1)],
+                -1).squeeze(1)
+            PER_BATCH = 256
+            vars = []
+            us = []
+            for i in range(0, test_x.shape[0], PER_BATCH):
+                predictions = self.policy.gp(test_x[i:i + PER_BATCH])
+                mean = predictions.mean
+                var = predictions.variance
+
+                vars.append(var[:, 0])
+                us.append(mean[:, 0])
+
+            var = torch.cat(vars).contiguous()
+            imprint_norm = matplotlib.colors.Normalize(vmin=0, vmax=torch.quantile(var, .90))
+            color_map = matplotlib.cm.ScalarMappable(norm=imprint_norm)
+
+            u = torch.cat(us).reshape(*num).contiguous()
+
+            verts, faces = marching_cubes(u, 0.0)
+
+            # re-get the colour at the vertices instead of grid interpolation since that introduces artifacts
+            # output of vertices need to be converted back to original space
+            verts_xyz = verts.clone()
+            verts_xyz[:, 0] = verts[:, 2]
+            verts_xyz[:, 2] = verts[:, 0]
+            for dim in range(self.ranges.shape[0]):
+                verts_xyz[:, dim] /= num[dim] - 1
+                verts_xyz[:, dim] = verts_xyz[:, dim] * (self.ranges[dim][1] - self.ranges[dim][0]) + self.ranges[dim][
+                    0]
+
+            # plot mesh
+            if t > 0 and t % (self.eval_period * self.plot_per_eval_period) == 0:
+                vars = []
+                for i in range(0, verts.shape[0], PER_BATCH):
+                    predictions = self.policy.gp(verts_xyz[i:i + PER_BATCH])
+                    var = predictions.variance
+                    vars.append(var[:, 0])
+                var = torch.cat(vars).contiguous()
+
+                faces = faces.cpu().numpy()
+                colrs = color_map.to_rgba(var.reshape(-1))
+                # note, can control alpha on last column here
+                colrs[:, -1] = self.policy.mesh_surface_alpha
+
+                # create and save mesh
+                m = pymeshlab.Mesh(verts_xyz, faces, v_color_matrix=colrs)
+                ms = pymeshlab.MeshSet()
+                ms.add_mesh(m, "level_set")
+                # UV map and turn vertex coloring into a texture
+                base_name = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{t}"
+                ms.compute_texcoord_parametrization_triangle_trivial_per_wedge()
+                ms.compute_texmap_from_color(textname=f"tex_{base_name}")
+
+                fn = os.path.join(cfg.DATA_DIR, "shape_explore", f"mesh_{base_name}.obj")
+                ms.save_current_mesh(fn)
+
+                print('plotting mesh')
+
+                if self.meshId is not None:
+                    p.removeBody(self.meshId)
+                visId = p.createVisualShape(p.GEOM_MESH, fileName=fn)
+                self.meshId = p.createMultiBody(0, baseVisualShapeIndex=visId, basePosition=[0, 0, 0])
+
+                # input('enter to clear visuals')
+                self.dd.clear_visualization_after('grad', 0)
+
+            # evaluate surface error
+            error_norm = matplotlib.colors.Normalize(vmin=0, vmax=0.05)
+            color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+            with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
+                                                                      covar_root_decomposition=False):
+                predictions = self.policy.gp(self.policy.model_points_world_transformed_ground_truth)
+            mean = predictions.mean
+            err = torch.abs(mean[:, 0])
+            if self.plot_point_type is PlotPointType.ERROR_AT_MODEL_POINTS:
+                rgb = color_map.to_rgba(err.reshape(-1))
+                rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
+                for i in range(self.policy.model_points_world_transformed_ground_truth.shape[0]):
+                    self.dd.draw_point(f'pt.{i}', self.policy.model_points_world_transformed_ground_truth[i], rgb[i],
+                                       length=0.002)
+                self.dd.clear_visualization_after("pt", verts.shape[0])
+            error_at_model_points.append(err.mean())
+
+            # evaluation of estimated SDF surface points on ground truth
+            dists = []
+            for vert in verts_xyz:
+                closest = closest_point_on_surface(self.objId, vert)
+                dists.append(closest[ContactInfo.DISTANCE])
+            dists = torch.tensor(dists).abs()
+            if self.plot_point_type is PlotPointType.ERROR_AT_REP_SURFACE:
+                rgb = color_map.to_rgba(dists.reshape(-1))
+                rgb = torch.from_numpy(rgb[:, :-1]).to(dtype=u.dtype, device=u.device)
+                for i in range(verts_xyz.shape[0]):
+                    self.dd.draw_point(f'pt.{i}', verts_xyz[i], rgb[i], length=0.002)
+                self.dd.clear_visualization_after("pt", verts.shape[0])
+            error_at_rep_surface.append(dists.mean())
+
+
 parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
 parser.add_argument('method',
                     choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
@@ -308,7 +643,7 @@ if __name__ == "__main__":
     # direct_fit_2d()
     # experiment = ICPErrorVarianceExploration()
     # experiment.run(run_name="icp_var_debug_3")
-    experiment = ICPEVSampleModelPoints()
+    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
     experiment.run(run_name="icp_var_sample_points_overstep")
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
