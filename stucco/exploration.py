@@ -95,6 +95,9 @@ class ShapeExplorationPolicy(abc.ABC):
     def get_next_dx(self, xs, df, t):
         """Get control for deciding which state to visit next"""
 
+    def register_transforms(self, T, best_T):
+        pass
+
     def save_model_points(self, model_points, model_normals, pose):
         self.model_points, self.model_normals = model_points, model_normals
         self.device, self.dtype = self.model_points.device, self.model_points.dtype
@@ -118,8 +121,15 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
 
         self.best_tsf_guess = None
         self.T = None
+        # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
+        self.unused_cache_transforms = False
 
         self.testObjId = test_obj_id
+
+    def register_transforms(self, T, best_T):
+        self.T = T
+        self.best_tsf_guess = best_T
+        self.unused_cache_transforms = True
 
     def sample_dx(self, xs, df):
         dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
@@ -131,10 +141,14 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         if t > 5:
             # query for next place to go based on approximated uncertainty using ICP error variance
             with rand.SavedRNG():
-                # do ICP
-                this_pts = torch.stack(xs).reshape(-1, 3)
-                self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
-                                                 batch=self.B)
+                if self.unused_cache_transforms:
+                    # consume this transform set
+                    self.unused_cache_transforms = False
+                else:
+                    # do ICP
+                    this_pts = torch.stack(xs).reshape(-1, 3)
+                    self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
+                                                     batch=self.B)
 
                 # sample points and see how they evaluate against this ICP result
                 dx_samples = self.sample_dx(xs, df)

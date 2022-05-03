@@ -10,6 +10,7 @@ from arm_pytorch_utilities.controller import Controller
 from pynput import keyboard
 
 from stucco import detection, tracking
+from stucco import exploration
 from stucco.defines import NO_CONTACT_ID
 from stucco import cfg
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
@@ -25,7 +26,7 @@ import subprocess
 import glob
 
 from stucco.util import move_figure
-from stucco.env.env import Visualizer
+from stucco.env.env import Visualizer, InfoKeys
 
 
 class RetrievalController(Controller):
@@ -140,6 +141,96 @@ class OursRetrievalPredeterminedController(RetrievalPredeterminedController):
         self.contact_set.update(x, dx, pt, info=info)
 
 
+class OursRetrievalICPEVController(Controller):
+    def __init__(self, contact_detector: detection.ContactDetector, contact_set: tracking.ContactSet,
+                 policy: exploration.ShapeExplorationPolicy, method, u_mag_max, max_steps=200, vis: Visualizer = None,
+                 real_to_control_magnitude=1):
+
+        self.u_mag_max = u_mag_max
+        self.max_steps = max_steps
+        self.method = method
+        self.vis = vis
+        self.real_to_control_magnitude = real_to_control_magnitude
+
+        self.policy = policy
+        self.next_target = None
+        self.next_target_close_enough = 0.01        # points and normals
+        self.x_history = []
+        self.n_history = []
+
+        self.u_history = []
+
+        super().__init__()
+        self.contact_detector = contact_detector
+        self.contact_set = contact_set
+        self.contact_indices = []
+
+    def done(self):
+        return len(self.x_history) >= self.max_steps
+
+    def command(self, obs, info=None, visualizer=None):
+        z = 0.1
+        # TODO add device and dtype
+        x = torch.tensor(obs)
+        # get surface normal
+        self.x_history.append(obs)
+        if info is None:
+            self.n_history.append(np.zeros_like(obs))
+        else:
+            n = info[InfoKeys.LOW_FREQ_REACTION_F]
+            n_norm = np.linalg.norm(n)
+            if n_norm > 0:
+                n = n / n_norm
+            self.n_history.append(n)
+
+        if len(self.x_history) > 1:
+            self.update(obs, info, visualizer=visualizer)
+
+        if self.next_target is not None:
+            # decide if we're close enough to target
+            diff = self.next_target - x
+            going_to_previous_target = diff.norm() > self.next_target_close_enough
+            if going_to_previous_target:
+                u = diff / self.real_to_control_magnitude * 1.2  # need a little kick
+                return u
+
+        # else figure out next target
+        if info is None:
+            u = np.random.normal(np.zeros_like(obs), np.ones_like(obs) * self.u_mag_max)
+        else:
+            # TODO only pass in xs and df of best guess for ICP
+            # TODO if ICP results are not good enough take a random action
+            xs = self.x_history
+            df = self.n_history
+            t = len(self.x_history)
+            self.policy.start_step(xs, df)
+            target_dx = self.policy.get_next_dx(xs, df, t)
+            self.policy.end_step(xs, df, t)
+
+            target_x = x + target_dx[:2]
+            self.next_target = target_x
+            if self.vis is not None:
+                self.vis.draw_point("target point", [target_x[0], target_x[1], z], color=(0.5, 0.2, 0.8))
+
+            # TODO convert target to a sequence of cached controls; first take a step in the normal direction,
+            n = self.n_history[-1]
+            u = n * self.u_mag_max
+
+        self.u_history.append(u)
+        return u
+
+    def update(self, obs, info, visualizer=None):
+        if self.contact_detector.in_contact():
+            self.contact_indices.append(len(self.x_history) - 1)
+
+        x = self.x_history[-1][:2]
+        pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
+        # if dx is not None:
+        #     assert torch.allclose(dx, torch.tensor(info[InfoKeys.DEE_IN_CONTACT][:2], dtype=dx.dtype, device=dx.device))
+        info['u'] = torch.tensor(self.u_history[-1])
+        self.contact_set.update(x, dx, pt, info=info)
+
+
 def rot_2d_mat_to_angle(T):
     """T: bx3x3 homogenous transforms or bx2x2 rotation matrices"""
     return torch.atan2(T[:, 1, 0], T[:, 0, 0])
@@ -147,7 +238,7 @@ def rot_2d_mat_to_angle(T):
 
 def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, mid_z=0, seed=0, name="",
                         sample_in_order=False, clean_cache=False, random_sample_sigma=0.1, vis: Visualizer = None,
-                        restricted_points=()):
+                        restricted_points=[]):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -260,7 +351,7 @@ class TrackingMethod:
         """Iterating over this provides a set of contact points corresponding to an object"""
 
     @abc.abstractmethod
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         """Return a predetermined controller that updates the method when querying for a command"""
 
     @abc.abstractmethod
@@ -270,6 +361,9 @@ class TrackingMethod:
     @abc.abstractmethod
     def get_labelled_moved_points(self, labels=None):
         """Return the final position of the tracked points as well as their object label"""
+
+    def register_transforms(self, T, best_T):
+        pass
 
 
 class SoftTrackingIterator:
@@ -295,7 +389,7 @@ class OurTrackingMethod(TrackingMethod):
     def visualize_contact_points(self, env):
         env.visualize_contact_set(self.contact_set)
 
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = OursRetrievalPredeterminedController(self.env.contact_detector, self.contact_set, controls)
         return self.ctrl
 
@@ -326,6 +420,23 @@ class OurSoftTrackingMethod(OurTrackingMethod):
                 labels[contact_indices[group].cpu().numpy()] = group_id + 1
 
         return labels, contact_pts
+
+
+class OurSoftTrackingWithRummagingMethod(OurSoftTrackingMethod):
+    def __init__(self, *args, policy_factory: typing.Callable[..., exploration.ShapeExplorationPolicy] = None,
+                 **kwargs):
+        self.policy_factory = policy_factory
+        super(OurSoftTrackingWithRummagingMethod, self).__init__(*args, **kwargs)
+
+    def create_controller(self, controls):
+        self.policy = self.policy_factory()
+        self.ctrl = OursRetrievalICPEVController(self.env.contact_detector, self.contact_set, self.policy, self, 1,
+                                                 max_steps=200, vis=self.env.vis,
+                                                 real_to_control_magnitude=self.env.MAX_PUSH_DIST)
+        return self.ctrl
+
+    def register_transforms(self, T, best_tsf_guess):
+        self.policy.register_transforms(T, best_tsf_guess)
 
 
 class HardTrackingIterator:
@@ -421,7 +532,7 @@ class SklearnTrackingMethod(CommonBaselineTrackingMethod):
     def method(self):
         return self.online_method
 
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = SklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 
@@ -467,7 +578,7 @@ class PHDFilterTrackingMethod(CommonBaselineTrackingMethod):
     def method(self):
         return self.g
 
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = PHDPredeterminedController(self.g, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 

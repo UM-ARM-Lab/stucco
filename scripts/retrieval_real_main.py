@@ -239,19 +239,19 @@ class RealPHDPredeterminedController(PHDPredeterminedController):
 
 
 class RealOurSoftTrackingMethod(OurSoftTrackingMethod):
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = RealRetrievalPredeterminedController(self.env.contact_detector, self.contact_set, controls, nu=2)
         return self.ctrl
 
 
 class RealSklearnTrackingMethod(SklearnTrackingMethod):
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = RealSklearnPredeterminedController(self.online_method, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 
 
 class RealPHDTrackingMethod(PHDFilterTrackingMethod):
-    def create_predetermined_controller(self, controls):
+    def create_controller(self, controls):
         self.ctrl = RealPHDPredeterminedController(self.g, self.env.contact_detector, controls, nu=2)
         return self.ctrl
 
@@ -259,7 +259,7 @@ class RealPHDTrackingMethod(PHDFilterTrackingMethod):
 def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait=0.):
     input("enter to start execution")
     controls, ret_ctrl = create_predetermined_controls(level)
-    ctrl: RetrievalPredeterminedController = method.create_predetermined_controller(controls)
+    ctrl: RetrievalPredeterminedController = method.create_controller(controls)
     obs = env._obs()
     info = None
     dtype = torch.float32

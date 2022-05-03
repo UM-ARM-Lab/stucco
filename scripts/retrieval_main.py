@@ -20,7 +20,7 @@ from stucco.env.env import InfoKeys
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
 from stucco import cfg
-from stucco import icp, tracking
+from stucco import icp, tracking, exploration
 from stucco.env import arm
 from stucco.env.arm import Levels
 from stucco.env_getters.arm import RetrievalGetter
@@ -28,7 +28,7 @@ from stucco.env.pybullet_env import state_action_color_pairs
 
 from stucco.retrieval_controller import rot_2d_mat_to_angle, \
     sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
-    SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod
+    SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod, OurSoftTrackingWithRummagingMethod
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -172,7 +172,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
         rand.seed(seed)
         predetermined_control[k] = np.add(v, (np.random.rand(len(v), 2) - 0.5) * ctrl_noise_max)
 
-    ctrl = method.create_predetermined_controller(predetermined_control[env.level])
+    ctrl = method.create_controller(predetermined_control[env.level])
 
     obs = env.reset()
     z = env._observe_ee(return_z=True)[-1]
@@ -180,7 +180,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
     model_name = "tomato_can" if env.level in [Levels.TOMATO_CAN] else "cheezit"
     sample_in_order = env.level in [Levels.TOMATO_CAN]
     model_points, model_normals, bb = sample_model_points(env.target_object_id, num_points=50, force_z=z, seed=0,
-                                                          name=model_name,
+                                                          name=model_name, clean_cache=True,
                                                           sample_in_order=sample_in_order)
     mph = model_points.clone().to(dtype=dtype)
     bb = bb.to(dtype=dtype)
@@ -210,10 +210,13 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             contact_id.append(info[InfoKeys.CONTACT_ID])
             all_configs = torch.tensor(np.array(ctrl.x_history), dtype=dtype, device=mph.device).view(-1, env.nx)
             dist_per_est_obj = []
+            transforms_per_object = []
+            best_segment_idx = 0
             for k, this_pts in enumerate(method):
                 this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
                 T, distances, _ = icp.icp_3(this_pts.view(-1, 2), model_points[:, :2],
                                             given_init_pose=best_tsf_guess, batch=30)
+                transforms_per_object.append(T)
                 T = T.inverse()
                 penetration = [object_robot_penetration_score(pt_to_config, all_configs, T[b], mph) for b in
                                range(T.shape[0])]
@@ -228,6 +231,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
                 if best_distance is None or best_tsf_distances < best_distance:
                     best_distance = best_tsf_distances
                     best_tsf_guess = T[best_tsf_index].inverse()
+                    best_segment_idx = k
 
                 # for j in range(len(T)):
                 #     tf_bb = bb @ T[j].transpose(-1, -2)
@@ -237,6 +241,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
                 #         env.vis.draw_2d_line(f"tmptbestline{k}-{j}.{i}", pt, np.subtract(next_pt, pt), color=(0, 1, 0),
                 #                              size=0.5, scale=1)
 
+            method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
             logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
             best_T = best_tsf_guess.inverse()
 
@@ -340,8 +345,21 @@ def grasp_at_pose(env, pose):
 
 
 def main(env, method_name, seed=0):
+    def icpev_policy_factory():
+        testObjId = env.create_target_obj([0, 0, 0], [0, 0, 0, 1], p.URDF_USE_INERTIA_FROM_FILE)
+        p.changeDynamics(testObjId, -1, mass=0)
+        p.changeVisualShape(testObjId, -1, rgbaColor=[0, 0, 0, 0])
+        # disable collision between object and every other object
+        for objId in env.objects:
+            p.setCollisionFilterPair(objId, testObjId, -1, -1, 0)
+
+        return exploration.ICPEVExplorationPolicy(testObjId)
+
     methods_to_run = {
         'ours': OurSoftTrackingMethod(env, RetrievalGetter.contact_parameters(env), arm.ArmPointToConfig(env)),
+        'ours-rummage': OurSoftTrackingWithRummagingMethod(env, RetrievalGetter.contact_parameters(env),
+                                                           arm.ArmPointToConfig(env),
+                                                           policy_factory=icpev_policy_factory),
         'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
                                               inertia_ratio=0.2,
                                               threshold=0.08),
@@ -378,7 +396,7 @@ def keyboard_control(env):
 
 parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
 parser.add_argument('method',
-                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
+                    choices=['ours', 'ours-rummage', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
                     help='which method to run')
 parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     default=[0],
