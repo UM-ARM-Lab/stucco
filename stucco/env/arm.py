@@ -658,7 +658,7 @@ class ArmEnv(PybulletEnv):
 
     def _aggregate_info(self):
         info = {key: np.stack(value, axis=0) for key, value in self._contact_info.items() if len(value)}
-        info['reaction'], info['torque'] = self._observe_reaction_force_torque()
+        info[InfoKeys.LOW_FREQ_REACTION_F], info[InfoKeys.LOW_FREQ_REACTION_T] = self._observe_reaction_force_torque()
         name = InfoKeys.DEE_IN_CONTACT
         if name in info:
             info[name] = info[name].sum(axis=0)
@@ -1484,6 +1484,18 @@ class ObjectRetrievalEnv(FloatingGripperEnv):
         pos = self.get_ee_pos(self.state)
         self._dd.draw_point('state', pos)
 
+    def create_target_obj(self, target_pos, target_rot, flags):
+        if self.level in [Levels.TOMATO_CAN]:
+            objId = p.loadURDF(
+                os.path.join(ycb_objects.getDataPath(), 'YcbTomatoSoupCan', "model.urdf"),
+                target_pos, target_rot, flags=flags, globalScaling=1.2)
+            p.changeDynamics(objId, -1, mass=2)
+        else:
+            objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbCrackerBox', "model.urdf"),
+                               target_pos, target_rot, flags=flags)
+            p.changeDynamics(objId, -1, mass=10)
+        return objId
+
     def _setup_objects(self):
         self.immovable = []
         self.movable = []
@@ -1498,15 +1510,7 @@ class ObjectRetrievalEnv(FloatingGripperEnv):
         target_pos = [self.goal[0], self.goal[1], z]
         target_rot = p.getQuaternionFromEuler([0, 0, self.goal[2]])
 
-        if self.level in [Levels.TOMATO_CAN]:
-            self.target_object_id = p.loadURDF(
-                os.path.join(ycb_objects.getDataPath(), 'YcbTomatoSoupCan', "model.urdf"),
-                target_pos, target_rot, flags=flags, globalScaling=1.2)
-            p.changeDynamics(self.target_object_id, -1, mass=2)
-        else:
-            self.target_object_id = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbCrackerBox', "model.urdf"),
-                                               target_pos, target_rot, flags=flags)
-            p.changeDynamics(self.target_object_id, -1, mass=10)
+        self.target_object_id = self.create_target_obj(target_pos, target_rot, flags)
         p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.8)
 
         self.movable.append(self.target_object_id)
@@ -1563,7 +1567,6 @@ class ObjectRetrievalEnv(FloatingGripperEnv):
             self.movable.append(p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbPottedMeatCan', "model.urdf"),
                                            [0.3, -0.15, z],
                                            p.getQuaternionFromEuler([0, 0, 0.]), flags=flags, globalScaling=1.5))
-
 
         for objId in self.immovable:
             p.changeVisualShape(objId, -1, rgbaColor=[0.2, 0.2, 0.2, 0.8])

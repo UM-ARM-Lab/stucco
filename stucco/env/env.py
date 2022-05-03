@@ -19,6 +19,8 @@ class InfoKeys:
     HIGH_FREQ_REACTION_T = "t"
     HIGH_FREQ_EE_POSE = "p"  # position cat with unit quaternion orientation
     HIGH_FREQ_CONTACT_POINT = "c"
+    LOW_FREQ_REACTION_F = "reaction"
+    LOW_FREQ_REACTION_T = "torque"
 
 
 class TrajectoryLoader(load_utils.DataLoader):
