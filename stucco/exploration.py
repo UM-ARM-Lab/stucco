@@ -411,7 +411,8 @@ class GPVarianceExploration(ShapeExplorationPolicy):
         return dx
 
 
-def score_icp(all_points, all_normals, distances):
+def score_icp(all_points, all_normals, distances, link_points=None, link_normals=None):
+    # also receives evaluation model points and normals in link frame
     distance_score = torch.mean(distances, dim=1)
     # min z should be close to 0
     physics_score = all_points[:, :, 2].min(dim=1).values.abs()

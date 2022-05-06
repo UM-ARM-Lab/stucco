@@ -33,7 +33,8 @@ from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_s
     surface_normal_at_point
 from stucco.env_getters.arm import RetrievalGetter
 from stucco import exploration
-from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
+from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
+    score_icp
 
 from stucco.retrieval_controller import sample_model_points, KeyboardController
 
@@ -52,7 +53,8 @@ logger = logging.getLogger(__name__)
 
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
-             register_num_points=500, eval_num_points=200, num_points_list=(5, 20, 30, 50, 100),
+             register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
+             save_best_tsf=True,
              model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
@@ -91,6 +93,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
+    best_tsf_guess = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
         model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=num_points, force_z=None,
@@ -118,11 +121,21 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
         B = 30
-        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=None, batch=B)
+        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+                                    batch=B)
 
         # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
         # all_points = link_to_current_tf.transform_points(model_points)
         # all_normals = link_to_current_tf.transform_normals(model_normals)
+
+        # score ICP and save best one to initialize for next step
+        if save_best_tsf:
+            link_to_current_tf = tf.Transform3d(matrix=T.inverse())
+            all_points = link_to_current_tf.transform_points(model_points)
+            all_normals = link_to_current_tf.transform_normals(model_normals)
+            score = score_icp(all_points, all_normals, distances).numpy()
+            best_tsf_index = np.argmin(score)
+            best_tsf_guess = T[best_tsf_index].inverse()
 
         # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
         # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
@@ -196,7 +209,8 @@ def plot_icp_results(names_to_include=None, logy=True):
 
     axs.set_ylabel('unidirectional chamfer dist (UCD [cm^2])')
     axs.set_xlabel('num test points')
-    axs.set_ylim(bottom=0)
+    if not logy:
+        axs.set_ylim(bottom=0)
     axs.legend()
     plt.show()
 
@@ -732,7 +746,7 @@ if __name__ == "__main__":
     for gt_num in [30, 50, 80, 100, 200, 500]:
         for seed in range(10):
             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                     name=f"{gt_num} model points", viewing_delay=0, num_points_list=(10, 40))
+                     name=f"save tsf {gt_num} mp", viewing_delay=0)
 
     plot_icp_results()
 
