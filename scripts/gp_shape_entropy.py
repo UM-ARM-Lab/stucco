@@ -2,6 +2,7 @@ import abc
 import argparse
 import time
 import typing
+import re
 
 import matplotlib
 import numpy as np
@@ -54,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
-             save_best_tsf=True, save_best_only_on_improvement=False,
+             save_best_tsf=False, save_best_only_on_improvement=False,
              model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
@@ -173,7 +174,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         print(f"num {num_points_list[i]} err {errors[i]}")
 
 
-def plot_icp_results(names_to_include=None, logy=True):
+def plot_icp_results(names_to_include=None, logy=True, combine_on_prefix=False):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     cache = torch.load(fullname)
 
@@ -181,25 +182,35 @@ def plot_icp_results(names_to_include=None, logy=True):
     if logy:
         axs.set_yscale('log')
 
+    to_plot = {}
     for name in cache.keys():
         if names_to_include is not None and name not in names_to_include:
             print(f"ignored {name}")
             continue
-        num_points = []
-        errors = []
+
         for seed in cache[name]:
             data = cache[name][seed]
             # short by num points
             a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
-            num_points.append(a)
-            errors.append(b)
 
+            # TODO give other ways of marginalizing over the results
+            to_plot_name = name
+            if combine_on_prefix:
+                suffix_start_idx = re.search(r"\d", name).start()
+                to_plot_name = name[:suffix_start_idx - 1] if suffix_start_idx > 0 else "base"
+
+            if to_plot_name not in to_plot:
+                to_plot[to_plot_name] = a, []
+            to_plot[to_plot_name][1].append(b)
+
+    for name, data in to_plot.items():
+        x = data[0]
+        errors = data[1]
         # assume all the num errors are the same
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
         mean = errors.mean(axis=0)
         std = errors.std(axis=0)
-        x = num_points[0]
         axs.plot(x, mean, label=name)
         # axs.errorbar(x, mean, std, label=name)
         axs.fill_between(x, mean - std, mean + std, alpha=0.2)
@@ -743,14 +754,15 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    experiment = ICPEVExperiment()
-    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    for gt_num in [30, 50, 80, 100, 200, 500]:
-        for seed in range(10):
-            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                     name=f"save tsf {gt_num} mp", viewing_delay=0)
+    # experiment = ICPEVExperiment()
+    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    # for gt_num in [30, 50, 80, 100, 200, 500]:
+    #     for seed in range(10):
+    #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+    #                  name=f"save on better {gt_num} mp", viewing_delay=0, save_best_tsf=True,
+    #                  save_best_only_on_improvement=True)
 
-    plot_icp_results()
+    plot_icp_results(combine_on_prefix=True)
 
     # experiment.run(run_name="icp_var_debug_3")
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
