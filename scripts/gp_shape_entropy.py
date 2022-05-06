@@ -123,7 +123,11 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # all_normals = link_to_current_tf.transform_normals(model_normals)
 
         # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
-        query_icp_error_ground_truth = torch.zeros(B, eval_num_points)
+        # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
+        # evaluation model points on the ground truth object surface, and the surface points of the object transformed
+        # by our estimated pose (which is infinitely dense)
+        # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
+        chamfer_distance = torch.zeros(B, eval_num_points)
         link_to_world = tf.Transform3d(matrix=T.inverse())
         m = link_to_world.get_matrix()
         for b in range(B):
@@ -135,14 +139,14 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             # transform our visual object to the pose
             for i in range(eval_num_points):
                 closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
-                query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
+                chamfer_distance[b, i] = closest[ContactInfo.DISTANCE] ** 2
 
             vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
-                           label=f"err: {query_icp_error_ground_truth[b].abs().mean().item():.5f}")
+                           label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
             vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
             time.sleep(viewing_delay)
 
-        errors_per_transform = query_icp_error_ground_truth.mean(dim=-1)
+        errors_per_transform = chamfer_distance.mean(dim=-1)
         errors.append(errors_per_transform.mean())
 
     cache[name][seed] = num_points_list, errors
@@ -177,7 +181,7 @@ def plot_icp_results(names_to_include=None):
         # axs.errorbar(x, mean, std, label=name)
         axs.fill_between(x, mean - std, mean + std, alpha=0.2)
 
-    axs.set_ylabel('avg ICP error')
+    axs.set_ylabel('unidirectional chamfer dist (UCD)')
     axs.set_xlabel('num test points')
     axs.set_ylim(bottom=0)
     axs.legend()
