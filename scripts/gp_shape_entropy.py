@@ -52,14 +52,17 @@ logger = logging.getLogger(__name__)
 
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
-             register_num_points=500, eval_num_points=200, model_name="mustard_normal"):
+             register_num_points=500, eval_num_points=200, num_points_list=(5, 20, 30, 50, 100),
+             model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
         if name not in cache or clean_cache:
             cache[name] = {}
+        if seed not in cache[name] or clean_cache:
+            cache[name][seed] = {}
     else:
-        cache = {name: {}}
+        cache = {name: {seed: {}}}
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_model_points(target_obj_id, num_points=eval_num_points,
@@ -87,7 +90,6 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
                                                                                  0.001455972652355926)]))
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
-    num_points_list = [5, 20, 30, 50, 100]
     errors = []
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
@@ -139,7 +141,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             # transform our visual object to the pose
             for i in range(eval_num_points):
                 closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
-                chamfer_distance[b, i] = closest[ContactInfo.DISTANCE] ** 2
+                chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
 
             vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
                            label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
@@ -149,17 +151,20 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         errors_per_transform = chamfer_distance.mean(dim=-1)
         errors.append(errors_per_transform.mean())
 
-    cache[name][seed] = num_points_list, errors
+    for num, err in zip(num_points_list, errors):
+        cache[name][seed][num] = err
     torch.save(cache, fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
 
 
-def plot_icp_results(names_to_include=None):
+def plot_icp_results(names_to_include=None, logy=True):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     cache = torch.load(fullname)
 
     fig, axs = plt.subplots(1, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+    if logy:
+        axs.set_yscale('log')
 
     for name in cache.keys():
         if names_to_include is not None and name not in names_to_include:
@@ -169,11 +174,14 @@ def plot_icp_results(names_to_include=None):
         errors = []
         for seed in cache[name]:
             data = cache[name][seed]
-            num_points.append(data[0])
-            errors.append(data[1])
+            # short by num points
+            a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
+            num_points.append(a)
+            errors.append(b)
 
         # assume all the num errors are the same
-        errors = np.stack(errors)
+        # convert to cm^2 (saved as mm^2, so divide by 10^2
+        errors = np.stack(errors) / 100
         mean = errors.mean(axis=0)
         std = errors.std(axis=0)
         x = num_points[0]
@@ -181,7 +189,12 @@ def plot_icp_results(names_to_include=None):
         # axs.errorbar(x, mean, std, label=name)
         axs.fill_between(x, mean - std, mean + std, alpha=0.2)
 
-    axs.set_ylabel('unidirectional chamfer dist (UCD)')
+        # print each numerically
+        for i in range(len(mean)):
+            print(f"{name} {x[i]:>4} : {mean[i]:.2f} ({std[i]:.2f})")
+        print()
+
+    axs.set_ylabel('unidirectional chamfer dist (UCD [cm^2])')
     axs.set_xlabel('num test points')
     axs.set_ylim(bottom=0)
     axs.legend()
@@ -710,12 +723,12 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    experiment = ICPEVExperiment()
-    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    for gt_num in [30, 50, 80, 100, 200, 500]:
-        for seed in range(10):
-            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                     name=f"{gt_num} model points", viewing_delay=0)
+    # experiment = ICPEVExperiment()
+    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    # for gt_num in [30, 50, 80, 100, 200, 500]:
+    #     for seed in range(10):
+    #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+    #                  name=f"{gt_num} model points", viewing_delay=0)
 
     plot_icp_results()
 
