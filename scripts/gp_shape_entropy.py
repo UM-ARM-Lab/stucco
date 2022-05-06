@@ -416,6 +416,10 @@ class ShapeExplorationExperiment(abc.ABC):
         self.dd = DebugDrawer(0.8, 0.8)
         self.dd.toggle_3d(True)
 
+        # log video
+        self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
+                                              "{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
+
         self.z = 0.1
         self.objId, self.ranges = self.make_obj(self.z)
         # purely visual object to allow us to see estimated pose
@@ -723,12 +727,12 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    # experiment = ICPEVExperiment()
-    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    # for gt_num in [30, 50, 80, 100, 200, 500]:
-    #     for seed in range(10):
-    #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                  name=f"{gt_num} model points", viewing_delay=0)
+    experiment = ICPEVExperiment()
+    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    for gt_num in [30, 50, 80, 100, 200, 500]:
+        for seed in range(10):
+            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+                     name=f"{gt_num} model points", viewing_delay=0, num_points_list=(10, 40))
 
     plot_icp_results()
 
