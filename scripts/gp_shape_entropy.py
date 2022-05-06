@@ -174,7 +174,22 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         print(f"num {num_points_list[i]} err {errors[i]}")
 
 
-def plot_icp_results(names_to_include=None, logy=True, combine_on_prefix=False):
+def marginalize_over_suffix(name):
+    suffix_start_idx = re.search(r"\d", name).start()
+    return name[:suffix_start_idx - 1] if suffix_start_idx > 0 else "base"
+
+
+def marginalize_over_prefix(name):
+    suffix_start_idx = re.search(r"\d", name).start()
+    return name[suffix_start_idx:] if suffix_start_idx > 0 else name
+
+
+def marginalize_over_registration_num(name):
+    registration_num = re.search(r"\d+", name)
+    return f"{registration_num[0]} registered points" if registration_num is not None else name
+
+
+def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=None):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     cache = torch.load(fullname)
 
@@ -193,11 +208,7 @@ def plot_icp_results(names_to_include=None, logy=True, combine_on_prefix=False):
             # short by num points
             a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
 
-            # TODO give other ways of marginalizing over the results
-            to_plot_name = name
-            if combine_on_prefix:
-                suffix_start_idx = re.search(r"\d", name).start()
-                to_plot_name = name[:suffix_start_idx - 1] if suffix_start_idx > 0 else "base"
+            to_plot_name = marginalize_over_name(name) if marginalize_over_name is not None else name
 
             if to_plot_name not in to_plot:
                 to_plot[to_plot_name] = a, []
@@ -762,7 +773,7 @@ if __name__ == "__main__":
     #                  name=f"save on better {gt_num} mp", viewing_delay=0, save_best_tsf=True,
     #                  save_best_only_on_improvement=True)
 
-    plot_icp_results(combine_on_prefix=True)
+    plot_icp_results(marginalize_over_name=marginalize_over_registration_num)
 
     # experiment.run(run_name="icp_var_debug_3")
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
