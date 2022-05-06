@@ -24,10 +24,11 @@ from pybullet_object_models import ycb_objects
 from pytorch_kinematics import transforms as tf
 from torchmcubes import marching_cubes
 
-from stucco import cfg
+from stucco import cfg, icp
 from stucco import tracking
 from stucco.env import arm
 from stucco.env.arm import Levels
+from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco.env_getters.arm import RetrievalGetter
@@ -50,70 +51,123 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
-def test_icp(target_obj_id, vis):
-    # z = env._observe_ee(return_z=True)[-1]
+def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
+             gt_num_points=500):
+    fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
+    if os.path.exists(fullname):
+        cache = torch.load(fullname)
+        if name not in cache or clean_cache:
+            cache[name] = {}
+    else:
+        cache = {name: {}}
+
+    # get a large number of model points to register to
+    model_points_gt, model_normals_large, _ = sample_model_points(target_obj_id, num_points=gt_num_points,
+                                                                  force_z=None,
+                                                                  mid_z=0.05,
+                                                                  seed=seed, clean_cache=False,
+                                                                  random_sample_sigma=0.2,
+                                                                  name="mustard_normal", vis=None,
+                                                                  restricted_points=(
+                                                                      [(0.01897749298212774, -0.008559855822130511,
+                                                                        0.001455972652355926)]))
     # # test ICP using fixed set of points
-    # o = p.getBasePositionAndOrientation(env.target_object_id)[0]
-    # contact_points = np.stack([
-    #     [o[0] - 0.045, o[1] - 0.05],
-    #     [o[0] - 0.05, o[1] - 0.01],
-    #     [o[0] - 0.045, o[1] + 0.02],
-    #     [o[0] - 0.045, o[1] + 0.04],
-    #     [o[0] - 0.01, o[1] + 0.05]
-    # ])
-    # actions = np.stack([
-    #     [0.7, -0.7],
-    #     [0.9, 0.2],
-    #     [0.8, 0],
-    #     [0.5, 0.6],
-    #     [0, -0.8]
-    # ])
-    # contact_points = np.stack(contact_points)
-    #
-    # angle = 0.5
-    # dx = -0.4
-    # dy = 0.2
-    # c, s = math.cos(angle), math.sin(angle)
-    # rot = np.array([[c, -s],
-    #                 [s, c]])
-    # contact_points = np.dot(contact_points, rot.T)
-    # contact_points[:, 0] += dx
-    # contact_points[:, 1] += dy
-    # actions = np.dot(actions, rot.T)
-    #
-    # state_c, action_c = state_action_color_pairs[0]
-    # env.visualize_state_actions("fixed", contact_points, actions, state_c, action_c, 0.05)
+    # can incrementally increase the number of model points used to evaluate how efficient the ICP is
+    num_points_list = [5, 20, 30, 50, 100]
+    errors = []
+    for num_points in num_points_list:
+        # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
+        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=num_points, force_z=None,
+                                                             mid_z=0.05,
+                                                             seed=seed, clean_cache=False, random_sample_sigma=0.2,
+                                                             name="mustard_normal", vis=None, restricted_points=(
+                [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
-    # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-    model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None, mid_z=0.05,
-                                                         seed=0, clean_cache=False, random_sample_sigma=0.2,
-                                                         name="mustard_normal", vis=vis, restricted_points=(
-            [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
+        device, dtype = model_points.device, model_points.dtype
+        pose = p.getBasePositionAndOrientation(target_obj_id)
+        link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+        model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
+        model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
+        model_points_world_frame_gt = link_to_current_tf_gt.transform_points(model_points_gt)
 
-    device, dtype = model_points.device, model_points.dtype
-    pose = p.getBasePositionAndOrientation(target_obj_id)
-    link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
-        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
-    model_points = link_to_current_tf.transform_points(model_points)
-    model_normals = link_to_current_tf.transform_normals(model_normals)
+        for i, pt in enumerate(model_points_world_frame):
+            vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+            vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.clear_visualization_after("mpt", i + 1)
+        vis.clear_visualization_after("mn", i + 1)
 
-    for i, pt in enumerate(model_points):
-        vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -model_normals[i], color=(0, 0, 0), size=2., scale=0.03)
+        rand.seed(seed)
+        # perform ICP and visualize the transformed points
+        # reverse engineer the transform
+        # compare not against current model points (which may be few), but against the maximum number of model points
+        B = 30
+        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_gt, given_init_pose=None, batch=B)
 
-    # perform ICP and visualize the transformed points
-    # history, transformed_contact_points = icp.icp(model_points[:, :2], contact_points,
-    #                                               point_pairs_threshold=len(contact_points), verbose=True)
+        # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
+        # all_points = link_to_current_tf.transform_points(model_points)
+        # all_normals = link_to_current_tf.transform_normals(model_normals)
 
-    # better to have few A than few B and then invert the transform
-    # T, distances, i = icp.icp_2(contact_points, model_points[:, :2])
-    # transformed_contact_points = np.dot(np.c_[contact_points, np.ones((contact_points.shape[0], 1))], T.T)
-    # T, distances, i = icp.icp_2(model_points[:, :2], contact_points)
-    # transformed_model_points = np.dot(np.c_[model_points[:, :2], np.ones((model_points.shape[0], 1))],
-    #                                   np.linalg.inv(T).T)
-    # for i, pt in enumerate(transformed_model_points):
-    #     pt = [pt[0], pt[1], z]
-    #     env.vis.draw_point(f"tmpt.{i}", pt, color=(0, 1, 0), length=0.003)
+        # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
+        query_icp_error_ground_truth = torch.zeros(B, gt_num_points)
+        link_to_world = tf.Transform3d(matrix=T.inverse())
+        m = link_to_world.get_matrix()
+        for b in range(B):
+            pos = m[b, :3, 3]
+            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
+            rot = tf.wxyz_to_xyzw(rot)
+            p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
+
+            # transform our visual object to the pose
+            for i in range(gt_num_points):
+                closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_gt[i])
+                query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
+
+            vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
+                           label=f"err: {query_icp_error_ground_truth[b].abs().mean().item():.5f}")
+            vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
+            time.sleep(viewing_delay)
+
+        errors_per_transform = query_icp_error_ground_truth.mean(dim=-1)
+        errors.append(errors_per_transform.mean())
+
+    cache[name][seed] = num_points_list, errors
+    torch.save(cache, fullname)
+    for i in range(len(num_points_list)):
+        print(f"num {num_points_list[i]} err {errors[i]}")
+
+
+def plot_icp_results(names_to_include=None):
+    fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
+    cache = torch.load(fullname)
+
+    fig, axs = plt.subplots(1, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+
+    for name in cache.keys():
+        if names_to_include is not None and name not in names_to_include:
+            print(f"ignored {name}")
+            continue
+        num_points = []
+        errors = []
+        for seed in cache[name]:
+            data = cache[name][seed]
+            num_points.append(data[0])
+            errors.append(data[1])
+
+        # assume all the num errors are the same
+        errors = np.stack(errors)
+        mean = errors.mean(axis=0)
+        std = errors.std(axis=0)
+        x = num_points[0]
+        axs.plot(x, mean, label=name)
+        # axs.errorbar(x, mean, std, label=name)
+        axs.fill_between(x, mean - std, mean + std, alpha=0.2)
+
+    axs.set_ylabel('avg ICP error')
+    axs.set_xlabel('num test points')
+    axs.set_ylim(bottom=0)
+    axs.legend()
+    plt.show()
 
 
 def franke(X, Y):
@@ -638,12 +692,17 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    # env = RetrievalGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI)
+    experiment = ICPEVExperiment()
+    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    for gt_num in [30, 50, 80, 100]:
+        for seed in range(10):
+            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, gt_num_points=gt_num,
+                     name=f"{gt_num} model points", viewing_delay=0)
 
-    # direct_fit_2d()
-    # experiment = ICPErrorVarianceExploration()
+    plot_icp_results()
+
     # experiment.run(run_name="icp_var_debug_3")
-    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
-    experiment.run(run_name="icp_var_sample_points_overstep")
+    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
+    # experiment.run(run_name="icp_var_sample_points_overstep")
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
