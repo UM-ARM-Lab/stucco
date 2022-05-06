@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
-             gt_num_points=500):
+             register_num_points=500, eval_num_points=200, model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -61,16 +61,30 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     else:
         cache = {name: {}}
 
+    # get a fixed number of model points to evaluate against (this will be independent on points used to register)
+    model_points_eval, model_normals_eval, _ = sample_model_points(target_obj_id, num_points=eval_num_points,
+                                                                   force_z=None,
+                                                                   mid_z=0.05,
+                                                                   seed=0, clean_cache=False,
+                                                                   random_sample_sigma=0.2,
+                                                                   name=model_name, vis=None,
+                                                                   restricted_points=(
+                                                                       [(0.01897749298212774,
+                                                                         -0.008559855822130511,
+                                                                         0.001455972652355926)]))
+
     # get a large number of model points to register to
-    model_points_gt, model_normals_large, _ = sample_model_points(target_obj_id, num_points=gt_num_points,
-                                                                  force_z=None,
-                                                                  mid_z=0.05,
-                                                                  seed=seed, clean_cache=False,
-                                                                  random_sample_sigma=0.2,
-                                                                  name="mustard_normal", vis=None,
-                                                                  restricted_points=(
-                                                                      [(0.01897749298212774, -0.008559855822130511,
-                                                                        0.001455972652355926)]))
+    model_points_register, model_normals_register, _ = sample_model_points(target_obj_id,
+                                                                           num_points=register_num_points,
+                                                                           force_z=None,
+                                                                           mid_z=0.05,
+                                                                           seed=seed, clean_cache=False,
+                                                                           random_sample_sigma=0.2,
+                                                                           name=model_name, vis=None,
+                                                                           restricted_points=(
+                                                                               [(0.01897749298212774,
+                                                                                 -0.008559855822130511,
+                                                                                 0.001455972652355926)]))
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     num_points_list = [5, 20, 30, 50, 100]
@@ -80,7 +94,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=num_points, force_z=None,
                                                              mid_z=0.05,
                                                              seed=seed, clean_cache=False, random_sample_sigma=0.2,
-                                                             name="mustard_normal", vis=None, restricted_points=(
+                                                             name=model_name, vis=None, restricted_points=(
                 [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
         device, dtype = model_points.device, model_points.dtype
@@ -89,7 +103,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
         model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
         model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
-        model_points_world_frame_gt = link_to_current_tf_gt.transform_points(model_points_gt)
+        model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
 
         for i, pt in enumerate(model_points_world_frame):
             vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
@@ -102,14 +116,14 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
         B = 30
-        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_gt, given_init_pose=None, batch=B)
+        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=None, batch=B)
 
         # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
         # all_points = link_to_current_tf.transform_points(model_points)
         # all_normals = link_to_current_tf.transform_normals(model_normals)
 
         # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
-        query_icp_error_ground_truth = torch.zeros(B, gt_num_points)
+        query_icp_error_ground_truth = torch.zeros(B, eval_num_points)
         link_to_world = tf.Transform3d(matrix=T.inverse())
         m = link_to_world.get_matrix()
         for b in range(B):
@@ -119,8 +133,8 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
 
             # transform our visual object to the pose
-            for i in range(gt_num_points):
-                closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_gt[i])
+            for i in range(eval_num_points):
+                closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
                 query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
 
             vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
@@ -694,9 +708,9 @@ if __name__ == "__main__":
 
     experiment = ICPEVExperiment()
     experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    for gt_num in [30, 50, 80, 100]:
+    for gt_num in [30, 50, 80, 100, 200, 500]:
         for seed in range(10):
-            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, gt_num_points=gt_num,
+            test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
                      name=f"{gt_num} model points", viewing_delay=0)
 
     plot_icp_results()
