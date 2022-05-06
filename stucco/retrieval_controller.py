@@ -244,10 +244,12 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
         cache = torch.load(fullname)
         if name not in cache or clean_cache:
             cache[name] = {}
-        if seed in cache[name]:
-            return cache[name][seed]
+        if seed not in cache[name]:
+            cache[name][seed] = {}
+        if num_points in cache[name][seed]:
+            return cache[name][seed][num_points]
     else:
-        cache = {name: {}}
+        cache = {name: {seed: {}}}
 
     def retrieve_valid_surface_pt(tester_pos, points):
         closest = closest_point_on_surface(object_id, tester_pos)
@@ -329,7 +331,7 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
     else:
         bb = torch.tensor(bb)
 
-    cache[name][seed] = points, normals, bb
+    cache[name][seed][num_points] = points, normals, bb
     torch.save(cache, fullname)
 
     return points, normals, bb
