@@ -234,9 +234,13 @@ def best_fit_transform_torch(A, B):
     AA = A - centroid_A
     BB = B - centroid_B
 
+    # Orthogonal Procrustes Problem
+    # minimize E(R,t) = sum_{i,j} ||bb_i - Raa_j - t||^2
+    # equivalent to minimizing ||BB - R AA||^2
     # rotation matrix
     H = AA.transpose(-1, -2) @ BB
     U, S, Vt = torch.svd(H)
+    # assume H is full rank, then the minimizing R and t are unique
     R = Vt.transpose(-1, -2) @ U.transpose(-1, -2)
 
     # special reflection case
