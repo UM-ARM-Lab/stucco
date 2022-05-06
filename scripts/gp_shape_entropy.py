@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
-             save_best_tsf=True,
+             save_best_tsf=True, save_best_only_on_improvement=False,
              model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
@@ -94,6 +94,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
     best_tsf_guess = None
+    best_tsf_score = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
         model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=num_points, force_z=None,
@@ -135,7 +136,8 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             all_normals = link_to_current_tf.transform_normals(model_normals)
             score = score_icp(all_points, all_normals, distances).numpy()
             best_tsf_index = np.argmin(score)
-            best_tsf_guess = T[best_tsf_index].inverse()
+            if not save_best_only_on_improvement or best_tsf_score is None or score < best_tsf_score:
+                best_tsf_guess = T[best_tsf_index].inverse()
 
         # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
         # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
