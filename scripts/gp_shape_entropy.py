@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
-             save_best_tsf=False, save_best_only_on_improvement=False,
+             save_best_tsf=False, save_best_only_on_improvement=False, normal_scale=0.05,
              model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
@@ -78,6 +78,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
                                                                        [(0.01897749298212774,
                                                                          -0.008559855822130511,
                                                                          0.001455972652355926)]))
+    device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(target_obj_id,
@@ -94,7 +95,16 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
-    best_tsf_guess = None
+    B = 30
+
+    # initialize guesses with a prior; since we're trying to retrieve an object, it's reasonable to have the prior
+    # that the object only varies in yaw (and is upright)
+    axis_angle = torch.zeros((B, 3), dtype=dtype, device=device)
+    axis_angle[:, -1] = torch.rand(B, dtype=dtype, device=device) * 2 * np.pi
+    R = tf.axis_angle_to_matrix(axis_angle)
+    init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
+    init_pose[:, :3, :3] = R
+    best_tsf_guess = init_pose
     best_tsf_score = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
@@ -104,7 +114,6 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
                                                              name=model_name, vis=None, restricted_points=(
                 [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
 
-        device, dtype = model_points.device, model_points.dtype
         pose = p.getBasePositionAndOrientation(target_obj_id)
         link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
             tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
@@ -122,9 +131,9 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # perform ICP and visualize the transformed points
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
-        B = 30
         T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
-                                    batch=B)
+                                    batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
+                                    B_normals=model_normals_register)
 
         # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
         # all_points = link_to_current_tf.transform_points(model_points)
@@ -199,7 +208,8 @@ def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=Non
 
     to_plot = {}
     for name in cache.keys():
-        if names_to_include is not None and name not in names_to_include:
+        to_plot_name = marginalize_over_name(name) if marginalize_over_name is not None else name
+        if names_to_include is not None and not names_to_include(name):
             print(f"ignored {name}")
             continue
 
@@ -208,12 +218,12 @@ def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=Non
             # short by num points
             a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
 
-            to_plot_name = marginalize_over_name(name) if marginalize_over_name is not None else name
-
             if to_plot_name not in to_plot:
                 to_plot[to_plot_name] = a, []
             to_plot[to_plot_name][1].append(b)
 
+    # sort by name
+    to_plot = dict(sorted(to_plot.items()))
     for name, data in to_plot.items():
         x = data[0]
         errors = data[1]
@@ -765,15 +775,15 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    # experiment = ICPEVExperiment()
-    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    # for gt_num in [30, 50, 80, 100, 200, 500]:
-    #     for seed in range(10):
-    #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                  name=f"save on better {gt_num} mp", viewing_delay=0, save_best_tsf=True,
-    #                  save_best_only_on_improvement=True)
-
-    plot_icp_results(marginalize_over_name=marginalize_over_registration_num)
+    experiment = ICPEVExperiment()
+    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    for normal_weight in [0.01, 0.5]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+                         name=f"prior upright normal weight {normal_weight} {gt_num} mp", viewing_delay=0,
+                         normal_scale=normal_weight)
+    plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
 
     # experiment.run(run_name="icp_var_debug_3")
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)

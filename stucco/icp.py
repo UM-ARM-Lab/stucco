@@ -210,7 +210,7 @@ def nearest_neighbor_torch(src, dst):
     return knn
 
 
-def best_fit_transform_torch(A, B):
+def best_fit_transform_torch(A, B, A_normals=None, B_normals=None):
     '''
     Calculates the least-squares best-fit transform that maps corresponding points A to B in m spatial dimensions
     Input:
@@ -233,6 +233,9 @@ def best_fit_transform_torch(A, B):
     centroid_B = torch.mean(B, dim=-2, keepdim=True)
     AA = A - centroid_A
     BB = B - centroid_B
+    if A_normals is not None and B_normals is not None:
+        AA = torch.cat((AA, A_normals), dim=1)
+        BB = torch.cat((BB, B_normals), dim=1)
 
     # Orthogonal Procrustes Problem
     # minimize E(R,t) = sum_{i,j} ||bb_i - Raa_j - t||^2
@@ -311,12 +314,15 @@ def icp_2(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     return T, distances, i
 
 
-def icp_3(A, B, given_init_pose=None, max_iterations=20, tolerance=0.001, batch=5):
+def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pose=None, max_iterations=20,
+          tolerance=1e-6, batch=5, vis=None):
     '''
     The Iterative Closest Point method: finds best-fit transform that maps points A on to points B
     Input:
         A: Mxm numpy array of source mD points
         B: Nxm numpy array of destination mD point
+        A_normals: Mxm numpy array of source mD surface normal vectors
+        B_normals: Nxm numpy array of destination mD surface normal vectors
         given_init_pose: (m+1)x(m+1) homogeneous transformation
         max_iterations: exit algorithm after max_iterations
         tolerance: convergence criteria
@@ -350,38 +356,108 @@ def icp_3(A, B, given_init_pose=None, max_iterations=20, tolerance=0.001, batch=
     init_pose = torch.eye(m + 1, dtype=A.dtype, device=A.device).repeat(batch, 1, 1)
     init_pose[:, :m, :m] = R[:, :m, :m]
     if given_init_pose is not None:
-        init_pose[0] = given_init_pose
+        # check if it's given as a batch
+        if len(given_init_pose.shape) == len(src.shape):
+            init_pose = given_init_pose
+        else:
+            init_pose[0] = given_init_pose
 
     # apply the initial pose estimation
     src = init_pose @ src
+    src_normals = A_normals if normal_scale > 0 else None
+    dst_normals = B_normals if normal_scale > 0 else None
+    if src_normals is not None and dst_normals is not None:
+        # NOTE normally we need to multiply by the transpose of the inverse to transform normals, but since we are sure
+        # the transform does not include scale, we can just use the matrix itself
+        # NOTE normals have to be transformed in the opposite direction as points!
+        src_normals = src_normals.repeat(batch, 1, 1) @ init_pose[:, :m, :m].transpose(-1, -2)
+        dst_normals = dst_normals.repeat(batch, 1, 1)
 
     prev_error = 0
+    err_list = []
+
+    if vis is not None:
+        for j in range(A.shape[0]):
+            pt = src[0, :m, j]
+            vis.draw_point(f"impt.{j}", pt, color=(0, 1, 0), length=0.003)
+            if src_normals is not None:
+                vis.draw_2d_line(f"imn.{j}", pt, -src_normals[0, j], color=(0, 0.4, 0), size=2., scale=0.03)
 
     for i in range(max_iterations):
         # find the nearest neighbors between the current source and destination points
-        distances, indices = nearest_neighbor_torch(src[:, :m, :].transpose(-2, -1), dst[:, :, :m])
+        # if given normals, scale and append them to find nearest neighbours
+        p = src[:, :m, :].transpose(-2, -1)
+        q = dst[:, :, :m]
+        if src_normals is not None:
+            p = torch.cat((p, src_normals * normal_scale), dim=-1)
+            q = torch.cat((q, dst_normals * normal_scale), dim=-1)
+        distances, indices = nearest_neighbor_torch(p, q)
         # currently only have a single batch so flatten
         distances = distances.view(batch, -1)
         indices = indices.view(batch, -1)
 
+        fit_from = src[:, :m, :].transpose(-2, -1)
         to_fit = []
         for b in range(batch):
             to_fit.append(dst[b, indices[b], :m])
         to_fit = torch.stack(to_fit)
+        normals_to_fit = None
+        if src_normals is not None:
+            normals_to_fit = []
+            for b in range(batch):
+                normals_to_fit.append(dst_normals[b, indices[b], :m])
+            normals_to_fit = torch.stack(normals_to_fit)
         # compute the transformation between the current source and nearest destination points
-        T, _, _ = best_fit_transform_torch(src[:, :m, :].transpose(-2, -1), to_fit)
+        # TODO figure out why transforms using normals does worse - why are the local minima bad?
+        T, _, _ = best_fit_transform_torch(fit_from, to_fit)
+        # , src_normals, normals_to_fit, normal_scale)
 
         # update the current source
-        # src = np.dot(T, src)
         src = T @ src
+        if src_normals is not None and dst_normals is not None:
+            src_normals = src_normals @ T[:, :m, :m].transpose(-1, -2)
+
+        if vis is not None:
+            for j in range(A.shape[0]):
+                pt = src[0, :m, j]
+                vis.draw_point(f"impt.{j}", pt, color=(0, 1, 0), length=0.003)
+                if src_normals is not None:
+                    vis.draw_2d_line(f"imn.{j}", pt, -src_normals[0, j], color=(0, 0.4, 0), size=2., scale=0.03)
 
         # check error
         mean_error = torch.mean(distances)
+        err_list.append(mean_error.item())
         if torch.abs(prev_error - mean_error) < tolerance:
             break
         prev_error = mean_error
 
     # calculate final transformation
+    from_normals = A_normals.repeat(batch, 1, 1) if src_normals is not None else None
     T, _, _ = best_fit_transform_torch(A.repeat(batch, 1, 1), src[:, :m, :].transpose(-2, -1))
+    # from_normals, src_normals, normal_scale)
+
+    if vis is not None:
+        # final evaluation
+        src = torch.ones((m + 1, A.shape[0]), dtype=A.dtype, device=A.device)
+        src[:m, :] = torch.clone(A.transpose(0, 1))
+        src = src.repeat(batch, 1, 1)
+        src = T @ src
+        p = src[:, :m, :].transpose(-2, -1)
+        q = dst[:, :, :m]
+        distances, indices = nearest_neighbor_torch(p, q)
+        # currently only have a single batch so flatten
+        distances = distances.view(batch, -1)
+        mean_error = torch.mean(distances)
+        err_list.append(mean_error.item())
+        if src_normals is not None and dst_normals is not None:
+            # NOTE normally we need to multiply by the transpose of the inverse to transform normals, but since we are sure
+            # the transform does not include scale, we can just use the matrix itself
+            src_normals = A_normals.repeat(batch, 1, 1) @ T[:, :m, :m].transpose(-1, -2)
+
+        for j in range(A.shape[0]):
+            pt = src[0, :m, j]
+            vis.draw_point(f"impt.{j}", pt, color=(0, 1, 0), length=0.003)
+            if src_normals is not None:
+                vis.draw_2d_line(f"imn.{j}", pt, -src_normals[0, j], color=(0, 0.4, 0), size=2., scale=0.03)
 
     return T, distances, i
