@@ -230,18 +230,59 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
         super(ICPEVSampleModelPointsPolicy, self).__init__(**kwargs)
         self.capped = capped
 
-    def sample_dx(self, xs, df):
-        x = xs[-1]
+    def _sample_model_points(self):
         pts = torch.zeros((self.model_points.shape[0], 3))
         # sample which ICP to use for each of the points
         which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.model_points.shape[0],), device=self.device)
+        # TODO transform all model points with transforms in a batch, then just index into that set of transformed point
         for i in range(self.B):
             selection = which_to_use == i
             if torch.any(selection):
                 link_to_current_tf = tf.Transform3d(matrix=self.T[i].inverse())
                 pts[selection] = link_to_current_tf.transform_points(self.model_points[selection])
+        return pts
 
+    def sample_dx(self, xs, df):
+        x = xs[-1]
+        pts = self._sample_model_points()
         dx_samples = pts[:self.N] - x
+        if self.capped:
+            # cap step size
+            over_step = dx_samples.norm() > self.alpha_evaluate
+            dx_samples[over_step] = dx_samples[over_step] / dx_samples[over_step].norm() * self.alpha_evaluate
+        return dx_samples
+
+
+class ICPEVReachabilityHeuristicPolicy(ICPEVSampleModelPointsPolicy):
+    """ICPEV exploration where we sample model points, but not unformly and instead based
+    on their distance to the current tangent plane"""
+
+    def __init__(self, sigma=0.0001, **kwargs):
+        # TODO this is related to the characteristic distance from our tracking
+        # TODO don't actually need this exponential; if just using a ranking just use
+        self.sigma = 20
+        super(ICPEVReachabilityHeuristicPolicy, self).__init__(**kwargs)
+
+    def sample_dx(self, xs, df):
+        x = xs[-1]
+        n = df[-1]
+        # pts = torch.zeros((self.model_points.shape[0], 3))
+        # sample which ICP to use for each of the points
+        # which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.model_points.shape[0],), device=self.device)
+        # TODO transform all model points with transforms in a batch, then just index into that set of transformed point
+        link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
+        all_candidates = link_to_current_tf.transform_points(self.model_points)
+
+        # TODO weight each model point by distance to tangent plane
+        diff = (all_candidates - x).view(-1, x.shape[0])
+        diff_to_tangent = diff @ n
+        sample_prob = torch.exp(-self.sigma * diff_to_tangent ** 2)
+        # either sample them, or select the highest prob N points
+        prob, sampled = torch.topk(sample_prob, 500)
+        dx_samples = diff[sampled]
+        # sampled_prob = torch.rand(sample_prob.shape, device=self.device)
+        # sampled = sampled_prob < sample_prob
+        # dx_samples = diff[sampled]
         if self.capped:
             # cap step size
             over_step = dx_samples.norm() > self.alpha_evaluate
