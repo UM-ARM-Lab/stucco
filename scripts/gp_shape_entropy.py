@@ -456,6 +456,7 @@ class ShapeExplorationExperiment(abc.ABC):
         p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
         self.dd = DebugDrawer(0.8, 0.8)
         self.dd.toggle_3d(True)
+        self.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
 
         # log video
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
@@ -481,8 +482,8 @@ class ShapeExplorationExperiment(abc.ABC):
 
     def run(self, seed=0, timesteps=202, build_model=False, clean_cache=False,
             model_name="mustard_normal", run_name=""):
-        if self.has_run:
-            return RuntimeError("Experiment can only be run once for now; missing reset function")
+        # if self.has_run:
+        #     return RuntimeError("Experiment can only be run once for now; missing reset function")
 
         # wait for it to settle
         for _ in range(1000):
@@ -570,6 +571,7 @@ class ShapeExplorationExperiment(abc.ABC):
                 torch.save(cache, fullname)
 
         self.has_run = True
+        self.dd.clear_visualizations()
         return error_at_model_points
 
 
@@ -749,6 +751,84 @@ class GPVarianceExperiment(ShapeExplorationExperiment):
             error_at_rep_surface.append(dists.mean())
 
 
+class Means:
+    HARMONIC = 0
+    ARITHMETIC = 1
+
+
+def plot_experiment_results(names_to_include=None, logy=False, marginalize_over_name=None, used_mean=Means.ARITHMETIC):
+    fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
+    cache = torch.load(fullname)
+
+    fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+
+    if logy:
+        axs.set_yscale('log')
+
+    to_plot = {}
+    for name in cache.keys():
+        to_plot_name = marginalize_over_name(name) if marginalize_over_name is not None else name
+        if names_to_include is not None and not names_to_include(name):
+            print(f"ignored {name}")
+            continue
+
+        for seed in cache[name]:
+            data = cache[name][seed]
+            # data = sorted(data.items(), key=lambda e: e[0])
+
+            error_t = data['t']
+            error_at_model_points = data['error_at_model_points']
+            # for backward compatibility
+            error_at_rep_surface = data.get('error_at_gp_surface', None)
+            if error_at_rep_surface is None:
+                error_at_rep_surface = data.get('error_at_rep_surface', None)
+
+            if to_plot_name not in to_plot:
+                to_plot[to_plot_name] = error_t, [], []
+            to_plot[to_plot_name][1].append(error_at_model_points)
+            to_plot[to_plot_name][2].append(error_at_rep_surface)
+
+    # sort by name
+    to_plot = dict(sorted(to_plot.items()))
+    for name, data in to_plot.items():
+        x = data[0]
+        errors_at_model = data[1]
+        errors_at_rep = data[2]
+
+        avg_err = torch.stack([torch.tensor(errors_at_rep), torch.tensor(errors_at_model)])
+        if used_mean is Means.HARMONIC:
+            avg_err = 1 / avg_err
+            avg_err = 2 / (avg_err.sum(dim=0))
+        elif used_mean is Means.ARITHMETIC:
+            avg_err = avg_err.mean(dim=0)
+
+        for i, errors in enumerate([errors_at_model, errors_at_rep, avg_err]):
+            # assume all the num errors are the same
+            # convert to cm^2 (saved as m^2, so multiply by 100^2)
+            errors = np.stack(errors)
+            mean = errors.mean(axis=0)
+            std = errors.std(axis=0)
+            axs[i].plot(x, mean, label=name)
+            # axs.errorbar(x, mean, std, label=name)
+            axs[i].fill_between(x, mean - std, mean + std, alpha=0.2)
+
+            # print each numerically
+            for i in range(len(mean)):
+                print(f"{name} {x[i]:>4} : {mean[i]:.2f} ({std[i]:.2f})")
+            print()
+
+    axs[0].set_ylabel('error at model points')
+    axs[1].set_ylabel('error at gp surface')
+    axs[2].set_ylabel('average error')
+    axs[-1].set_xlabel('step')
+    axs[-1].legend()
+    if not logy:
+        axs[0].set_ylim(bottom=0)
+        axs[1].set_ylim(bottom=0)
+        axs[2].set_ylim(bottom=0)
+    plt.show()
+
+
 parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
 parser.add_argument('method',
                     choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
@@ -781,7 +861,9 @@ if __name__ == "__main__":
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
-    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE)
-    experiment.run(run_name="icp_var_sample_points_overstep")
+    # experiment = ICPEVExperiment(exploration.ICPEVReachabilityHeuristicPolicy, plot_point_type=PlotPointType.NONE)
+    # for seed in range(10):
+    #     experiment.run(run_name="reachability_upright_prior", seed=seed)
+    plot_experiment_results(names_to_include=lambda name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name)
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
