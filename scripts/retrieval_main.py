@@ -190,7 +190,10 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
     ctrl.set_goal(env.goal[:2])
     info = None
     simTime = 0
-    best_tsf_guess = None
+
+    B = 30
+    device = model_points.device
+    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
     guess_pose = None
     pose_error_per_step = {}
 
@@ -215,12 +218,13 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             for k, this_pts in enumerate(method):
                 this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
                 T, distances, _ = icp.icp_3(this_pts.view(-1, 2), model_points[:, :2],
-                                            given_init_pose=best_tsf_guess, batch=30)
+                                            given_init_pose=best_tsf_guess, batch=B)
                 transforms_per_object.append(T)
                 T = T.inverse()
                 penetration = [object_robot_penetration_score(pt_to_config, all_configs, T[b], mph) for b in
                                range(T.shape[0])]
-                score = np.abs(penetration)
+                penetration_score = np.abs(penetration)
+                score = penetration_score + exploration.icp_plausible_score(T, distances, dim=2)
                 best_tsf_index = np.argmin(score)
 
                 # pick object with lowest variance in its translation estimate

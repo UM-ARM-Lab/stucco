@@ -69,7 +69,7 @@ class PlotPointType(enum.Enum):
 
 
 class ShapeExplorationPolicy(abc.ABC):
-    def __init__(self, debug_drawer=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, vis_obj_id=None):
+    def __init__(self, vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, vis_obj_id=None):
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
@@ -81,7 +81,7 @@ class ShapeExplorationPolicy(abc.ABC):
         self.device = None
         self.dtype = None
 
-        self.dd = debug_drawer
+        self.dd = vis
 
     def start_step(self, xs, df):
         """Bookkeeping at the start of a step"""
@@ -109,7 +109,7 @@ class ShapeExplorationPolicy(abc.ABC):
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def __init__(self, test_obj_id, num_samples_each_action=100, icp_batch=30, alpha=0.01, alpha_evaluate=0.05,
-                 verify_icp_error=False, **kwargs):
+                 verify_icp_error=False, normal_scale=0.05, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
@@ -118,8 +118,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.verify_icp_error = verify_icp_error
         self.N = num_samples_each_action
         self.B = icp_batch
+        self.normal_scale = normal_scale
 
-        self.best_tsf_guess = None
+        self.best_tsf_guess = random_upright_transforms(self.B, self.dtype, self.device)
         self.T = None
         # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
         self.unused_cache_transforms = False
@@ -147,8 +148,11 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 else:
                     # do ICP
                     this_pts = torch.stack(xs).reshape(-1, 3)
+                    this_normals = torch.stack(df).reshape(-1, 3)
                     self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
-                                                     batch=self.B)
+                                                     batch=self.B,
+                                                     normal_scale=self.normal_scale,
+                                                     A_normals=this_normals, B_normals=self.model_normals)
 
                 # sample points and see how they evaluate against this ICP result
                 dx_samples = self.sample_dx(xs, df)
@@ -209,9 +213,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # score ICP and save best one to initialize for next step
                 link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
                 all_points = link_to_current_tf.transform_points(self.model_points)
-                all_normals = link_to_current_tf.transform_normals(self.model_normals)
-                # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
-                score = score_icp(all_points, all_normals, distances).numpy()
+                # all_normals = link_to_current_tf.transform_normals(self.model_normals)
+                score = icp_plausible_score(self.T, all_points, distances).numpy()
                 best_tsf_index = np.argmin(score)
                 self.best_tsf_guess = self.T[best_tsf_index].inverse()
         else:
@@ -229,16 +232,16 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
 
     def sample_dx(self, xs, df):
         x = xs[-1]
-        pts = torch.zeros((self.N, 3))
+        pts = torch.zeros((self.model_points.shape[0], 3))
         # sample which ICP to use for each of the points
-        which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.N,), device=self.device)
+        which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.model_points.shape[0],), device=self.device)
         for i in range(self.B):
             selection = which_to_use == i
             if torch.any(selection):
                 link_to_current_tf = tf.Transform3d(matrix=self.T[i].inverse())
                 pts[selection] = link_to_current_tf.transform_points(self.model_points[selection])
 
-        dx_samples = pts - x
+        dx_samples = pts[:self.N] - x
         if self.capped:
             # cap step size
             over_step = dx_samples.norm() > self.alpha_evaluate
@@ -315,7 +318,7 @@ class GPVarianceExploration(ShapeExplorationPolicy):
             all_normals = link_to_current_tf.transform_normals(self.model_normals)
 
             # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
-            score = score_icp(all_points, all_normals, distances).numpy()
+            score = icp_plausible_score(all_points, all_normals, distances).numpy()
             best_tsf_index = np.argmin(score)
             self.best_tsf_guess = T[best_tsf_index].inverse()
 
@@ -411,14 +414,36 @@ class GPVarianceExploration(ShapeExplorationPolicy):
         return dx
 
 
-def score_icp(all_points, all_normals, distances, link_points=None, link_normals=None):
-    # also receives evaluation model points and normals in link frame
-    distance_score = torch.mean(distances, dim=1)
-    # min z should be close to 0
-    physics_score = all_points[:, :, 2].min(dim=1).values.abs()
-    # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
+def random_upright_transforms(B, dtype, device):
+    # initialize guesses with a prior; since we're trying to retrieve an object, it's reasonable to have the prior
+    # that the object only varies in yaw (and is upright)
+    axis_angle = torch.zeros((B, 3), dtype=dtype, device=device)
+    axis_angle[:, -1] = torch.rand(B, dtype=dtype, device=device) * 2 * np.pi
+    R = tf.axis_angle_to_matrix(axis_angle)
+    init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
+    init_pose[:, :3, :3] = R
+    return init_pose
 
-    return distance_score + physics_score
+
+def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3):
+    """Score an ICP result on domain-specific plausibility; lower score is better.
+    This function is designed for objects that manipulator robots will usually interact with"""
+    # score T on rotation's distance away from prior of being upright
+    if dim == 3:
+        rot_axis = tf.matrix_to_axis_angle(T[..., :dim, :dim])
+        rot_axis /= rot_axis.norm(dim=-1, keepdim=True)
+        # project onto the z axis (take z component)
+        # should be positive; upside down will be penalized and so will sideways
+        upright_score = (1 - rot_axis[..., -1]) * upright_bias
+    else:
+        upright_score = 0
+
+    # inherent local minima quality from ICP
+    distance_score = torch.mean(distances, dim=1)
+    # should not float off the ground
+    physics_score = all_points[:, :, 2].min(dim=1).values.abs()
+
+    return distance_score + upright_score + physics_score
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):

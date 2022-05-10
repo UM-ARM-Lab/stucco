@@ -35,7 +35,7 @@ from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_s
 from stucco.env_getters.arm import RetrievalGetter
 from stucco import exploration
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
-    score_icp
+    icp_plausible_score
 
 from stucco.retrieval_controller import sample_model_points, KeyboardController
 
@@ -97,14 +97,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     errors = []
     B = 30
 
-    # initialize guesses with a prior; since we're trying to retrieve an object, it's reasonable to have the prior
-    # that the object only varies in yaw (and is upright)
-    axis_angle = torch.zeros((B, 3), dtype=dtype, device=device)
-    axis_angle[:, -1] = torch.rand(B, dtype=dtype, device=device) * 2 * np.pi
-    R = tf.axis_angle_to_matrix(axis_angle)
-    init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
-    init_pose[:, :3, :3] = R
-    best_tsf_guess = init_pose
+    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
     best_tsf_score = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
@@ -144,7 +137,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             link_to_current_tf = tf.Transform3d(matrix=T.inverse())
             all_points = link_to_current_tf.transform_points(model_points)
             all_normals = link_to_current_tf.transform_normals(model_normals)
-            score = score_icp(all_points, all_normals, distances).numpy()
+            score = icp_plausible_score(all_points, all_normals, distances).numpy()
             best_tsf_index = np.argmin(score)
             if not save_best_only_on_improvement or best_tsf_score is None or score < best_tsf_score:
                 best_tsf_guess = T[best_tsf_index].inverse()
@@ -500,7 +493,7 @@ class ShapeExplorationExperiment(abc.ABC):
         name = f"{model_name} {run_name}".strip()
 
         # these are in object frame (aligned with [0,0,0], [0,0,0,1]
-        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=100, force_z=None,
+        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=500, force_z=None,
                                                              mid_z=0.05,
                                                              seed=0, clean_cache=build_model,
                                                              random_sample_sigma=0.2,
@@ -532,8 +525,8 @@ class ShapeExplorationExperiment(abc.ABC):
 
         x = torch.tensor(closest_point_on_surface(self.objId, np.random.rand(3))[ContactInfo.POS_A])
         self.dd.draw_point('x', x, height=x[2])
-        n = -torch.tensor(surface_normal_at_point(self.objId, x))
-        self.dd.draw_2d_line('n', x, n, (0, 0.5, 0), scale=0.2)
+        n = torch.tensor(surface_normal_at_point(self.objId, x))
+        self.dd.draw_2d_line('n', x, -n, (0, 0.5, 0), scale=0.2)
 
         xs = [x]
         df = [n]
@@ -556,8 +549,8 @@ class ShapeExplorationExperiment(abc.ABC):
             self.dd.draw_transition(x, new_x)
             x = new_x
             self.dd.draw_point('x', x, height=x[2])
-            n = -torch.tensor(surface_normal_at_point(self.objId, x))
-            self.dd.draw_2d_line('n', x, n, (0, 0.5, 0), scale=0.2)
+            n = torch.tensor(surface_normal_at_point(self.objId, x))
+            self.dd.draw_2d_line('n', x, -n, (0, 0.5, 0), scale=0.2)
 
             xs.append(x)
             df.append(n)
@@ -592,7 +585,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
-        self.set_policy(policy_factory(test_obj_id=self.testObjId, **policy_args))
+        self.set_policy(policy_factory(test_obj_id=self.testObjId, vis=self.dd, **policy_args))
 
     def _start_step(self, xs, df):
         pass
@@ -775,18 +768,20 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    experiment = ICPEVExperiment()
-    experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-    for normal_weight in [0.01, 0.5]:
-        for gt_num in [500]:
-            for seed in range(10):
-                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                         name=f"prior upright normal weight {normal_weight} {gt_num} mp", viewing_delay=0,
-                         normal_scale=normal_weight)
-    plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
+    # experiment = ICPEVExperiment()
+    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    # for normal_weight in [0.05]:
+    #     for gt_num in [500]:
+    #         for seed in range(10):
+    #             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+    #                      name=f"prior upright normal weight {normal_weight} {gt_num} mp", viewing_delay=0,
+    #                      normal_scale=normal_weight)
+    # plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
 
-    # experiment.run(run_name="icp_var_debug_3")
-    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy)
-    # experiment.run(run_name="icp_var_sample_points_overstep")
+    # experiment = ICPEVExperiment()
+    # experiment.run(run_name="prior upright slide")
+    # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
+    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE)
+    experiment.run(run_name="icp_var_sample_points_overstep")
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
