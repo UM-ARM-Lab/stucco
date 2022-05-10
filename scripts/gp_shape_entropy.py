@@ -858,12 +858,15 @@ if __name__ == "__main__":
     #                      normal_scale=normal_weight)
     # plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
 
+    policy_args = {"normal_scale": 0., "upright_bias": 0.}
+    exp_name = "no_normal_no_upright_prior"
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
-    # experiment = ICPEVExperiment(exploration.ICPEVReachabilityHeuristicPolicy, plot_point_type=PlotPointType.NONE)
-    # for seed in range(10):
-    #     experiment.run(run_name="reachability_upright_prior", seed=seed)
-    plot_experiment_results(names_to_include=lambda name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name)
+    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
+                                 policy_args=policy_args)
+    for seed in range(10):
+        experiment.run(run_name=exp_name, seed=seed)
+    # plot_experiment_results(names_to_include=lambda name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name)
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")

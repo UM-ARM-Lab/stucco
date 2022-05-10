@@ -109,7 +109,7 @@ class ShapeExplorationPolicy(abc.ABC):
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def __init__(self, test_obj_id, num_samples_each_action=100, icp_batch=30, alpha=0.01, alpha_evaluate=0.05,
-                 verify_icp_error=False, normal_scale=0.05, **kwargs):
+                 verify_icp_error=False, normal_scale=0.05, upright_bias=0.3, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
@@ -120,17 +120,19 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.B = icp_batch
         self.normal_scale = normal_scale
 
-        self.best_tsf_guess = random_upright_transforms(self.B, self.dtype, self.device)
+        self.upright_bias = upright_bias
+        self.best_tsf_guess = random_upright_transforms(self.B, self.dtype, self.device) if upright_bias > 0 else None
         self.T = None
         # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
         self.unused_cache_transforms = False
 
         self.testObjId = test_obj_id
 
-    def register_transforms(self, T, best_T):
+    def register_transforms(self, T, best_T=None):
         self.T = T
-        self.best_tsf_guess = best_T
         self.unused_cache_transforms = True
+        if best_T is not None:
+            self.best_tsf_guess = best_T
 
     def sample_dx(self, xs, df):
         dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
@@ -214,7 +216,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
                 all_points = link_to_current_tf.transform_points(self.model_points)
                 # all_normals = link_to_current_tf.transform_normals(self.model_normals)
-                score = icp_plausible_score(self.T, all_points, distances).numpy()
+                score = icp_plausible_score(self.T, all_points, distances, upright_bias=self.upright_bias).numpy()
                 best_tsf_index = np.argmin(score)
                 self.best_tsf_guess = self.T[best_tsf_index].inverse()
         else:
@@ -231,15 +233,11 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
         self.capped = capped
 
     def _sample_model_points(self):
-        pts = torch.zeros((self.model_points.shape[0], 3))
         # sample which ICP to use for each of the points
-        which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.model_points.shape[0],), device=self.device)
-        # TODO transform all model points with transforms in a batch, then just index into that set of transformed point
-        for i in range(self.B):
-            selection = which_to_use == i
-            if torch.any(selection):
-                link_to_current_tf = tf.Transform3d(matrix=self.T[i].inverse())
-                pts[selection] = link_to_current_tf.transform_points(self.model_points[selection])
+        link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
+        all_candidates = link_to_current_tf.transform_points(self.model_points).view(-1, 3)
+        idx = torch.randperm(all_candidates.shape[0], device=self.device)[:self.N]
+        pts = all_candidates[idx]
         return pts
 
     def sample_dx(self, xs, df):
@@ -266,10 +264,6 @@ class ICPEVReachabilityHeuristicPolicy(ICPEVSampleModelPointsPolicy):
     def sample_dx(self, xs, df):
         x = xs[-1]
         n = df[-1]
-        # pts = torch.zeros((self.model_points.shape[0], 3))
-        # sample which ICP to use for each of the points
-        # which_to_use = torch.randint(low=0, high=self.B - 1, size=(self.model_points.shape[0],), device=self.device)
-        # TODO transform all model points with transforms in a batch, then just index into that set of transformed point
         link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
         all_candidates = link_to_current_tf.transform_points(self.model_points)
 
