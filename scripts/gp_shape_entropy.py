@@ -482,16 +482,13 @@ class ShapeExplorationExperiment(abc.ABC):
 
     def run(self, seed=0, timesteps=202, build_model=False, clean_cache=False,
             model_name="mustard_normal", run_name=""):
-        # if self.has_run:
-        #     return RuntimeError("Experiment can only be run once for now; missing reset function")
+        target_obj_id = self.objId
+        vis = self.dd
+        name = f"{model_name} {run_name}".strip()
 
         # wait for it to settle
         for _ in range(1000):
             p.stepSimulation()
-
-        target_obj_id = self.objId
-        vis = self.dd
-        name = f"{model_name} {run_name}".strip()
 
         # these are in object frame (aligned with [0,0,0], [0,0,0,1]
         model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=500, force_z=None,
@@ -566,10 +563,13 @@ class ShapeExplorationExperiment(abc.ABC):
                 error_t.append(t)
                 # save every time in case we break somewhere in between
                 cache[name][randseed] = {'t': error_t,
+                                         'xs': torch.stack(xs),
+                                         'df': torch.stack(df),
                                          'error_at_model_points': error_at_model_points,
                                          'error_at_rep_surface': error_at_rep_surface}
                 torch.save(cache, fullname)
 
+        torch.save(cache, fullname)
         self.has_run = True
         self.dd.clear_visualizations()
         return error_at_model_points
