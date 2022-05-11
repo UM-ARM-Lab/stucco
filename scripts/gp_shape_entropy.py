@@ -128,11 +128,8 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
                                     batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
                                     B_normals=model_normals_register)
 
-        # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
-        # all_points = link_to_current_tf.transform_points(model_points)
-        # all_normals = link_to_current_tf.transform_normals(model_normals)
-
         # score ICP and save best one to initialize for next step
+        # TODO should probably score on the points used for registration rather than the explored points
         if save_best_tsf:
             link_to_current_tf = tf.Transform3d(matrix=T.inverse())
             all_points = link_to_current_tf.transform_points(model_points)
@@ -142,38 +139,122 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
             if not save_best_only_on_improvement or best_tsf_score is None or score < best_tsf_score:
                 best_tsf_guess = T[best_tsf_index].inverse()
 
-        # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
-        # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
-        # evaluation model points on the ground truth object surface, and the surface points of the object transformed
-        # by our estimated pose (which is infinitely dense)
-        # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
-        chamfer_distance = torch.zeros(B, eval_num_points)
-        link_to_world = tf.Transform3d(matrix=T.inverse())
-        m = link_to_world.get_matrix()
-        for b in range(B):
-            pos = m[b, :3, 3]
-            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
-            rot = tf.wxyz_to_xyzw(rot)
-            p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
-
-            # transform our visual object to the pose
-            for i in range(eval_num_points):
-                closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
-                chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
-
-            vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
-                           label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
-            vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
-            time.sleep(viewing_delay)
-
-        errors_per_transform = chamfer_distance.mean(dim=-1)
-        errors.append(errors_per_transform.mean())
+        evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
 
     for num, err in zip(num_points_list, errors):
         cache[name][seed][num] = err
     torch.save(cache, fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
+
+
+def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, viewing_delay=0.1,
+                               register_num_points=500, eval_num_points=200,
+                               normal_scale=0.05, upto_index=-1, upright_bias=0,
+                               model_name="mustard_normal", run_name=""):
+    name = f"{model_name} {run_name}".strip()
+    fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
+    cache = torch.load(fullname)
+    data = cache[name][seed]
+
+    for _ in range(1000):
+        p.stepSimulation()
+
+    # get a fixed number of model points to evaluate against (this will be independent on points used to register)
+    model_points_eval, model_normals_eval, _ = sample_model_points(target_obj_id, num_points=eval_num_points,
+                                                                   force_z=None,
+                                                                   mid_z=0.05,
+                                                                   seed=0, clean_cache=False,
+                                                                   random_sample_sigma=0.2,
+                                                                   name=model_name, vis=None,
+                                                                   restricted_points=(
+                                                                       [(0.01897749298212774,
+                                                                         -0.008559855822130511,
+                                                                         0.001455972652355926)]))
+    device, dtype = model_points_eval.device, model_points_eval.dtype
+
+    # get a large number of model points to register to
+    model_points_register, model_normals_register, _ = sample_model_points(target_obj_id,
+                                                                           num_points=register_num_points,
+                                                                           force_z=None,
+                                                                           mid_z=0.05,
+                                                                           seed=seed, clean_cache=False,
+                                                                           random_sample_sigma=0.2,
+                                                                           name=model_name, vis=None,
+                                                                           restricted_points=(
+                                                                               [(0.01897749298212774,
+                                                                                 -0.008559855822130511,
+                                                                                 0.001455972652355926)]))
+    # # test ICP using fixed set of points
+    # can incrementally increase the number of model points used to evaluate how efficient the ICP is
+    errors = []
+    B = 30
+
+    best_tsf_guess = None if upright_bias == 0 else exploration.random_upright_transforms(B, dtype, device)
+
+    # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
+    pose = p.getBasePositionAndOrientation(target_obj_id)
+    link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+    model_points_world_frame = data['xs'][:upto_index]
+    model_normals_world_frame = data['df'][:upto_index]
+    model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
+
+    for i, pt in enumerate(model_points_world_frame):
+        vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+        vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+    vis.clear_visualization_after("mpt", i + 1)
+    vis.clear_visualization_after("mn", i + 1)
+
+    rand.seed(seed)
+    # perform ICP and visualize the transformed points
+    # reverse engineer the transform
+    # compare not against current model points (which may be few), but against the maximum number of model points
+    T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+                                batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
+                                B_normals=model_normals_register)
+
+    link_to_current_tf = tf.Transform3d(matrix=T.inverse())
+    all_points = link_to_current_tf.transform_points(model_points_register)
+    all_normals = link_to_current_tf.transform_normals(model_normals_register)
+    score = icp_plausible_score(T, all_points, distances, upright_bias=upright_bias).numpy()
+    best_tsf_index = np.argmin(score)
+    best_tsf_guess = T[best_tsf_index].inverse()
+
+    evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
+    # TODO visualize best TSF using separate color
+
+
+def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay):
+    # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
+    # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
+    # evaluation model points on the ground truth object surface, and the surface points of the object transformed
+    # by our estimated pose (which is infinitely dense)
+    # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
+    B = T.shape[0]
+    eval_num_points = model_points_world_frame_eval.shape[0]
+
+    chamfer_distance = torch.zeros(B, eval_num_points)
+    link_to_world = tf.Transform3d(matrix=T.inverse())
+    m = link_to_world.get_matrix()
+    for b in range(B):
+        pos = m[b, :3, 3]
+        rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
+        rot = tf.wxyz_to_xyzw(rot)
+        p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
+
+        # transform our visual object to the pose
+        for i in range(eval_num_points):
+            closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
+            chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
+
+        vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
+                       label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
+        vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
+        time.sleep(viewing_delay)
+
+        errors_per_transform = chamfer_distance.mean(dim=-1)
+        errors.append(errors_per_transform.mean())
 
 
 def marginalize_over_suffix(name):
@@ -398,28 +479,6 @@ def direct_fit_2d():
     # ax[1, 2].set_title('Predicted y-derivatives')
     plt.show()
     print('done')
-
-
-def keyboard_control(env):
-    print("waiting for arrow keys to be pressed to command a movement")
-    contact_params = RetrievalGetter.contact_parameters(env)
-    pt_to_config = arm.ArmPointToConfig(env)
-    contact_set = tracking.ContactSetSoft(pt_to_config, contact_params)
-    ctrl = KeyboardController(env.contact_detector, contact_set, nu=2)
-
-    obs = env._obs()
-    info = None
-    while not ctrl.done():
-        try:
-            env.visualize_contact_set(contact_set)
-            u = ctrl.command(obs, info)
-            obs, _, done, info = env.step(u)
-        except:
-            pass
-        time.sleep(0.05)
-    print(ctrl.u_history)
-    cleaned_u = [u for u in ctrl.u_history if u != (0, 0)]
-    print(cleaned_u)
 
 
 def make_mustard_bottle(z):
@@ -848,8 +907,7 @@ if __name__ == "__main__":
     level = task_map[args.task]
     method_name = args.method
 
-    # experiment = ICPEVExperiment()
-    # experiment.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+    experiment = ICPEVExperiment()
     # for normal_weight in [0.05]:
     #     for gt_num in [500]:
     #         for seed in range(10):
@@ -860,13 +918,17 @@ if __name__ == "__main__":
 
     policy_args = {"normal_scale": 0., "upright_bias": 0.}
     exp_name = "no_normal_no_upright_prior"
+    test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
+                               register_num_points=500,
+                               run_name=exp_name, viewing_delay=0, normal_scale=0)
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
-    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
-                                 policy_args=policy_args)
-    for seed in range(10):
-        experiment.run(run_name=exp_name, seed=seed)
-    # plot_experiment_results(names_to_include=lambda name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name)
+    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
+    #                              policy_args=policy_args)
+    # for seed in range(10):
+    #     experiment.run(run_name=exp_name, seed=seed)
+    # plot_experiment_results(names_to_include=lambda
+    #     name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name)
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
