@@ -112,7 +112,6 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     B = 30
 
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
-    best_tsf_score = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
         model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
@@ -134,20 +133,11 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # perform ICP and visualize the transformed points
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
-        T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
-                                    batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
-                                    B_normals=model_normals_register)
-
-        # score ICP and save best one to initialize for next step
-        # TODO should probably score on the points used for registration rather than the explored points
-        if save_best_tsf:
-            link_to_current_tf = tf.Transform3d(matrix=T.inverse())
-            all_points = link_to_current_tf.transform_points(model_points)
-            all_normals = link_to_current_tf.transform_normals(model_normals)
-            score = icp_plausible_score(all_points, all_normals, distances).numpy()
-            best_tsf_index = np.argmin(score)
-            if not save_best_only_on_improvement or best_tsf_score is None or score < best_tsf_score:
-                best_tsf_guess = T[best_tsf_index].inverse()
+        # T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+        #                             batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
+        #                             B_normals=model_normals_register)
+        T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
+                                         given_init_pose=best_tsf_guess, batch=B)
 
         evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
 
@@ -218,33 +208,26 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     # T = T.inverse()
 
     # -- try out SimpleICP - seems to work pretty well
-    from simpleicp import PointCloud, SimpleICP
-
-    Ts = []
-    for b in range(5):
-        pc_fix = PointCloud(model_points_register.numpy(), columns=["x", "y", "z"])
-        pc_mov = PointCloud(model_points_world_frame.numpy(), columns=["x", "y", "z"])
-        icp_4 = SimpleICP()
-        icp_4.add_point_clouds(pc_fix, pc_mov)
-        rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
-        rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
-        T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
-                                                                           rbp_observed_values=rbp_observed_values,
-                                                                           rbp_observation_weights=rbp_observation_weights)
-        Ts.append(T)
-    T = torch.from_numpy(np.stack(Ts))
-    distances = None
+    # from simpleicp import PointCloud, SimpleICP
+    #
+    # Ts = []
+    # for b in range(5):
+    #     pc_fix = PointCloud(model_points_register.numpy(), columns=["x", "y", "z"])
+    #     pc_mov = PointCloud(model_points_world_frame.numpy(), columns=["x", "y", "z"])
+    #     icp_4 = SimpleICP()
+    #     icp_4.add_point_clouds(pc_fix, pc_mov)
+    #     rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
+    #     rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
+    #     T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
+    #                                                                        rbp_observed_values=rbp_observed_values,
+    #                                                                        rbp_observation_weights=rbp_observation_weights)
+    #     Ts.append(T)
+    # T = torch.from_numpy(np.stack(Ts))
+    # distances = None
 
     # -- try out pytorch3d
-    # from pytorch3d.ops import iterative_closest_point
-    # best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
-    # init_transform = best_tsf_guess[:, :3, :3], best_tsf_guess[:, :3, 3], torch.ones(B, device=device, dtype=dtype)
-    # res = iterative_closest_point(model_points_world_frame.repeat(B, 1, 1), model_points_register.repeat(B, 1, 1),
-    #                               init_transform=init_transform, allow_reflection=True)
-    # T = torch.eye(4).repeat(B, 1, 1)
-    # T[:, :3, :3] = res.RTs.R
-    # T[:, :3, 3] = res.RTs.T
-    # distances = res.rmse
+    T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+                                     batch=B)
 
     # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
     # all_points = link_to_current_tf.transform_points(model_points_register)
@@ -942,24 +925,26 @@ if __name__ == "__main__":
 
     experiment = ICPEVExperiment()
     # -- Build object models (sample points from their surface)
-    # for num_points in [100, 200, 500]:
-    #     build_model(experiment.objId, experiment.dd, "mustard_normal", seed=0, num_points=num_points, pause_at_end=True)
+    # for num_points in (5, 10, 20, 30, 40, 50, 100):
+    #     for seed in range(10):
+    #         build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
+    #                     pause_at_end=False)
 
     # -- ICP experiment
-    # for normal_weight in [0.05]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                      name=f"prior upright normal weight {normal_weight} {gt_num} mp", viewing_delay=0,
-    #                      normal_scale=normal_weight)
-    # plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
+    for normal_weight in [0.05]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+                         name=f"pytorch3d icp {gt_num} mp", viewing_delay=0, num_points_list=[5, 10, 20, 30, 40, 50],
+                         normal_scale=normal_weight)
+    plot_icp_results()
 
     # -- exploration experiment
     # policy_args = {"normal_scale": 0., "upright_bias": 0.}
-    exp_name = "no_normal_no_upright_prior"
-    test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
-                               register_num_points=500,
-                               run_name=exp_name, viewing_delay=0.5, normal_scale=0.05)
+    # exp_name = "no_normal_no_upright_prior"
+    # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
+    #                            register_num_points=500,
+    #                            run_name=exp_name, viewing_delay=0.5, normal_scale=0.05)
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)

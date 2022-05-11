@@ -2,6 +2,7 @@ import math
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import torch
+from pytorch3d.ops import iterative_closest_point
 
 
 # from https://github.com/richardos/icp
@@ -450,3 +451,17 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
             print(dist)
 
     return T, distances, i
+
+
+def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
+    if given_init_pose is not None:
+        given_init_pose = given_init_pose[:, :3, :3], given_init_pose[:, :3, 3], torch.ones(batch, device=A.device,
+                                                                                            dtype=A.dtype)
+
+    res = iterative_closest_point(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                  allow_reflection=True)
+    T = torch.eye(4).repeat(batch, 1, 1)
+    T[:, :3, :3] = res.RTs.R.transpose(-1, -2)
+    T[:, :3, 3] = res.RTs.T
+    distances = res.rmse
+    return T, distances
