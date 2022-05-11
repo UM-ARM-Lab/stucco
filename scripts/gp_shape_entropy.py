@@ -196,9 +196,9 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     current_to_link_tf = link_to_current_tf_gt.inverse()
     model_points = current_to_link_tf.transform_points(model_points_world_frame)
     model_normals = current_to_link_tf.transform_normals(model_normals_world_frame)
-    for i, pt in enumerate(model_points):
+    for i, pt in enumerate(model_points_world_frame):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -model_normals[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
     vis.clear_visualization_after("mpt", i + 1)
     vis.clear_visualization_after("mn", i + 1)
 
@@ -217,7 +217,7 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     #                             A_normals=model_normals_register, vis=vis)
     # T = T.inverse()
 
-    # try out SimpleICP - seems to work pretty well
+    # -- try out SimpleICP - seems to work pretty well
     from simpleicp import PointCloud, SimpleICP
 
     Ts = []
@@ -234,6 +234,17 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
         Ts.append(T)
     T = torch.from_numpy(np.stack(Ts))
     distances = None
+
+    # -- try out pytorch3d
+    # from pytorch3d.ops import iterative_closest_point
+    # best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    # init_transform = best_tsf_guess[:, :3, :3], best_tsf_guess[:, :3, 3], torch.ones(B, device=device, dtype=dtype)
+    # res = iterative_closest_point(model_points_world_frame.repeat(B, 1, 1), model_points_register.repeat(B, 1, 1),
+    #                               init_transform=init_transform, allow_reflection=True)
+    # T = torch.eye(4).repeat(B, 1, 1)
+    # T[:, :3, :3] = res.RTs.R
+    # T[:, :3, 3] = res.RTs.T
+    # distances = res.rmse
 
     # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
     # all_points = link_to_current_tf.transform_points(model_points_register)
