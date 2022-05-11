@@ -154,7 +154,7 @@ class OursRetrievalICPEVController(Controller):
 
         self.policy = policy
         self.next_target = None
-        self.next_target_close_enough = 0.01        # points and normals
+        self.next_target_close_enough = 0.01  # points and normals
         self.x_history = []
         self.n_history = []
 
@@ -236,20 +236,23 @@ def rot_2d_mat_to_angle(T):
     return torch.atan2(T[:, 1, 0], T[:, 0, 0])
 
 
-def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force_z=None, mid_z=0, seed=0, name="",
+def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, force_z=None, mid_z=0, seed=0, name="",
                         sample_in_order=False, clean_cache=False, random_sample_sigma=0.1, vis: Visualizer = None,
-                        restricted_points=[]):
+                        restricted_points=[], other_rejection_criteria=None):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
-        if name not in cache or clean_cache:
+        if name not in cache:
             cache[name] = {}
         if seed not in cache[name]:
             cache[name][seed] = {}
-        if num_points in cache[name][seed]:
+        if not clean_cache and num_points in cache[name][seed]:
             return cache[name][seed][num_points]
     else:
         cache = {name: {seed: {}}}
+
+    if object_id is None:
+        raise RuntimeError(f"Expect model points to be cached for {name} {seed} {num_points}")
 
     def retrieve_valid_surface_pt(tester_pos, points):
         closest = closest_point_on_surface(object_id, tester_pos)
@@ -258,6 +261,8 @@ def sample_model_points(object_id, num_points=100, reject_too_close=0.002, force
         if force_z is not None:
             pt = (pt[0], pt[1], force_z)
             normal = (normal[0], normal[1], 0)
+        if other_rejection_criteria is not None and other_rejection_criteria(pt, normal):
+            return None, None
         if len(points) > 0:
             d = np.subtract(points + restricted_points, pt)
             d = np.linalg.norm(d, axis=1)

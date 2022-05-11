@@ -52,6 +52,37 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 
 logger = logging.getLogger(__name__)
 
+restricted_pts = {
+    'mustard_normal': [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926), (0.0314, -0.0126, 0.2169),
+                       (-0.0348, -0.0616, -0.0007), (0.0450, 0.0021, 0.2208), (-0.0177, -0.0202, 0.2220),
+                       (-0.0413, 0.0119, -0.0006), (0.0126, 0.0265, 0.0018), (-0.0090, 0.0158, 0.2203),
+                       (-0.0114, -0.0462, -0.0009), (0.0103, -0.0085, 0.2200), (0.0096, -0.0249, 0.2201)]
+}
+
+reject_model_pts = {
+    'mustard_normal': lambda pt, normal: abs(normal[2]) > 0.99 and abs(pt[2]) < 0.01
+}
+
+
+def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=False):
+    points, normals, _ = sample_model_points(target_obj_id, reject_too_close=0.006,
+                                             num_points=num_points,
+                                             force_z=None,
+                                             mid_z=0.05,
+                                             seed=seed, clean_cache=True,
+                                             random_sample_sigma=0.2,
+                                             name=model_name, vis=None,
+                                             other_rejection_criteria=reject_model_pts[model_name],
+                                             restricted_points=restricted_pts[model_name])
+    for i, pt in enumerate(points):
+        vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
+        vis.draw_2d_line(f"mn.{i}", pt, -normals[i], color=(0, 0, 0), size=2., scale=0.03)
+
+    print(f"finished building {model_name} {seed} {num_points}")
+    if pause_at_end:
+        input("paused for inspection")
+    vis.clear_visualizations()
+
 
 def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
@@ -68,30 +99,13 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         cache = {name: {seed: {}}}
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(target_obj_id, num_points=eval_num_points,
-                                                                   force_z=None,
-                                                                   mid_z=0.05,
-                                                                   seed=0, clean_cache=False,
-                                                                   random_sample_sigma=0.2,
-                                                                   name=model_name, vis=None,
-                                                                   restricted_points=(
-                                                                       [(0.01897749298212774,
-                                                                         -0.008559855822130511,
-                                                                         0.001455972652355926)]))
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(target_obj_id,
-                                                                           num_points=register_num_points,
-                                                                           force_z=None,
-                                                                           mid_z=0.05,
-                                                                           seed=seed, clean_cache=False,
-                                                                           random_sample_sigma=0.2,
-                                                                           name=model_name, vis=None,
-                                                                           restricted_points=(
-                                                                               [(0.01897749298212774,
-                                                                                 -0.008559855822130511,
-                                                                                 0.001455972652355926)]))
+    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
+                                                                           name=model_name, seed=0)
+
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
@@ -101,11 +115,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
     best_tsf_score = None
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=num_points, force_z=None,
-                                                             mid_z=0.05,
-                                                             seed=seed, clean_cache=False, random_sample_sigma=0.2,
-                                                             name=model_name, vis=None, restricted_points=(
-                [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
+        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
 
         pose = p.getBasePositionAndOrientation(target_obj_id)
         link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -150,7 +160,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
 
 def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, viewing_delay=0.1,
                                register_num_points=500, eval_num_points=200,
-                               normal_scale=0.05, upto_index=-1, upright_bias=0,
+                               normal_scale=0.05, upto_index=-1, upright_bias=0.1,
                                model_name="mustard_normal", run_name=""):
     name = f"{model_name} {run_name}".strip()
     fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
@@ -161,30 +171,13 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
         p.stepSimulation()
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(target_obj_id, num_points=eval_num_points,
-                                                                   force_z=None,
-                                                                   mid_z=0.05,
-                                                                   seed=0, clean_cache=False,
-                                                                   random_sample_sigma=0.2,
-                                                                   name=model_name, vis=None,
-                                                                   restricted_points=(
-                                                                       [(0.01897749298212774,
-                                                                         -0.008559855822130511,
-                                                                         0.001455972652355926)]))
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(target_obj_id,
-                                                                           num_points=register_num_points,
-                                                                           force_z=None,
-                                                                           mid_z=0.05,
-                                                                           seed=seed, clean_cache=False,
-                                                                           random_sample_sigma=0.2,
-                                                                           name=model_name, vis=None,
-                                                                           restricted_points=(
-                                                                               [(0.01897749298212774,
-                                                                                 -0.008559855822130511,
-                                                                                 0.001455972652355926)]))
+    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
+                                                                           name=model_name, seed=0)
+
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
@@ -200,9 +193,12 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     model_normals_world_frame = data['df'][:upto_index]
     model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
 
-    for i, pt in enumerate(model_points_world_frame):
+    current_to_link_tf = link_to_current_tf_gt.inverse()
+    model_points = current_to_link_tf.transform_points(model_points_world_frame)
+    model_normals = current_to_link_tf.transform_normals(model_normals_world_frame)
+    for i, pt in enumerate(model_points):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.draw_2d_line(f"mn.{i}", pt, -model_normals[i], color=(0, 0, 0), size=2., scale=0.03)
     vis.clear_visualization_after("mpt", i + 1)
     vis.clear_visualization_after("mn", i + 1)
 
@@ -210,16 +206,41 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     # perform ICP and visualize the transformed points
     # reverse engineer the transform
     # compare not against current model points (which may be few), but against the maximum number of model points
-    T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
-                                batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
-                                B_normals=model_normals_register)
+    # TODO remove after; give the ground truth transform to ICP - if it isn't a local minima then there must be a bug in how we're passing data in
+    # best_tsf_guess = link_to_current_tf_gt.get_matrix().inverse().repeat(B, 1, 1)
+    # T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+    #                             batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
+    #                             B_normals=model_normals_register, vis=vis)
+    # best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
+    # T, distances, _ = icp.icp_3(model_points_register, model_points_world_frame, given_init_pose=best_tsf_guess,
+    #                             batch=B, normal_scale=normal_scale, B_normals=model_normals_world_frame,
+    #                             A_normals=model_normals_register, vis=vis)
+    # T = T.inverse()
 
-    link_to_current_tf = tf.Transform3d(matrix=T.inverse())
-    all_points = link_to_current_tf.transform_points(model_points_register)
-    all_normals = link_to_current_tf.transform_normals(model_normals_register)
-    score = icp_plausible_score(T, all_points, distances, upright_bias=upright_bias).numpy()
-    best_tsf_index = np.argmin(score)
-    best_tsf_guess = T[best_tsf_index].inverse()
+    # try out SimpleICP - seems to work pretty well
+    from simpleicp import PointCloud, SimpleICP
+
+    Ts = []
+    for b in range(5):
+        pc_fix = PointCloud(model_points_register.numpy(), columns=["x", "y", "z"])
+        pc_mov = PointCloud(model_points_world_frame.numpy(), columns=["x", "y", "z"])
+        icp_4 = SimpleICP()
+        icp_4.add_point_clouds(pc_fix, pc_mov)
+        rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
+        rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
+        T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
+                                                                           rbp_observed_values=rbp_observed_values,
+                                                                           rbp_observation_weights=rbp_observation_weights)
+        Ts.append(T)
+    T = torch.from_numpy(np.stack(Ts))
+    distances = None
+
+    # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
+    # all_points = link_to_current_tf.transform_points(model_points_register)
+    # all_normals = link_to_current_tf.transform_normals(model_normals_register)
+    # score = icp_plausible_score(T, all_points, distances, upright_bias=upright_bias).numpy()
+    # best_tsf_index = np.argmin(score)
+    # best_tsf_guess = T[best_tsf_index].inverse()
 
     evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
     # TODO visualize best TSF using separate color
@@ -250,7 +271,8 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis
 
         vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
                        label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
-        vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
+        if distances is not None:
+            vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
         time.sleep(viewing_delay)
 
         errors_per_transform = chamfer_distance.mean(dim=-1)
@@ -554,8 +576,8 @@ class ShapeExplorationExperiment(abc.ABC):
                                                              mid_z=0.05,
                                                              seed=0, clean_cache=build_model,
                                                              random_sample_sigma=0.2,
-                                                             name=model_name, vis=vis, restricted_points=(
-                [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926)]))
+                                                             name=model_name, vis=vis,
+                                                             restricted_points=restricted_pts[model_name])
         pose = p.getBasePositionAndOrientation(target_obj_id)
 
         self.policy.save_model_points(model_points, model_normals, pose)
@@ -908,6 +930,11 @@ if __name__ == "__main__":
     method_name = args.method
 
     experiment = ICPEVExperiment()
+    # -- Build object models (sample points from their surface)
+    # for num_points in [100, 200, 500]:
+    #     build_model(experiment.objId, experiment.dd, "mustard_normal", seed=0, num_points=num_points, pause_at_end=True)
+
+    # -- ICP experiment
     # for normal_weight in [0.05]:
     #     for gt_num in [500]:
     #         for seed in range(10):
@@ -916,11 +943,12 @@ if __name__ == "__main__":
     #                      normal_scale=normal_weight)
     # plot_icp_results(names_to_include=lambda name: name.startswith("prior upright"))
 
-    policy_args = {"normal_scale": 0., "upright_bias": 0.}
+    # -- exploration experiment
+    # policy_args = {"normal_scale": 0., "upright_bias": 0.}
     exp_name = "no_normal_no_upright_prior"
     test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
                                register_num_points=500,
-                               run_name=exp_name, viewing_delay=0, normal_scale=0)
+                               run_name=exp_name, viewing_delay=0.5, normal_scale=0.05)
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)

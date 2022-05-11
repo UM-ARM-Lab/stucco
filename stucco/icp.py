@@ -210,7 +210,7 @@ def nearest_neighbor_torch(src, dst):
     return knn
 
 
-def best_fit_transform_torch(A, B, A_normals=None, B_normals=None):
+def best_fit_transform_torch(A, B):
     '''
     Calculates the least-squares best-fit transform that maps corresponding points A to B in m spatial dimensions
     Input:
@@ -233,9 +233,6 @@ def best_fit_transform_torch(A, B, A_normals=None, B_normals=None):
     centroid_B = torch.mean(B, dim=-2, keepdim=True)
     AA = A - centroid_A
     BB = B - centroid_B
-    if A_normals is not None and B_normals is not None:
-        AA = torch.cat((AA, A_normals), dim=1)
-        BB = torch.cat((BB, B_normals), dim=1)
 
     # Orthogonal Procrustes Problem
     # minimize E(R,t) = sum_{i,j} ||bb_i - Raa_j - t||^2
@@ -315,7 +312,7 @@ def icp_2(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
 
 
 def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pose=None, max_iterations=20,
-          tolerance=1e-6, batch=5, vis=None):
+          tolerance=1e-4, batch=5, vis=None):
     '''
     The Iterative Closest Point method: finds best-fit transform that maps points A on to points B
     Input:
@@ -358,7 +355,7 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
     if given_init_pose is not None:
         # check if it's given as a batch
         if len(given_init_pose.shape) == len(src.shape):
-            init_pose = given_init_pose
+            init_pose = given_init_pose.clone()
         else:
             init_pose[0] = given_init_pose
 
@@ -401,16 +398,8 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
         for b in range(batch):
             to_fit.append(dst[b, indices[b], :m])
         to_fit = torch.stack(to_fit)
-        normals_to_fit = None
-        if src_normals is not None:
-            normals_to_fit = []
-            for b in range(batch):
-                normals_to_fit.append(dst_normals[b, indices[b], :m])
-            normals_to_fit = torch.stack(normals_to_fit)
         # compute the transformation between the current source and nearest destination points
-        # TODO figure out why transforms using normals does worse - why are the local minima bad?
         T, _, _ = best_fit_transform_torch(fit_from, to_fit)
-        # , src_normals, normals_to_fit, normal_scale)
 
         # update the current source
         src = T @ src
@@ -432,9 +421,7 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
         prev_error = mean_error
 
     # calculate final transformation
-    from_normals = A_normals.repeat(batch, 1, 1) if src_normals is not None else None
     T, _, _ = best_fit_transform_torch(A.repeat(batch, 1, 1), src[:, :m, :].transpose(-2, -1))
-    # from_normals, src_normals, normal_scale)
 
     if vis is not None:
         # final evaluation
@@ -459,5 +446,7 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
             vis.draw_point(f"impt.{j}", pt, color=(0, 1, 0), length=0.003)
             if src_normals is not None:
                 vis.draw_2d_line(f"imn.{j}", pt, -src_normals[0, j], color=(0, 0.4, 0), size=2., scale=0.03)
+        for dist in err_list:
+            print(dist)
 
     return T, distances, i
