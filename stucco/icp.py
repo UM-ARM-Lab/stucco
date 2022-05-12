@@ -465,3 +465,24 @@ def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
     T[:, :3, 3] = res.RTs.T
     distances = res.rmse
     return T, distances
+
+
+def icp_simpleicp(A, B, given_init_pose=None, batch=30):
+    from simpleicp import PointCloud, SimpleICP
+
+    Ts = []
+    for b in range(batch):
+        pc_fix = PointCloud(A.numpy(), columns=["x", "y", "z"])
+        pc_mov = PointCloud(B.numpy(), columns=["x", "y", "z"])
+        icp_4 = SimpleICP()
+        icp_4.add_point_clouds(pc_fix, pc_mov)
+        # upright prior
+        rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
+        rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
+        T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
+                                                                           rbp_observed_values=rbp_observed_values,
+                                                                           rbp_observation_weights=rbp_observation_weights)
+        Ts.append(T)
+    T = torch.from_numpy(np.stack(Ts))
+    distances = None
+    return T, distances
