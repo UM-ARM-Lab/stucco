@@ -465,29 +465,60 @@ def direct_fit_2d():
     print('done')
 
 
-def make_mustard_bottle(z):
-    objId = p.loadURDF(os.path.join(ycb_objects.getDataPath(), 'YcbMustardBottle', "model.urdf"),
-                       [0., 0., z * 3],
-                       p.getQuaternionFromEuler([0, 0, -1]), globalScaling=2.5)
-    ranges = np.array([[-.3, .3], [-.3, .3], [-0.1, .8]])
-    return objId, ranges
-
-
 def make_sphere_preconfig(z):
     objId = make_sphere(z, [0., 0, z])
     ranges = np.array([[-.2, .2], [-.2, .2], [-.1, .4]])
     return objId, ranges
 
 
+class PybulletObjectFactory(abc.ABC):
+    def __init__(self, name, scale=2.5):
+        self.name = name
+        self.scale = scale
+
+    @abc.abstractmethod
+    def make_collision_obj(self, z, rgba=None):
+        """Create collision object of fixed and position along x-y; returns the object ID and bounding box"""
+
+    @abc.abstractmethod
+    def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
+        """Create visual object, reusing a visual shape for instancing if given;
+        returns the visual shape ID and object ID"""
+
+
+class YCBObjectFactory(PybulletObjectFactory):
+    def __init__(self, name, ycb_name, **kwargs):
+        super(YCBObjectFactory, self).__init__(name, **kwargs)
+        self.ycb_name = ycb_name
+
+    def make_collision_obj(self, z, rgba=None):
+        obj_id = p.loadURDF(os.path.join(ycb_objects.getDataPath(), self.ycb_name, "model.urdf"),
+                            [0., 0., z * 3],
+                            p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale)
+        ranges = np.array([[-.15, .15], [-.15, .15], [-0.05, .5]]) * self.scale
+        if rgba is not None:
+            p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
+        return obj_id, ranges
+
+    def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
+        if visual_shape_id is None:
+            visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
+                                                  fileName=os.path.join(ycb_objects.getDataPath(), self.ycb_name,
+                                                                        "textured_simple_reoriented.obj"),
+                                                  rgbaColor=rgba, meshScale=[self.scale, self.scale, self.scale])
+        obj_id = p.createMultiBody(baseMass=0, basePosition=pos, baseVisualShapeIndex=visual_shape_id)
+        return visual_shape_id, obj_id
+
+
 class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, make_obj=make_mustard_bottle, eval_period=10,
+    def __init__(self, obj_factory=YCBObjectFactory("mustard_normal", "YcbMustardBottle"), eval_period=10,
                  plot_per_eval_period=1,
                  plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
         self.policy: typing.Optional[ShapeExplorationPolicy] = None
-        self.make_obj = make_obj
+        self.obj_factory = obj_factory
         self.plot_point_type = plot_point_type
         self.plot_per_eval_period = plot_per_eval_period
         self.eval_period = eval_period
@@ -506,12 +537,11 @@ class ShapeExplorationExperiment(abc.ABC):
                                               "{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
 
         self.z = 0.1
-        self.objId, self.ranges = self.make_obj(self.z)
-        # purely visual object to allow us to see estimated pose
-        self.visId, _ = self.make_obj(self.z)
+        self.objId, self.ranges = self.obj_factory.make_collision_obj(self.z)
+        # also needs to be collision since we will test collision against it to get distance
+        self.visId, _ = self.obj_factory.make_collision_obj(self.z, rgba=[0.2, 0.8, 1.0, 0.5])
         p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.visId, -1, mass=0)
-        p.changeVisualShape(self.visId, -1, rgbaColor=[0.2, 0.8, 1.0, 0.5])
         p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
 
         self.has_run = False
@@ -624,13 +654,17 @@ class ICPEVExperiment(ShapeExplorationExperiment):
             policy_args = {}
         super(ICPEVExperiment, self).__init__(**kwargs)
 
-        self.testObjId, _ = self.make_obj(self.z)
+        # TODO pass object creation onto the policy for debugging
+        # TODO plot distribution of poses and the candidate points in terms of their information metric
+        # test object needs collision shape to test against, so we can't use visual only object
+        self.testObjId, _ = self.obj_factory.make_collision_obj(self.z)
         p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.testObjId, -1, mass=0)
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
-        self.set_policy(policy_factory(test_obj_id=self.testObjId, vis=self.dd, **policy_args))
+        obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
+        self.set_policy(policy_factory(obj_frame_sdf, vis=self.dd, **policy_args))
 
     def _start_step(self, xs, df):
         pass
@@ -799,7 +833,7 @@ class Means:
     ARITHMETIC = 1
 
 
-def plot_experiment_results(names_to_include=None, logy=False, marginalize_over_name=None, used_mean=Means.ARITHMETIC):
+def plot_exploration_results(names_to_include=None, logy=False, marginalize_over_name=None, used_mean=Means.ARITHMETIC):
     fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
     cache = torch.load(fullname)
 
@@ -903,16 +937,16 @@ if __name__ == "__main__":
         for gt_num in [500]:
             for seed in range(10):
                 test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                         name=f"pytorch3d icp {gt_num} mp", viewing_delay=0, num_points_list=[5, 10, 20, 30, 40, 50],
+                         name=f"pytorch3d icp {gt_num} mp", viewing_delay=0, num_points_list=[100],
                          normal_scale=normal_weight)
-    plot_icp_results()
+    # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    # policy_args = {"normal_scale": 0., "upright_bias": 0.}
-    # exp_name = "no_normal_no_upright_prior"
+    # policy_args = {"upright_bias": 0.1}
+    # exp_name = "pytorch3d"
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
-    #                            run_name=exp_name, viewing_delay=0.5, normal_scale=0.05)
+    #                            run_name=exp_name, viewing_delay=0.5)
     # experiment = ICPEVExperiment()
     # experiment.run(run_name="prior upright slide")
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
@@ -920,7 +954,7 @@ if __name__ == "__main__":
     #                              policy_args=policy_args)
     # for seed in range(10):
     #     experiment.run(run_name=exp_name, seed=seed)
-    # plot_experiment_results(names_to_include=lambda
+    # plot_exploration_results(names_to_include=lambda
     #     name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name)
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")

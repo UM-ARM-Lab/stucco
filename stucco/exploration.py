@@ -108,9 +108,43 @@ class ShapeExplorationPolicy(abc.ABC):
         self.model_normals_world_transformed_ground_truth = link_to_current_tf.transform_normals(self.model_normals)
 
 
+class ObjectFrameSDF(abc.ABC):
+    @abc.abstractmethod
+    def __call__(self, points_in_object_frame):
+        """
+        Evaluate the signed distance field at given points in the object frame
+
+        :param points_in_object_frame: B x N x d d-dimensional points (2 or 3) of B batches; located in object frame
+        :return: B x N signed distance from closest object surface in m
+        """
+
+
+class PyBulletNaiveSDF(ObjectFrameSDF):
+    def __init__(self, test_obj_id, plot_point_type=PlotPointType.NONE, vis=None):
+        self.test_obj_id = test_obj_id
+        self.plot_point_type = plot_point_type
+        self.vis = vis
+
+    def __call__(self, points_in_object_frame):
+        B, N, d = points_in_object_frame.shape
+        # compute ICP error for new sampled points
+        query_icp_error = torch.zeros(B, N)
+        # points are transformed to link frame, thus it needs to compare against the object in link frame
+        # objId is not in link frame and shouldn't be moved
+        for b in range(B):
+            for i in range(N):
+                closest = closest_point_on_surface(self.test_obj_id, points_in_object_frame[b, i])
+                query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
+                if self.vis is not None and self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+                    self.vis.draw_point("test_point", points_in_object_frame[b, i], color=(1, 0, 0), length=0.005)
+                    self.vis.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+                                        length=0.005,
+                                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+
+
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
-    def __init__(self, test_obj_id, num_samples_each_action=100, icp_batch=30, alpha=0.01, alpha_evaluate=0.05,
-                 verify_icp_error=False, normal_scale=0.05, upright_bias=0.3, **kwargs):
+    def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100, icp_batch=30, alpha=0.01,
+                 alpha_evaluate=0.05, verify_icp_error=False, normal_scale=0.05, upright_bias=0.3, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
@@ -127,7 +161,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
         self.unused_cache_transforms = False
 
-        self.testObjId = test_obj_id
+        # need a method to measure the distance to the surface of the object in object frame
+        # treat this as a signed distance function
+        self.obj_frame_sdf = obj_frame_sdf
 
     def register_transforms(self, T, best_T=None):
         self.T = T
@@ -162,19 +198,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 all_points = point_tf_to_link.transform_points(new_x_samples)
 
                 # compute ICP error for new sampled points
-                query_icp_error = torch.zeros(self.B, self.N)
-                # points are transformed to link frame, thus it needs to compare against the object in link frame
-                # objId is not in link frame and shouldn't be moved
-                for b in range(self.B):
-                    for i in range(self.N):
-                        closest = closest_point_on_surface(self.testObjId, all_points[b, i])
-                        query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
-                        if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
-                            self.dd.draw_point("test_point", all_points[b, i], color=(1, 0, 0), length=0.005)
-                            self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
-                                               length=0.005,
-                                               label=f'{closest[ContactInfo.DISTANCE]:.5f}')
-
+                query_icp_error = self.obj_frame_sdf(all_points)
                 # don't care about sign of penetration or separation
                 query_icp_error = query_icp_error.abs()
 
