@@ -69,7 +69,7 @@ class PlotPointType(enum.Enum):
 
 
 class ShapeExplorationPolicy(abc.ABC):
-    def __init__(self, vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, vis_obj_id=None):
+    def __init__(self, vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, vis_obj_id=None, debug=False):
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
@@ -82,6 +82,7 @@ class ShapeExplorationPolicy(abc.ABC):
         self.dtype = None
 
         self.dd = vis
+        self.debug = debug
 
     def start_step(self, xs, df):
         """Bookkeeping at the start of a step"""
@@ -150,11 +151,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 else:
                     # do ICP
                     this_pts = torch.stack(xs).reshape(-1, 3)
-                    this_normals = torch.stack(df).reshape(-1, 3)
-                    self.T, distances, _ = icp.icp_3(this_pts, self.model_points, given_init_pose=self.best_tsf_guess,
-                                                     batch=self.B,
-                                                     normal_scale=self.normal_scale,
-                                                     A_normals=this_normals, B_normals=self.model_normals)
+                    self.T, distances = icp.icp_pytorch3d(this_pts, self.model_points,
+                                                          given_init_pose=self.best_tsf_guess, batch=self.B)
 
                 # sample points and see how they evaluate against this ICP result
                 dx_samples = self.sample_dx(xs, df)
@@ -236,6 +234,7 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
         # sample which ICP to use for each of the points
         link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
         all_candidates = link_to_current_tf.transform_points(self.model_points).view(-1, 3)
+        # uniformly random choose a transformed model point
         idx = torch.randperm(all_candidates.shape[0], device=self.device)[:self.N]
         pts = all_candidates[idx]
         return pts
@@ -244,39 +243,6 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
         x = xs[-1]
         pts = self._sample_model_points()
         dx_samples = pts[:self.N] - x
-        if self.capped:
-            # cap step size
-            over_step = dx_samples.norm() > self.alpha_evaluate
-            dx_samples[over_step] = dx_samples[over_step] / dx_samples[over_step].norm() * self.alpha_evaluate
-        return dx_samples
-
-
-class ICPEVReachabilityHeuristicPolicy(ICPEVSampleModelPointsPolicy):
-    """ICPEV exploration where we sample model points, but not unformly and instead based
-    on their distance to the current tangent plane"""
-
-    def __init__(self, sigma=0.0001, **kwargs):
-        # TODO this is related to the characteristic distance from our tracking
-        # TODO don't actually need this exponential; if just using a ranking just use
-        self.sigma = 20
-        super(ICPEVReachabilityHeuristicPolicy, self).__init__(**kwargs)
-
-    def sample_dx(self, xs, df):
-        x = xs[-1]
-        n = df[-1]
-        link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
-        all_candidates = link_to_current_tf.transform_points(self.model_points)
-
-        # TODO weight each model point by distance to tangent plane
-        diff = (all_candidates - x).view(-1, x.shape[0])
-        diff_to_tangent = diff @ n
-        sample_prob = torch.exp(-self.sigma * diff_to_tangent ** 2)
-        # either sample them, or select the highest prob N points
-        prob, sampled = torch.topk(sample_prob, 500)
-        dx_samples = diff[sampled]
-        # sampled_prob = torch.rand(sample_prob.shape, device=self.device)
-        # sampled = sampled_prob < sample_prob
-        # dx_samples = diff[sampled]
         if self.capped:
             # cap step size
             over_step = dx_samples.norm() > self.alpha_evaluate

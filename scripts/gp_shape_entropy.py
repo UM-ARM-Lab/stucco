@@ -139,7 +139,9 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
                                          given_init_pose=best_tsf_guess, batch=B)
 
-        evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
+        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
+                                                     viewing_delay)
+        errors.append(np.mean(errors_per_batch))
 
     for num, err in zip(num_points_list, errors):
         cache[name][seed][num] = err
@@ -194,53 +196,15 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
 
     rand.seed(seed)
     # perform ICP and visualize the transformed points
-    # reverse engineer the transform
-    # compare not against current model points (which may be few), but against the maximum number of model points
-    # TODO remove after; give the ground truth transform to ICP - if it isn't a local minima then there must be a bug in how we're passing data in
-    # best_tsf_guess = link_to_current_tf_gt.get_matrix().inverse().repeat(B, 1, 1)
-    # T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
-    #                             batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
-    #                             B_normals=model_normals_register, vis=vis)
-    # best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
-    # T, distances, _ = icp.icp_3(model_points_register, model_points_world_frame, given_init_pose=best_tsf_guess,
-    #                             batch=B, normal_scale=normal_scale, B_normals=model_normals_world_frame,
-    #                             A_normals=model_normals_register, vis=vis)
-    # T = T.inverse()
-
-    # -- try out SimpleICP - seems to work pretty well
-    # from simpleicp import PointCloud, SimpleICP
-    #
-    # Ts = []
-    # for b in range(5):
-    #     pc_fix = PointCloud(model_points_register.numpy(), columns=["x", "y", "z"])
-    #     pc_mov = PointCloud(model_points_world_frame.numpy(), columns=["x", "y", "z"])
-    #     icp_4 = SimpleICP()
-    #     icp_4.add_point_clouds(pc_fix, pc_mov)
-    #     rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
-    #     rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
-    #     T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
-    #                                                                        rbp_observed_values=rbp_observed_values,
-    #                                                                        rbp_observation_weights=rbp_observation_weights)
-    #     Ts.append(T)
-    # T = torch.from_numpy(np.stack(Ts))
-    # distances = None
-
     # -- try out pytorch3d
     T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
                                      batch=B)
 
-    # link_to_current_tf = tf.Transform3d(matrix=T.inverse())
-    # all_points = link_to_current_tf.transform_points(model_points_register)
-    # all_normals = link_to_current_tf.transform_normals(model_normals_register)
-    # score = icp_plausible_score(T, all_points, distances, upright_bias=upright_bias).numpy()
-    # best_tsf_index = np.argmin(score)
-    # best_tsf_guess = T[best_tsf_index].inverse()
-
-    evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay)
-    # TODO visualize best TSF using separate color
+    errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
+                                                 viewing_delay)
 
 
-def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis_obj_id, distances, viewing_delay):
+def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances, viewing_delay):
     # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
     # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
     # evaluation model points on the ground truth object surface, and the surface points of the object transformed
@@ -252,6 +216,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis
     chamfer_distance = torch.zeros(B, eval_num_points)
     link_to_world = tf.Transform3d(matrix=T.inverse())
     m = link_to_world.get_matrix()
+    errors_per_batch = []
     for b in range(B):
         pos = m[b, :3, 3]
         rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
@@ -270,7 +235,8 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, errors, vis
         time.sleep(viewing_delay)
 
         errors_per_transform = chamfer_distance.mean(dim=-1)
-        errors.append(errors_per_transform.mean())
+        errors_per_batch.append(errors_per_transform.mean())
+    return errors_per_batch
 
 
 def marginalize_over_suffix(name):
@@ -321,10 +287,12 @@ def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=Non
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
         mean = errors.mean(axis=0)
+        low = np.percentile(errors, 20, axis=0)
+        high = np.percentile(errors, 80, axis=0)
         std = errors.std(axis=0)
         axs.plot(x, mean, label=name)
         # axs.errorbar(x, mean, std, label=name)
-        axs.fill_between(x, mean - std, mean + std, alpha=0.2)
+        axs.fill_between(x, low, high, alpha=0.2)
 
         # print each numerically
         for i in range(len(mean)):
