@@ -60,6 +60,21 @@ def sample_dx_on_tange_plane(n, alpha, num_samples=100):
     return dx_samples
 
 
+class PybulletObjectFactory(abc.ABC):
+    def __init__(self, name, scale=2.5):
+        self.name = name
+        self.scale = scale
+
+    @abc.abstractmethod
+    def make_collision_obj(self, z, rgba=None):
+        """Create collision object of fixed and position along x-y; returns the object ID and bounding box"""
+
+    @abc.abstractmethod
+    def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
+        """Create visual object, reusing a visual shape for instancing if given;
+        returns the visual shape ID and object ID"""
+
+
 class PlotPointType(enum.Enum):
     NONE = 0
     ICP_MODEL_POINTS = 1
@@ -83,6 +98,9 @@ class ShapeExplorationPolicy(abc.ABC):
 
         self.dd = vis
         self.debug = debug
+
+    def set_debug(self, debug_on):
+        self.debug = debug_on
 
     def start_step(self, xs, df):
         """Bookkeeping at the start of a step"""
@@ -119,6 +137,7 @@ class ObjectFrameSDF(abc.ABC):
         """
 
 
+# TODO need to implement actual SDF to handle voxellization
 class PyBulletNaiveSDF(ObjectFrameSDF):
     def __init__(self, test_obj_id, plot_point_type=PlotPointType.NONE, vis=None):
         self.test_obj_id = test_obj_id
@@ -140,11 +159,13 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
                     self.vis.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
                                         length=0.005,
                                         label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+        return query_icp_error
 
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100, icp_batch=30, alpha=0.01,
-                 alpha_evaluate=0.05, verify_icp_error=False, normal_scale=0.05, upright_bias=0.3, **kwargs):
+                 alpha_evaluate=0.05, verify_icp_error=False, normal_scale=0.05, upright_bias=0.3,
+                 debug_obj_factory: PybulletObjectFactory = None, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
@@ -160,10 +181,17 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.T = None
         # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
         self.unused_cache_transforms = False
+        self._cached_link_to_world = None
+        self._cached_world_to_link = None
 
         # need a method to measure the distance to the surface of the object in object frame
         # treat this as a signed distance function
         self.obj_frame_sdf = obj_frame_sdf
+
+        # for creating visual shapes in debugging
+        self.debug_obj_factory = debug_obj_factory
+        self.debug_obj_ids = []
+        self.debug_visual_shape_id = None
 
     def register_transforms(self, T, best_T=None):
         self.T = T
@@ -174,6 +202,20 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def sample_dx(self, xs, df):
         dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
         return dx_samples
+
+    def _clear_cached_tf(self):
+        self._cached_world_to_link = None
+        self._cached_link_to_world = None
+
+    def _link_to_world_tf(self):
+        if self._cached_link_to_world is None:
+            self._cached_link_to_world = tf.Transform3d(matrix=self.T.inverse())
+        return self._cached_link_to_world
+
+    def _world_to_link_tf(self):
+        if self._cached_world_to_link is None:
+            self._cached_world_to_link = tf.Transform3d(matrix=self.T)
+        return self._cached_world_to_link
 
     def get_next_dx(self, xs, df, t):
         x = xs[-1]
@@ -190,40 +232,22 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                     self.T, distances = icp.icp_pytorch3d(this_pts, self.model_points,
                                                           given_init_pose=self.best_tsf_guess, batch=self.B)
 
+                # every time we update T need to clear the transform cache
+                self._clear_cached_tf()
+
                 # sample points and see how they evaluate against this ICP result
                 dx_samples = self.sample_dx(xs, df)
-                new_x_samples = x + dx_samples
-                # model points are given in link frame; new_x_sample points are in world frame
-                point_tf_to_link = tf.Transform3d(matrix=self.T)
-                all_points = point_tf_to_link.transform_points(new_x_samples)
+                new_points_world_frame = x + dx_samples
+                # model points are given in link frame
+                new_points_object_frame = self._world_to_link_tf().transform_points(new_points_world_frame)
 
                 # compute ICP error for new sampled points
-                query_icp_error = self.obj_frame_sdf(all_points)
+                query_icp_error = self.obj_frame_sdf(new_points_object_frame)
                 # don't care about sign of penetration or separation
                 query_icp_error = query_icp_error.abs()
 
                 if self.verify_icp_error:
-                    # compare our method of transforming all points to link frame with transforming all objects
-                    query_icp_error_ground_truth = torch.zeros(self.B, self.N)
-                    link_to_world = tf.Transform3d(matrix=self.T.inverse())
-                    m = link_to_world.get_matrix()
-                    for b in range(self.B):
-                        pos = m[b, :3, 3]
-                        rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
-                        rot = tf.wxyz_to_xyzw(rot)
-                        p.resetBasePositionAndOrientation(self.visId, pos, rot)
-
-                        # transform our visual object to the pose
-                        for i in range(self.N):
-                            closest = closest_point_on_surface(self.visId, new_x_samples[i])
-                            query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
-                            if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
-                                self.dd.draw_point("test_point", new_x_samples[i], color=(1, 0, 0), length=0.005)
-                                self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
-                                                   length=0.005,
-                                                   label=f'{closest[ContactInfo.DISTANCE]:.5f}')
-                    query_icp_error_ground_truth = query_icp_error_ground_truth.abs()
-                    assert (query_icp_error_ground_truth - query_icp_error).sum() < 1e-4
+                    self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
 
                 # find error variance for each sampled dx
                 icp_error_var = query_icp_error.var(dim=0)
@@ -235,29 +259,85 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                       f"avg error var {icp_error_var.mean().item():.5f}")
 
                 # score ICP and save best one to initialize for next step
-                link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
-                all_points = link_to_current_tf.transform_points(self.model_points)
+                model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
                 # all_normals = link_to_current_tf.transform_normals(self.model_normals)
-                score = icp_plausible_score(self.T, all_points, distances, upright_bias=self.upright_bias).numpy()
+                score = icp_plausible_score(self.T, model_points_world_frame, distances,
+                                            upright_bias=self.upright_bias).numpy()
                 best_tsf_index = np.argmin(score)
                 self.best_tsf_guess = self.T[best_tsf_index].inverse()
+
+                if self.debug and self.debug_obj_factory is not None:
+                    self._debug_icp_distribution(new_points_world_frame, icp_error_var)
         else:
             dx = torch.randn(3, dtype=self.dtype, device=self.device)
             dx = dx / dx.norm() * self.alpha
         return dx
 
+    def _debug_verify_icp_error(self, new_points_world_frame, query_icp_error):
+        # compare our method of transforming all points to link frame with transforming all objects
+        query_icp_error_ground_truth = torch.zeros(self.B, self.N)
+        m = self._link_to_world_tf().get_matrix()
+        for b in range(self.B):
+            pos = m[b, :3, 3]
+            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
+            rot = tf.wxyz_to_xyzw(rot)
+            p.resetBasePositionAndOrientation(self.visId, pos, rot)
+
+            # transform our visual object to the pose
+            for i in range(self.N):
+                closest = closest_point_on_surface(self.visId, new_points_world_frame[i])
+                query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
+                if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+                    self.dd.draw_point("test_point", new_points_world_frame[i], color=(1, 0, 0), length=0.005)
+                    self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+                                       length=0.005,
+                                       label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+        query_icp_error_ground_truth = query_icp_error_ground_truth.abs()
+        assert (query_icp_error_ground_truth - query_icp_error).sum() < 1e-4
+
+    def _debug_icp_distribution(self, new_points_world_frame, icp_error_var):
+        # create visual objects
+        if not len(self.debug_obj_ids):
+            for b in range(self.B):
+                self.debug_visual_shape_id, debug_obj_id = self.debug_obj_factory.make_visual_obj(
+                    self.debug_visual_shape_id)
+                self.debug_obj_ids.append(debug_obj_id)
+
+        # transform to the ICP'd pose
+        # plot distribution of poses and the candidate points in terms of their information metric
+        m = self._link_to_world_tf().get_matrix()
+        for b in range(self.B):
+            pos = m[b, :3, 3]
+            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
+            rot = tf.wxyz_to_xyzw(rot)
+            p.resetBasePositionAndOrientation(self.debug_obj_ids[b], pos, rot)
+
+        # plot the candidate points in world frame with color map indicating their ICPEV metric
+        import matplotlib.colors, matplotlib.cm
+        error_norm = matplotlib.colors.Normalize(vmin=0, vmax=icp_error_var.max())
+        color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+        rgb = color_map.to_rgba(icp_error_var.reshape(-1))
+        rgb = rgb[:, :-1]
+
+        for i in range(new_points_world_frame.shape[0]):
+            self.dd.draw_point(f"candidate_icpev_pt.{i}", new_points_world_frame[i], color=rgb[i], length=0.005)
+
+        most_informative_idx = icp_error_var.argmax()
+        self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0), length=0.01,
+                           label=f"icpev: {icp_error_var[most_informative_idx].item():.5f}")
+        print()
+
 
 class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
     """ICPEV exploration where we sample model points instead of fixed sliding around self"""
 
-    def __init__(self, capped=False, **kwargs):
-        super(ICPEVSampleModelPointsPolicy, self).__init__(**kwargs)
+    def __init__(self, *args, capped=False, **kwargs):
+        super(ICPEVSampleModelPointsPolicy, self).__init__(*args, **kwargs)
         self.capped = capped
 
     def _sample_model_points(self):
         # sample which ICP to use for each of the points
-        link_to_current_tf = tf.Transform3d(matrix=self.T.inverse())
-        all_candidates = link_to_current_tf.transform_points(self.model_points).view(-1, 3)
+        all_candidates = self._link_to_world_tf().transform_points(self.model_points).view(-1, 3)
         # uniformly random choose a transformed model point
         idx = torch.randperm(all_candidates.shape[0], device=self.device)[:self.N]
         pts = all_candidates[idx]
@@ -450,7 +530,7 @@ def random_upright_transforms(B, dtype, device):
     return init_pose
 
 
-def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3):
+def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3, physics_bias=1.0):
     """Score an ICP result on domain-specific plausibility; lower score is better.
     This function is designed for objects that manipulator robots will usually interact with"""
     # score T on rotation's distance away from prior of being upright
@@ -459,16 +539,16 @@ def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3):
         rot_axis /= rot_axis.norm(dim=-1, keepdim=True)
         # project onto the z axis (take z component)
         # should be positive; upside down will be penalized and so will sideways
-        upright_score = (1 - rot_axis[..., -1]) * upright_bias
+        upright_score = (1 - rot_axis[..., -1])
     else:
         upright_score = 0
 
     # inherent local minima quality from ICP
-    distance_score = torch.mean(distances, dim=1)
+    distance_score = distances
     # should not float off the ground
     physics_score = all_points[:, :, 2].min(dim=1).values.abs()
 
-    return distance_score + upright_score + physics_score
+    return distance_score + upright_score * upright_bias + physics_score * physics_bias
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
