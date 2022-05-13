@@ -312,6 +312,28 @@ def icp_2(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
     return T, distances, i
 
 
+def init_random_transform_with_given_init(m, batch, dtype, device, given_init_pose=None):
+    # apply some random initial poses
+    if m > 2:
+        import pytorch_kinematics.transforms as tf
+        R = tf.random_rotations(batch, dtype=dtype, device=device)
+    else:
+        theta = torch.rand(batch, dtype=dtype, device=device) * math.pi * 2
+        Rtop = torch.cat([torch.cos(theta).view(-1, 1), -torch.sin(theta).view(-1, 1)], dim=1)
+        Rbot = torch.cat([torch.sin(theta).view(-1, 1), torch.cos(theta).view(-1, 1)], dim=1)
+        R = torch.cat((Rtop.unsqueeze(-1), Rbot.unsqueeze(-1)), dim=-1)
+
+    init_pose = torch.eye(m + 1, dtype=dtype, device=device).repeat(batch, 1, 1)
+    init_pose[:, :m, :m] = R[:, :m, :m]
+    if given_init_pose is not None:
+        # check if it's given as a batch
+        if len(given_init_pose.shape) == 3:
+            init_pose = given_init_pose.clone()
+        else:
+            init_pose[0] = given_init_pose
+    return init_pose
+
+
 def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pose=None, max_iterations=20,
           tolerance=1e-4, batch=5, vis=None):
     '''
@@ -342,23 +364,7 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
     dst = dst.repeat(batch, 1, 1)
 
     # apply some random initial poses
-    if m > 2:
-        import pytorch_kinematics.transforms as tf
-        R = tf.random_rotations(batch, dtype=A.dtype, device=A.device)
-    else:
-        theta = torch.rand(batch, dtype=A.dtype, device=A.device) * math.pi * 2
-        Rtop = torch.cat([torch.cos(theta).view(-1, 1), -torch.sin(theta).view(-1, 1)], dim=1)
-        Rbot = torch.cat([torch.sin(theta).view(-1, 1), torch.cos(theta).view(-1, 1)], dim=1)
-        R = torch.cat((Rtop.unsqueeze(-1), Rbot.unsqueeze(-1)), dim=-1)
-
-    init_pose = torch.eye(m + 1, dtype=A.dtype, device=A.device).repeat(batch, 1, 1)
-    init_pose[:, :m, :m] = R[:, :m, :m]
-    if given_init_pose is not None:
-        # check if it's given as a batch
-        if len(given_init_pose.shape) == len(src.shape):
-            init_pose = given_init_pose.clone()
-        else:
-            init_pose[0] = given_init_pose
+    init_pose = init_random_transform_with_given_init(m, batch, A.dtype, A.device, given_init_pose=given_init_pose)
 
     # apply the initial pose estimation
     src = init_pose @ src
@@ -381,6 +387,8 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
             if src_normals is not None:
                 vis.draw_2d_line(f"imn.{j}", pt, -src_normals[0, j], color=(0, 0.4, 0), size=2., scale=0.03)
 
+    i = 0
+    distances = None
     for i in range(max_iterations):
         # find the nearest neighbors between the current source and destination points
         # if given normals, scale and append them to find nearest neighbours
@@ -450,13 +458,17 @@ def icp_3(A, B, A_normals=None, B_normals=None, normal_scale=0.1, given_init_pos
         for dist in err_list:
             print(dist)
 
+    # convert to RMSE
+    if distances is not None:
+        distances = torch.sqrt(distances.square().sum(dim=1))
     return T, distances, i
 
 
 def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
-    if given_init_pose is not None:
-        given_init_pose = given_init_pose[:, :3, :3], given_init_pose[:, :3, 3], torch.ones(batch, device=A.device,
-                                                                                            dtype=A.dtype)
+    given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
+                                                            given_init_pose=given_init_pose)
+    given_init_pose = given_init_pose[:, :3, :3], given_init_pose[:, :3, 3], torch.ones(batch, device=A.device,
+                                                                                        dtype=A.dtype)
 
     res = iterative_closest_point(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
                                   allow_reflection=True)
