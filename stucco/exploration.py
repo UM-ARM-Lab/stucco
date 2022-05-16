@@ -48,7 +48,7 @@ def project_to_plane(n, v):
     return v - along_n * nhat
 
 
-def sample_dx_on_tange_plane(n, alpha, num_samples=100):
+def sample_dx_on_tangent_plane(n, alpha, num_samples=100):
     v0 = n.clone()
     v0[0] += 1
     v1 = torch.cross(n, v0)
@@ -202,7 +202,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             self.best_tsf_guess = best_T
 
     def sample_dx(self, xs, df):
-        dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
+        dx_samples = sample_dx_on_tangent_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
         return dx_samples
 
     def select_dx(self, dx_samples, icp_error_var):
@@ -239,7 +239,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # do ICP
                 this_pts = torch.stack(xs).reshape(-1, 3)
                 self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
-                                                      given_init_pose=self.best_tsf_guess, batch=self.B)
+                                                          given_init_pose=self.best_tsf_guess, batch=self.B)
 
             # every time we update T need to clear the transform cache
             self._clear_cached_tf()
@@ -342,6 +342,22 @@ class RandomSlidePolicy(ICPEVExplorationPolicy):
         return dx
 
 
+class RandomSamplePolicy(RandomSlidePolicy):
+    def sample_dx(self, xs, df):
+        # random points in space
+        dx_samples = torch.randn((self.N, 3)) * self.alpha_evaluate * 5
+        return dx_samples
+
+
+class ICPEVSampleRandomPointsPolicy(ICPEVExplorationPolicy):
+    """Choose the point with the best ICPEV metric, but select candidate points randomly in space around current"""
+
+    def sample_dx(self, xs, df):
+        # random points in space
+        dx_samples = torch.randn((self.N, 3)) * self.alpha_evaluate * 5
+        return dx_samples
+
+
 class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
     """ICPEV exploration where we sample model points instead of fixed sliding around self"""
 
@@ -408,7 +424,7 @@ class GPVarianceExploration(ShapeExplorationPolicy):
             n = df[-1]
             with rand.SavedRNG():
                 # try numerically computing the gradient along valid directions only
-                dx_samples = sample_dx_on_tange_plane(n, self.alpha)
+                dx_samples = sample_dx_on_tangent_plane(n, self.alpha)
                 new_x_samples = x + dx_samples
                 with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False,
                                                                           covar_root_decomposition=False):
