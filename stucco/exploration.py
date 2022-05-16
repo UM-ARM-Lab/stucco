@@ -179,6 +179,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.upright_bias = upright_bias
         self.best_tsf_guess = random_upright_transforms(self.B, self.dtype, self.device) if upright_bias > 0 else None
         self.T = None
+        self.icp_rmse = None
         # allow external computation of ICP to use inside us, in which case we don't need to redo ICP
         self.unused_cache_transforms = False
         self._cached_link_to_world = None
@@ -193,8 +194,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.debug_obj_ids = []
         self.debug_visual_shape_id = None
 
-    def register_transforms(self, T, best_T=None):
+    def register_transforms(self, T, rmse, best_T=None):
         self.T = T
+        self.icp_rmse = rmse
         self.unused_cache_transforms = True
         if best_T is not None:
             self.best_tsf_guess = best_T
@@ -202,6 +204,14 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def sample_dx(self, xs, df):
         dx_samples = sample_dx_on_tange_plane(df[-1], self.alpha_evaluate, num_samples=self.N)
         return dx_samples
+
+    def select_dx(self, dx_samples, icp_error_var):
+        most_informative_idx = icp_error_var.argmax()
+        dx = dx_samples[most_informative_idx]
+        print(f"chose action {most_informative_idx.item()} / {self.N} {dx} "
+              f"error var {icp_error_var[most_informative_idx].item():.5f} "
+              f"avg error var {icp_error_var.mean().item():.5f}")
+        return dx
 
     def _clear_cached_tf(self):
         self._cached_world_to_link = None
@@ -222,52 +232,46 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         n = df[-1]
         if t > 5:
             # query for next place to go based on approximated uncertainty using ICP error variance
-            with rand.SavedRNG():
-                if self.unused_cache_transforms:
-                    # consume this transform set
-                    self.unused_cache_transforms = False
-                else:
-                    # do ICP
-                    this_pts = torch.stack(xs).reshape(-1, 3)
-                    self.T, distances = icp.icp_pytorch3d(this_pts, self.model_points,
-                                                          given_init_pose=self.best_tsf_guess, batch=self.B)
+            if self.unused_cache_transforms:
+                # consume this transform set
+                self.unused_cache_transforms = False
+            else:
+                # do ICP
+                this_pts = torch.stack(xs).reshape(-1, 3)
+                self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
+                                                      given_init_pose=self.best_tsf_guess, batch=self.B)
 
-                # every time we update T need to clear the transform cache
-                self._clear_cached_tf()
+            # every time we update T need to clear the transform cache
+            self._clear_cached_tf()
 
-                # sample points and see how they evaluate against this ICP result
-                dx_samples = self.sample_dx(xs, df)
-                new_points_world_frame = x + dx_samples
-                # model points are given in link frame
-                new_points_object_frame = self._world_to_link_tf().transform_points(new_points_world_frame)
+            # sample points and see how they evaluate against this ICP result
+            dx_samples = self.sample_dx(xs, df)
+            new_points_world_frame = x + dx_samples
+            # model points are given in link frame
+            new_points_object_frame = self._world_to_link_tf().transform_points(new_points_world_frame)
 
-                # compute ICP error for new sampled points
-                query_icp_error = self.obj_frame_sdf(new_points_object_frame)
-                # don't care about sign of penetration or separation
-                query_icp_error = query_icp_error.abs()
+            # compute ICP error for new sampled points
+            query_icp_error = self.obj_frame_sdf(new_points_object_frame)
+            # don't care about sign of penetration or separation
+            query_icp_error = query_icp_error.abs()
 
-                if self.verify_icp_error:
-                    self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
+            if self.verify_icp_error:
+                self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
 
-                # find error variance for each sampled dx
-                icp_error_var = query_icp_error.var(dim=0)
-                most_informative_idx = icp_error_var.argmax()
-                # choose gradient based on this (basically throw out GP calculations)
-                dx = dx_samples[most_informative_idx]
-                print(f"chose action {most_informative_idx.item()} / {self.N} {dx} "
-                      f"error var {icp_error_var[most_informative_idx].item():.5f} "
-                      f"avg error var {icp_error_var.mean().item():.5f}")
+            # find error variance for each sampled dx
+            icp_error_var = query_icp_error.var(dim=0)
+            dx = self.select_dx(dx_samples, icp_error_var)
 
-                # score ICP and save best one to initialize for next step
-                model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
-                # all_normals = link_to_current_tf.transform_normals(self.model_normals)
-                score = icp_plausible_score(self.T, model_points_world_frame, distances,
-                                            upright_bias=self.upright_bias).numpy()
-                best_tsf_index = np.argmin(score)
-                self.best_tsf_guess = self.T[best_tsf_index].inverse()
+            # score ICP and save best one to initialize for next step
+            model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
+            # all_normals = link_to_current_tf.transform_normals(self.model_normals)
+            score = icp_plausible_score(self.T, model_points_world_frame, self.icp_rmse,
+                                        upright_bias=self.upright_bias).numpy()
+            best_tsf_index = np.argmin(score)
+            self.best_tsf_guess = self.T[best_tsf_index].inverse()
 
-                if self.debug and self.debug_obj_factory is not None:
-                    self._debug_icp_distribution(new_points_world_frame, icp_error_var)
+            if self.debug and self.debug_obj_factory is not None:
+                self._debug_icp_distribution(new_points_world_frame, icp_error_var)
         else:
             dx = torch.randn(3, dtype=self.dtype, device=self.device)
             dx = dx / dx.norm() * self.alpha
@@ -326,6 +330,16 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0), length=0.01,
                            label=f"icpev: {icp_error_var[most_informative_idx].item():.5f}")
         print()
+
+
+class RandomSlidePolicy(ICPEVExplorationPolicy):
+    def select_dx(self, dx_samples, icp_error_var):
+        idx = torch.randint(self.N, (1,)).item()
+        dx = dx_samples[idx]
+        print(f"chose action {idx} / {self.N} {dx} "
+              f"error var {icp_error_var[idx].item():.5f} "
+              f"avg error var {icp_error_var.mean().item():.5f}")
+        return dx
 
 
 class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
@@ -530,7 +544,7 @@ def random_upright_transforms(B, dtype, device):
     return init_pose
 
 
-def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3, physics_bias=1.0):
+def icp_plausible_score(T, all_points, icp_rmse, dim=3, upright_bias=0.3, physics_bias=1.0):
     """Score an ICP result on domain-specific plausibility; lower score is better.
     This function is designed for objects that manipulator robots will usually interact with"""
     # score T on rotation's distance away from prior of being upright
@@ -544,11 +558,11 @@ def icp_plausible_score(T, all_points, distances, dim=3, upright_bias=0.3, physi
         upright_score = 0
 
     # inherent local minima quality from ICP
-    distance_score = distances
+    fit_quality_score = icp_rmse if icp_rmse is not None else 0
     # should not float off the ground
     physics_score = all_points[:, :, 2].min(dim=1).values.abs()
 
-    return distance_score + upright_score * upright_bias + physics_score * physics_bias
+    return fit_quality_score + upright_score * upright_bias + physics_score * physics_bias
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
