@@ -873,10 +873,14 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
             # convert to cm^2 (saved as m^2, so multiply by 100^2)
             errors = np.stack(errors)
             mean = errors.mean(axis=0)
+            median = np.median(errors, axis=0)
             std = errors.std(axis=0)
-            axs[i].plot(x, mean, label=name)
+            axs[i].plot(x, median, label=name)
+
+            low = np.percentile(errors, 20, axis=0)
+            high = np.percentile(errors, 80, axis=0)
             # axs.errorbar(x, mean, std, label=name)
-            axs[i].fill_between(x, mean - std, mean + std, alpha=0.2)
+            axs[i].fill_between(x, low, high, alpha=0.2)
 
             # print each numerically
             for i in range(len(mean)):
@@ -933,19 +937,19 @@ if __name__ == "__main__":
 
     # -- exploration experiment
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200}
-    exp_name = "pytorch3d"
+    exp_name = "pytorch3d_sliding"
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
     #                            run_name=exp_name, viewing_delay=0.5)
-    # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE)
+    # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
+    #                              policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
     # for seed in range(10):
     #     experiment.run(run_name=exp_name, seed=seed)
     # plot_exploration_results(names_to_include=lambda
     #     name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name or "pytorch3d" in name)
-    plot_exploration_results(names_to_include=lambda
-        name: "pytorch3d" in name)
+    plot_exploration_results(names_to_include=lambda name: "pytorch3d" in name)
     # experiment = GPVarianceExploration()
     # experiment.run(run_name="gp_var")
