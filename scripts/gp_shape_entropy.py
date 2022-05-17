@@ -700,6 +700,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
 
 class GPVarianceExperiment(ShapeExplorationExperiment):
     def __init__(self, gp_exploration_policy: GPVarianceExploration, **kwargs):
+        self.meshId = None
         super(GPVarianceExperiment, self).__init__(**kwargs)
         self.set_policy(gp_exploration_policy)
 
@@ -829,7 +830,8 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
     fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
 
     if logy:
-        axs.set_yscale('log')
+        for ax in axs:
+            ax.set_yscale('log')
 
     to_plot = {}
     for name in cache.keys():
@@ -942,7 +944,7 @@ if __name__ == "__main__":
 
     # -- exploration experiment
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200}
-    exp_name = "pytorch3d_random_sample"
+    exp_name = "gp_var"
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
@@ -951,12 +953,12 @@ if __name__ == "__main__":
     #                              policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # experiment = ICPEVExperiment(exploration.RandomSamplePolicy, plot_point_type=PlotPointType.NONE,
+    # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # for seed in range(10):
-    #     experiment.run(run_name=exp_name, seed=seed)
+    experiment = GPVarianceExperiment(GPVarianceExploration(), plot_point_type=PlotPointType.NONE)
+    for seed in range(10):
+        experiment.run(run_name=exp_name, seed=seed)
     # plot_exploration_results(names_to_include=lambda
     #     name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name or "pytorch3d" in name)
-    plot_exploration_results(names_to_include=lambda name: "pytorch3d" in name)
-    # experiment = GPVarianceExploration()
+    # plot_exploration_results(names_to_include=lambda name: "pytorch3d" in name and "sample" in name or "gp_var" in name, logy=False)
     # experiment.run(run_name="gp_var")
