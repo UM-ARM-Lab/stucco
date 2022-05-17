@@ -96,6 +96,43 @@ class PybulletObjectFactory(abc.ABC):
         returns the visual shape ID and object ID"""
 
 
+# TODO score with freespace penetration
+class ICPPoseScore:
+    """Score an ICP result on domain-specific plausibility; lower score is better.
+    This function is designed for objects that manipulator robots will usually interact with"""
+
+    def __init__(self, dim=3, upright_bias=.3, physics_bias=1., reject_proportion_on_score=.3):
+        self.dim = dim
+        self.upright_bias = upright_bias
+        self.physics_bias = physics_bias
+        self.reject_proportion_on_score = reject_proportion_on_score
+
+    def __call__(self, T, all_points, icp_rmse):
+        # T is matrix taking world frame to link frame
+        # score T on rotation's distance away from prior of being upright
+        if self.dim == 3:
+            rot_axis = tf.matrix_to_axis_angle(T[..., :self.dim, :self.dim])
+            rot_axis /= rot_axis.norm(dim=-1, keepdim=True)
+            # project onto the z axis (take z component)
+            # should be positive; upside down will be penalized and so will sideways
+            upright_score = (1 - rot_axis[..., -1])
+        else:
+            upright_score = 0
+
+        # inherent local minima quality from ICP
+        fit_quality_score = icp_rmse if icp_rmse is not None else 0
+        # should not float off the ground
+        physics_score = all_points[:, :, 2].min(dim=1).values.abs()
+
+        score = fit_quality_score + upright_score * self.upright_bias + physics_score * self.physics_bias
+
+        # reject a portion of the input (assign them inf score) based on their quantile in terms of fit quality
+        score_threshold = torch.quantile(score, 1 - self.reject_proportion_on_score)
+        score[score > score_threshold] = float('inf')
+
+        return score
+
+
 class PlotPointType(enum.Enum):
     NONE = 0
     ICP_MODEL_POINTS = 1
@@ -105,13 +142,15 @@ class PlotPointType(enum.Enum):
 
 
 class ShapeExplorationPolicy(abc.ABC):
-    def __init__(self, vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS, vis_obj_id=None, debug=False):
+    def __init__(self, icp_pose_score=ICPPoseScore(), vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS,
+                 vis_obj_id=None, debug=False):
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
         self.model_normals_world_transformed_ground_truth = None
         self.plot_point_type = plot_point_type
         self.visId = vis_obj_id
+        self.icp_pose_score = icp_pose_score
 
         self.best_tsf_guess = None
         self.device = None
@@ -184,8 +223,9 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
 
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
-    def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100, icp_batch=30, alpha=0.01,
-                 alpha_evaluate=0.05, verify_icp_error=False, normal_scale=0.05, upright_bias=0.3,
+    def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100,
+                 icp_batch=30, alpha=0.01,
+                 alpha_evaluate=0.05, verify_icp_error=False, upright_bias=0.3,
                  debug_obj_factory: PybulletObjectFactory = None, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
@@ -195,7 +235,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.verify_icp_error = verify_icp_error
         self.N = num_samples_each_action
         self.B = icp_batch
-        self.normal_scale = normal_scale
 
         self.upright_bias = upright_bias
         self.best_tsf_guess = random_upright_transforms(self.B, self.dtype, self.device) if upright_bias > 0 else None
@@ -282,9 +321,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             # score ICP and save best one to initialize for next step
             model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
             # all_normals = link_to_current_tf.transform_normals(self.model_normals)
-            # TODO score with freespace penetration
-            score = icp_plausible_score(self.T, model_points_world_frame, self.icp_rmse,
-                                        upright_bias=self.upright_bias)
+            score = self.icp_pose_score(self.T, model_points_world_frame, self.icp_rmse)
             # find error variance for each sampled dx
             weight = 1 / score  # score lower is better; want weight where higher is better
             icp_error_mean, icp_error_var = weighted_mean_and_variance(query_icp_error.transpose(0, 1),
@@ -472,13 +509,10 @@ class GPVarianceExploration(ShapeExplorationPolicy):
             this_pts = torch.stack(xs).reshape(-1, 3)
             T, distances, _ = icp.icp_3(this_pts, self.model_points,
                                         given_init_pose=self.best_tsf_guess, batch=30)
-            T = T.inverse()
-            link_to_current_tf = tf.Transform3d(matrix=T)
+            link_to_current_tf = tf.Transform3d(matrix=T.inverse())
             all_points = link_to_current_tf.transform_points(self.model_points)
-            all_normals = link_to_current_tf.transform_normals(self.model_normals)
 
-            # TODO can score on surface normals being consistent with robot path? Or switch to ICP with normal support
-            score = icp_plausible_score(all_points, all_normals, distances).numpy()
+            score = self.icp_pose_score(T, all_points, distances).numpy()
             best_tsf_index = np.argmin(score)
             self.best_tsf_guess = T[best_tsf_index].inverse()
 
@@ -583,34 +617,6 @@ def random_upright_transforms(B, dtype, device):
     init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
     init_pose[:, :3, :3] = R
     return init_pose
-
-
-def icp_plausible_score(T, all_points, icp_rmse, dim=3, upright_bias=0.3, physics_bias=1.0,
-                        reject_proportion_on_quality=0.3):
-    """Score an ICP result on domain-specific plausibility; lower score is better.
-    This function is designed for objects that manipulator robots will usually interact with"""
-    # score T on rotation's distance away from prior of being upright
-    if dim == 3:
-        rot_axis = tf.matrix_to_axis_angle(T[..., :dim, :dim])
-        rot_axis /= rot_axis.norm(dim=-1, keepdim=True)
-        # project onto the z axis (take z component)
-        # should be positive; upside down will be penalized and so will sideways
-        upright_score = (1 - rot_axis[..., -1])
-    else:
-        upright_score = 0
-
-    # inherent local minima quality from ICP
-    fit_quality_score = icp_rmse if icp_rmse is not None else 0
-    # should not float off the ground
-    physics_score = all_points[:, :, 2].min(dim=1).values.abs()
-
-    score = fit_quality_score + upright_score * upright_bias + physics_score * physics_bias
-
-    # reject a portion of the input (assign them inf score) based on their quantile in terms of fit quality
-    score_threshold = torch.quantile(score, 1 - reject_proportion_on_quality)
-    score[score > score_threshold] = float('inf')
-
-    return score
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):

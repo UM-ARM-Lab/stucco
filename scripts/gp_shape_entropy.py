@@ -895,7 +895,7 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
             print()
 
     axs[0].set_ylabel('error at model points')
-    axs[1].set_ylabel('error at gp surface')
+    axs[1].set_ylabel('error at rep surface')
     axs[2].set_ylabel('average error')
     axs[-1].set_xlabel('step')
     axs[-1].legend()
@@ -944,18 +944,18 @@ if __name__ == "__main__":
 
     # -- exploration experiment
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200}
-    exp_name = "gp_var"
+    exp_name = "icpev_model_sample_weighted"
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
     #                            run_name=exp_name, viewing_delay=0.5)
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
+    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
+                                 policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    experiment = GPVarianceExperiment(GPVarianceExploration(), plot_point_type=PlotPointType.NONE)
+    # experiment = GPVarianceExperiment(GPVarianceExploration(), plot_point_type=PlotPointType.NONE)
     for seed in range(10):
         experiment.run(run_name=exp_name, seed=seed)
     # plot_exploration_results(names_to_include=lambda
