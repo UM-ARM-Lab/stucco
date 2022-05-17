@@ -15,6 +15,27 @@ from stucco import icp
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 
 
+def weighted_mean_and_variance(x, weights):
+    """
+    Compute the weighted mean and unbiased weighted sample variance
+    :param x: B x N batched scalar quantity
+    :param weights: B x N batched unnormalized weight
+    :return: weighted mean \mu^*, unbiased weighted sample variance s_w^2
+    """
+    # normalize the weights such that they sum to 1
+    w = weights / weights.sum(dim=-1, keepdim=True)
+    v_1 = 1
+    v_2 = torch.square(w).sum(dim=-1, keepdim=True)
+
+    mean = (x * w).sum(dim=-1, keepdim=True)
+    sq_err = w * torch.square(x - mean)
+    sigma = sq_err.sum(dim=-1, keepdim=True)
+    # remove bias
+    s = sigma / (v_1 - (v_2 / v_1))
+
+    return mean.squeeze(-1), s.squeeze(-1)
+
+
 class GPModelWithDerivatives(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
         super(GPModelWithDerivatives, self).__init__(train_x, train_y, likelihood)
@@ -258,16 +279,20 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             if self.verify_icp_error:
                 self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
 
-            # find error variance for each sampled dx
-            icp_error_var = query_icp_error.var(dim=0)
-            dx = self.select_dx(dx_samples, icp_error_var)
-
             # score ICP and save best one to initialize for next step
             model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
             # all_normals = link_to_current_tf.transform_normals(self.model_normals)
+            # TODO score with freespace penetration
             score = icp_plausible_score(self.T, model_points_world_frame, self.icp_rmse,
-                                        upright_bias=self.upright_bias).numpy()
-            best_tsf_index = np.argmin(score)
+                                        upright_bias=self.upright_bias)
+            # find error variance for each sampled dx
+            weight = 1 / score  # score lower is better; want weight where higher is better
+            icp_error_mean, icp_error_var = weighted_mean_and_variance(query_icp_error.transpose(0, 1),
+                                                                       weight.repeat(query_icp_error.shape[1], 1))
+            # icp_error_var = query_icp_error.var(dim=0)
+            dx = self.select_dx(dx_samples, icp_error_var)
+
+            best_tsf_index = torch.argmin(score)
             self.best_tsf_guess = self.T[best_tsf_index].inverse()
 
             if self.debug and self.debug_obj_factory is not None:
@@ -560,7 +585,8 @@ def random_upright_transforms(B, dtype, device):
     return init_pose
 
 
-def icp_plausible_score(T, all_points, icp_rmse, dim=3, upright_bias=0.3, physics_bias=1.0):
+def icp_plausible_score(T, all_points, icp_rmse, dim=3, upright_bias=0.3, physics_bias=1.0,
+                        reject_proportion_on_quality=0.3):
     """Score an ICP result on domain-specific plausibility; lower score is better.
     This function is designed for objects that manipulator robots will usually interact with"""
     # score T on rotation's distance away from prior of being upright
@@ -578,7 +604,13 @@ def icp_plausible_score(T, all_points, icp_rmse, dim=3, upright_bias=0.3, physic
     # should not float off the ground
     physics_score = all_points[:, :, 2].min(dim=1).values.abs()
 
-    return fit_quality_score + upright_score * upright_bias + physics_score * physics_bias
+    score = fit_quality_score + upright_score * upright_bias + physics_score * physics_bias
+
+    # reject a portion of the input (assign them inf score) based on their quantile in terms of fit quality
+    score_threshold = torch.quantile(score, 1 - reject_proportion_on_quality)
+    score[score > score_threshold] = float('inf')
+
+    return score
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
