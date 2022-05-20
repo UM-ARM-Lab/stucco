@@ -214,3 +214,16 @@ python retrieval_main.py ours --task TC --seed 0 1 2 3 4 5 6 7; python retrieval
 ```
 
 repeat with baselines by replacing `ours` with `online-birch` and other baselines
+
+## Citation
+```
+@ARTICLE{9696372,
+  author={Zhong, Sheng and Fazeli, Nima and Berenson, Dmitry},
+  journal={IEEE Robotics and Automation Letters}, 
+  title={Soft Tracking Using Contacts for Cluttered Objects to Perform Blind Object Retrieval}, 
+  year={2022},
+  volume={7},
+  number={2},
+  pages={3507-3514},
+  doi={10.1109/LRA.2022.3146915}}
+```
