@@ -446,6 +446,24 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
         return dx_samples
 
 
+class ICPEVVoxelizedPolicy(ICPEVExplorationPolicy):
+    """ICPEV exploration where we sample model points instead of fixed sliding around self"""
+
+    def __init__(self, *args, resolution=0.025, range_per_dim=0.25, **kwargs):
+        super(ICPEVVoxelizedPolicy, self).__init__(*args, **kwargs)
+        self.resolution = resolution
+        if isinstance(range_per_dim, (float, int)):
+            range_per_dim = tuple(range_per_dim for _ in range(3))
+        self.range_per_dim = range_per_dim
+
+    def sample_dx(self, xs, df):
+        # x = xs[-1]
+        # sample voxels around current x
+        dx_samples = torch.cartesian_prod(
+            *[torch.arange(-half_span, half_span + self.resolution, step=self.resolution) for half_span in self.range_per_dim])
+        return dx_samples
+
+
 class GPVarianceExploration(ShapeExplorationPolicy):
     def __init__(self, alpha=0.01, training_iter=50, icp_period=200, gpscale=5, verify_numerical_gradients=False,
                  mesh_surface_alpha=1., **kwargs):
