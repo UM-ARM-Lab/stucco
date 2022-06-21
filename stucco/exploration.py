@@ -7,7 +7,7 @@ import numpy as np
 import pybullet as p
 import pytorch_kinematics
 import torch
-from arm_pytorch_utilities import tensor_utils, rand
+from arm_pytorch_utilities import tensor_utils, rand, linalg
 from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
 
@@ -143,7 +143,7 @@ class PlotPointType(enum.Enum):
 
 class ShapeExplorationPolicy(abc.ABC):
     def __init__(self, icp_pose_score=ICPPoseScore(), vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS,
-                 vis_obj_id=None, debug=False):
+                 vis_obj_id=None, debug=False, debug_name=""):
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
@@ -158,6 +158,7 @@ class ShapeExplorationPolicy(abc.ABC):
 
         self.dd = vis
         self.debug = debug
+        self.debug_name = debug_name  # name to distinguish this run from others if saving anything for debugging
 
     def set_debug(self, debug_on):
         self.debug = debug_on
@@ -225,14 +226,15 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100,
                  icp_batch=30, alpha=0.01,
-                 alpha_evaluate=0.05, verify_icp_error=False, upright_bias=0.3,
+                 alpha_evaluate=0.05,
+                 upright_bias=0.3,
+                 verify_icp_error=False, evaluate_icpev_correlation=False,
                  debug_obj_factory: PybulletObjectFactory = None, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
         self.alpha = alpha
         self.alpha_evaluate = alpha_evaluate
-        self.verify_icp_error = verify_icp_error
         self.N = num_samples_each_action
         self.B = icp_batch
 
@@ -248,6 +250,10 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         # need a method to measure the distance to the surface of the object in object frame
         # treat this as a signed distance function
         self.obj_frame_sdf = obj_frame_sdf
+
+        # debug flags
+        self.verify_icp_error = verify_icp_error
+        self.evaluate_icpev_correlation = evaluate_icpev_correlation
 
         # for creating visual shapes in debugging
         self.debug_obj_factory = debug_obj_factory
@@ -292,12 +298,12 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         n = df[-1]
         if t > 5:
             # query for next place to go based on approximated uncertainty using ICP error variance
+            this_pts = torch.stack(xs).reshape(-1, 3)
             if self.unused_cache_transforms:
                 # consume this transform set
                 self.unused_cache_transforms = False
             else:
                 # do ICP
-                this_pts = torch.stack(xs).reshape(-1, 3)
                 self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
                                                           given_init_pose=self.best_tsf_guess, batch=self.B)
 
@@ -315,7 +321,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             # don't care about sign of penetration or separation
             query_icp_error = query_icp_error.abs()
 
-            if self.verify_icp_error:
+            if self.debug and self.verify_icp_error:
                 self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
 
             # score ICP and save best one to initialize for next step
@@ -332,12 +338,70 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             best_tsf_index = torch.argmin(score)
             self.best_tsf_guess = self.T[best_tsf_index].inverse()
 
+            if self.debug and self.evaluate_icpev_correlation and t % 10 == 0:
+                self._debug_icpev_correlation(this_pts, new_points_world_fram, icp_error_var)
             if self.debug and self.debug_obj_factory is not None:
                 self._debug_icp_distribution(new_points_world_frame, icp_error_var)
         else:
             dx = torch.randn(3, dtype=self.dtype, device=self.device)
             dx = dx / dx.norm() * self.alpha
         return dx
+
+    def _debug_icpev_correlation(self, icp_points, new_points_world_frame, query_icp_error):
+        # evaluate how good of a proxy is ICPEV for how much our ICP
+        # estimated parameter distribution change as a result of knowing contact at a point
+        # TODO evaluate distribution differences as a result of stein ICP
+        # TODO consider orientation as well, which have to be modelled with a mixture of gaussians
+        T = self.T.inverse()
+        translations = T[:, :2, 2]
+        # treat it as gaussian and compare distance between gaussians
+
+        base_mean = translations.mean(dim=0)
+        # base_var = torch.diag(translations.var(dim=0))
+        base_var = linalg.cov(translations)
+        base_dist = torch.distributions.MultivariateNormal(base_mean, base_var)
+
+        icpevs = []
+        actual_diff = []
+        # TODO consider evaluate this in batch form?
+        total_i = len(query_icp_error)
+        for i in range(len(query_icp_error)):
+            if i % 500 == 0:
+                print(f"evaluated ICPEV {i}/{total_i}")
+            pt = new_points_world_frame[i]
+            T, icp_rmse = icp.icp_pytorch3d(torch.cat((icp_points, pt.view(1, -1))), self.model_points,
+                                            given_init_pose=self.best_tsf_guess, batch=self.B)
+            T = T.inverse()
+            translations = T[:, :2, 2]
+            m = translations.mean(dim=0)
+            # v = torch.diag(translations.var(dim=0))
+            v = linalg.cov(translations)
+            dist = torch.distributions.MultivariateNormal(m, v)
+
+            diff = torch.distributions.kl_divergence(base_dist, dist).mean()
+
+            icpevs.append(query_icp_error[i].item())
+            actual_diff.append(diff.item())
+
+        import os
+        from stucco import cfg
+        import matplotlib.pyplot as plt
+
+        save_loc = os.path.join(cfg.DATA_DIR, "icpev_correlation")
+        os.makedirs(save_loc, exist_ok=True)
+
+        def save_and_close_fig(f, name):
+            plt.savefig(os.path.join(save_loc, f"{self.debug_name} {name}.png"))
+            plt.close(f)
+
+        f = plt.figure()
+        fig_name = f"{len(icp_points)} points explored"
+        f.suptitle(fig_name)
+        ax = plt.gca()
+        ax.scatter(icpevs, actual_diff, alpha=0.5)
+        ax.set_xlabel("ICPEV")
+        ax.set_ylabel("KL divergence")
+        save_and_close_fig(f, fig_name)
 
     def _debug_verify_icp_error(self, new_points_world_frame, query_icp_error):
         # compare our method of transforming all points to link frame with transforming all objects
@@ -449,7 +513,7 @@ class ICPEVSampleModelPointsPolicy(ICPEVExplorationPolicy):
 class ICPEVVoxelizedPolicy(ICPEVExplorationPolicy):
     """ICPEV exploration where we sample model points instead of fixed sliding around self"""
 
-    def __init__(self, *args, resolution=0.025, range_per_dim=0.25, **kwargs):
+    def __init__(self, *args, resolution=0.05, range_per_dim=0.25, **kwargs):
         super(ICPEVVoxelizedPolicy, self).__init__(*args, **kwargs)
         self.resolution = resolution
         if isinstance(range_per_dim, (float, int)):
@@ -460,7 +524,8 @@ class ICPEVVoxelizedPolicy(ICPEVExplorationPolicy):
         # x = xs[-1]
         # sample voxels around current x
         dx_samples = torch.cartesian_prod(
-            *[torch.arange(-half_span, half_span + self.resolution, step=self.resolution) for half_span in self.range_per_dim])
+            *[torch.arange(-half_span, half_span + self.resolution, step=self.resolution) for half_span in
+              self.range_per_dim])
         return dx_samples
 
 

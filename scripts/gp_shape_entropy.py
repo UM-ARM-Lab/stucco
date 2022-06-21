@@ -863,7 +863,11 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
         errors_at_model = data[1]
         errors_at_rep = data[2]
 
+        # try stripping out runs - sometimes the experiment terminated prematurely
         try:
+            expected_len = len(errors_at_rep[0])
+            errors_at_rep = [run for run in errors_at_rep if len(run) == expected_len]
+            errors_at_model = [run for run in errors_at_model if len(run) == expected_len]
             avg_err = torch.stack([torch.tensor(errors_at_rep), torch.tensor(errors_at_model)])
         except RuntimeError as e:
             print(f"Skipping {name} due to {e}")
@@ -943,22 +947,24 @@ if __name__ == "__main__":
     # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200}
-    exp_name = "icpev_model_sample_weighted"
+    exp_name = "voxelized"
+    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200, "evaluate_icpev_correlation": True, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
     #                            run_name=exp_name, viewing_delay=0.5)
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
-                                 policy_args=policy_args)
+    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
+    #                              policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # experiment = GPVarianceExperiment(GPVarianceExploration(), plot_point_type=PlotPointType.NONE)
+    # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
+    experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
+                                 policy_args=policy_args)
     for seed in range(10):
         experiment.run(run_name=exp_name, seed=seed)
-    # plot_exploration_results(names_to_include=lambda
-    #     name: "no_upright_prior" in name or "var_upright_prior_sample" in name or "reachability" in name or "no_normal" in name or "pytorch3d" in name)
-    # plot_exploration_results(names_to_include=lambda name: "pytorch3d" in name and "sample" in name or "gp_var" in name, logy=False)
+    # plot_exploration_results(logy=True, names_to_include=lambda
+    #     name: "random_sample" in name and "icpev" not in name)
+    # plot_exploration_results(names_to_include=lambda name:  "model_sample" in name or "random" in name, logy=True)
     # experiment.run(run_name="gp_var")
