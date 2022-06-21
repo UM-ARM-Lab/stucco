@@ -339,7 +339,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             self.best_tsf_guess = self.T[best_tsf_index].inverse()
 
             if self.debug and self.evaluate_icpev_correlation and t % 10 == 0:
-                self._debug_icpev_correlation(this_pts, new_points_world_fram, icp_error_var)
+                self._debug_icpev_correlation(this_pts, new_points_world_frame, icp_error_var)
             if self.debug and self.debug_obj_factory is not None:
                 self._debug_icp_distribution(new_points_world_frame, icp_error_var)
         else:
