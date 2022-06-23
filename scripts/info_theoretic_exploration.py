@@ -640,20 +640,23 @@ class ShapeExplorationExperiment(abc.ABC):
 
 
 class ICPEVExperiment(ShapeExplorationExperiment):
-    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, **kwargs):
+    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.01, **kwargs):
         if policy_args is None:
             policy_args = {}
         super(ICPEVExperiment, self).__init__(**kwargs)
 
         # test object needs collision shape to test against, so we can't use visual only object
-        self.testObjId, _ = self.obj_factory.make_collision_obj(self.z)
+        self.testObjId, range_per_dim = self.obj_factory.make_collision_obj(self.z)
         p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.testObjId, -1, mass=0)
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
         obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
-        self.set_policy(policy_factory(obj_frame_sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
+        cached_obj_frame_sdf = exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
+                                                     obj_frame_sdf)
+        self.set_policy(
+            policy_factory(cached_obj_frame_sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
     def _start_step(self, xs, df):
         pass
@@ -948,7 +951,8 @@ if __name__ == "__main__":
 
     # -- exploration experiment
     exp_name = "voxelized"
-    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200, "evaluate_icpev_correlation": True, "debug_name": exp_name}
+    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
+                   "evaluate_icpev_correlation": False, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,

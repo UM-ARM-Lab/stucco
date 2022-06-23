@@ -2,17 +2,23 @@ import abc
 import enum
 import math
 
+import os
 import gpytorch
 import numpy as np
 import pybullet as p
 import pytorch_kinematics
 import torch
+import logging
 from arm_pytorch_utilities import tensor_utils, rand, linalg
 from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
+from multidim_indexing import torch_view
 
+from stucco import cfg
 from stucco import icp
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
+
+logger = logging.getLogger(__name__)
 
 
 def weighted_mean_and_variance(x, weights):
@@ -198,7 +204,6 @@ class ObjectFrameSDF(abc.ABC):
         """
 
 
-# TODO need to implement actual SDF to handle voxellization
 class PyBulletNaiveSDF(ObjectFrameSDF):
     def __init__(self, test_obj_id, plot_point_type=PlotPointType.NONE, vis=None):
         self.test_obj_id = test_obj_id
@@ -208,7 +213,7 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
     def __call__(self, points_in_object_frame):
         B, N, d = points_in_object_frame.shape
         # compute ICP error for new sampled points
-        query_icp_error = torch.zeros(B, N)
+        query_icp_error = torch.zeros(B, N, dtype=points_in_object_frame.dtype, device=points_in_object_frame.device)
         # points are transformed to link frame, thus it needs to compare against the object in link frame
         # objId is not in link frame and shouldn't be moved
         for b in range(B):
@@ -221,6 +226,69 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
                                         length=0.005,
                                         label=f'{closest[ContactInfo.DISTANCE]:.5f}')
         return query_icp_error
+
+
+class CachedSDF(ObjectFrameSDF):
+    def __init__(self, object_name, resolution, range_per_dim, gt_sdf=None, out_of_range_value=1, debug_check_sdf=False):
+        fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
+        # cache for signed distance field to object
+        self._cache = None
+        cached_underlying_sdf = None
+        self.gt_sdf = gt_sdf
+        self.resolution = resolution
+
+        # ensure value range divides resolution evenly
+        temp_range = []
+        for low, high in range_per_dim:
+            span = high - low
+            span = round(span / resolution)
+            temp_range.append((low, low + span * resolution))
+        range_per_dim = temp_range
+
+        self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
+        self.debug_check_sdf = debug_check_sdf
+
+        if os.path.exists(fullname):
+            data = torch.load(fullname)
+            if self.name in data:
+                cached_underlying_sdf = data[self.name]
+                logger.info("cached sdf for %s loaded from %s", self.name, fullname)
+
+        # if we didn't load anything, then we need to create the cache and save to it
+        if cached_underlying_sdf is None:
+            if gt_sdf is None:
+                raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
+
+            # create points along the value ranges
+            coords = [torch.arange(low, high + resolution, resolution) for low, high in range_per_dim]
+            pts = torch.cartesian_prod(*coords)
+            sdf_val = gt_sdf(pts.unsqueeze(0)).squeeze(0)  # batch B = 1
+            cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
+            # confirm the values work
+            if self.debug_check_sdf:
+                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
+                                                          invalid_value=out_of_range_value)
+                query = debug_view[pts]
+                assert torch.allclose(sdf_val, query)
+
+            data = {self.name: cached_underlying_sdf}
+
+            torch.save(data, fullname)
+            logger.info("caching sdf for %s to %s", self.name, fullname)
+
+        self._cache = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
+                                                   invalid_value=out_of_range_value)
+
+    def __call__(self, points_in_object_frame):
+        res = self._cache[points_in_object_frame]
+        if self.debug_check_sdf:
+            res_gt = self.gt_sdf(points_in_object_frame)
+            # the ones that are valid should be close enough to the ground truth
+            diff = torch.abs(res - res_gt)
+            close_enough = diff < self.resolution
+            within_bounds = self._cache.get_valid_values(points_in_object_frame)
+            assert torch.all(close_enough[within_bounds])
+        return res
 
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
@@ -274,9 +342,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def select_dx(self, dx_samples, icp_error_var):
         most_informative_idx = icp_error_var.argmax()
         dx = dx_samples[most_informative_idx]
-        print(f"chose action {most_informative_idx.item()} / {self.N} {dx} "
-              f"error var {icp_error_var[most_informative_idx].item():.5f} "
-              f"avg error var {icp_error_var.mean().item():.5f}")
+        logger.debug(f"chose action {most_informative_idx.item()} / {self.N} {dx} "
+                     f"error var {icp_error_var[most_informative_idx].item():.5f} "
+                     f"avg error var {icp_error_var.mean().item():.5f}")
         return dx
 
     def _clear_cached_tf(self):
@@ -367,7 +435,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         total_i = len(query_icp_error)
         for i in range(len(query_icp_error)):
             if i % 500 == 0:
-                print(f"evaluated ICPEV {i}/{total_i}")
+                logger.debug(f"evaluated ICPEV {i}/{total_i}")
             pt = new_points_world_frame[i]
             T, icp_rmse = icp.icp_pytorch3d(torch.cat((icp_points, pt.view(1, -1))), self.model_points,
                                             given_init_pose=self.best_tsf_guess, batch=self.B)
@@ -383,8 +451,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             icpevs.append(query_icp_error[i].item())
             actual_diff.append(diff.item())
 
-        import os
-        from stucco import cfg
         import matplotlib.pyplot as plt
 
         save_loc = os.path.join(cfg.DATA_DIR, "icpev_correlation")
@@ -462,9 +528,9 @@ class RandomSlidePolicy(ICPEVExplorationPolicy):
     def select_dx(self, dx_samples, icp_error_var):
         idx = torch.randint(self.N, (1,)).item()
         dx = dx_samples[idx]
-        print(f"chose action {idx} / {self.N} {dx} "
-              f"error var {icp_error_var[idx].item():.5f} "
-              f"avg error var {icp_error_var.mean().item():.5f}")
+        logger.debug(f"chose action {idx} / {self.N} {dx} "
+                     f"error var {icp_error_var[idx].item():.5f} "
+                     f"avg error var {icp_error_var.mean().item():.5f}")
         return dx
 
 
@@ -587,7 +653,7 @@ class GPVarianceExploration(ShapeExplorationPolicy):
     def end_step(self, xs, df, t):
         # augment data with ICP shape pseudo-observations
         if t > 0 and t % self.icp_period == 0:
-            print('conditioning exploration on ICP results')
+            logger.debug('conditioning exploration on ICP results')
             # perform ICP and visualize the transformed points
             this_pts = torch.stack(xs).reshape(-1, 3)
             T, distances, _ = icp.icp_3(this_pts, self.model_points,
