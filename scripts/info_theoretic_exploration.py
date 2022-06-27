@@ -640,7 +640,7 @@ class ShapeExplorationExperiment(abc.ABC):
 
 
 class ICPEVExperiment(ShapeExplorationExperiment):
-    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.01, **kwargs):
+    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.025, **kwargs):
         if policy_args is None:
             policy_args = {}
         super(ICPEVExperiment, self).__init__(**kwargs)
@@ -653,6 +653,9 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
         obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
+        # inflate the range_per_dim to allow for pose estimates around a single point
+        range_per_dim *= 2
+        range_per_dim[2, 0] = -range_per_dim[2, 1]
         cached_obj_frame_sdf = exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
                                                      obj_frame_sdf)
         self.set_policy(
@@ -950,7 +953,7 @@ if __name__ == "__main__":
     # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    exp_name = "voxelized"
+    exp_name = "cache_fallback"
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
                    "evaluate_icpev_correlation": False, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
@@ -964,11 +967,11 @@ if __name__ == "__main__":
     # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
     # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
-    experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
-                                 policy_args=policy_args)
-    for seed in range(10):
-        experiment.run(run_name=exp_name, seed=seed)
+    # experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
+    #                              policy_args=policy_args)
+    # for seed in range(10):
+    #     experiment.run(run_name=exp_name, seed=seed, timesteps=150)
     # plot_exploration_results(logy=True, names_to_include=lambda
     #     name: "random_sample" in name and "icpev" not in name)
-    # plot_exploration_results(names_to_include=lambda name:  "model_sample" in name or "random" in name, logy=True)
+    plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")

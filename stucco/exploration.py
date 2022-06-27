@@ -211,6 +211,8 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
         self.vis = vis
 
     def __call__(self, points_in_object_frame):
+        if len(points_in_object_frame.shape) == 2:
+            points_in_object_frame = points_in_object_frame.unsqueeze(0)
         B, N, d = points_in_object_frame.shape
         # compute ICP error for new sampled points
         query_icp_error = torch.zeros(B, N, dtype=points_in_object_frame.dtype, device=points_in_object_frame.device)
@@ -229,7 +231,7 @@ class PyBulletNaiveSDF(ObjectFrameSDF):
 
 
 class CachedSDF(ObjectFrameSDF):
-    def __init__(self, object_name, resolution, range_per_dim, gt_sdf=None, out_of_range_value=1, debug_check_sdf=False):
+    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, debug_check_sdf=False):
         fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
         # cache for signed distance field to object
         self._cache = None
@@ -266,8 +268,7 @@ class CachedSDF(ObjectFrameSDF):
             cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
             # confirm the values work
             if self.debug_check_sdf:
-                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
-                                                          invalid_value=out_of_range_value)
+                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
                 query = debug_view[pts]
                 assert torch.allclose(sdf_val, query)
 
@@ -276,8 +277,7 @@ class CachedSDF(ObjectFrameSDF):
             torch.save(data, fullname)
             logger.info("caching sdf for %s to %s", self.name, fullname)
 
-        self._cache = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
-                                                   invalid_value=out_of_range_value)
+        self._cache = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
 
     def __call__(self, points_in_object_frame):
         res = self._cache[points_in_object_frame]
