@@ -136,6 +136,8 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         #                             B_normals=model_normals_register)
         T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
                                          given_init_pose=best_tsf_guess, batch=B)
+        T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
+                                     batch=B)
 
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
                                                      viewing_delay)
@@ -943,19 +945,19 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    # experiment = ICPEVExperiment()
-    # for normal_weight in [0.05]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                      name=f"pytorch3d icp {gt_num} mp", viewing_delay=0, num_points_list=[100],
-    #                      normal_scale=normal_weight)
-    # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
+    experiment = ICPEVExperiment()
+    for normal_weight in [0.05]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+                         name=f"stein icp {gt_num} mp", viewing_delay=0, # num_points_list=[100],
+                         normal_scale=normal_weight)
+    plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    exp_name = "cache_fallback"
-    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-                   "evaluate_icpev_correlation": False, "debug_name": exp_name}
+    # exp_name = "voxelized"
+    # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
+    #                "evaluate_icpev_correlation": False, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
@@ -972,6 +974,6 @@ if __name__ == "__main__":
     # for seed in range(10):
     #     experiment.run(run_name=exp_name, seed=seed, timesteps=150)
     # plot_exploration_results(logy=True, names_to_include=lambda
-    #     name: "random_sample" in name and "icpev" not in name)
-    plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
+    #     name: "random_sample" in name and "icpev" not in name or "voxelized" in name)
+    # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")
