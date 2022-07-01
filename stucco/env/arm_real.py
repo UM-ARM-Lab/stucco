@@ -21,14 +21,13 @@ from stucco import tracking
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.detection import ContactSensor
 from stucco import cfg
-from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, Visualizer, \
-    PlanarPointToConfig, InfoKeys
+from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, PlanarPointToConfig, InfoKeys
 
 from stucco.detection import ContactDetector
 from geometry_msgs.msg import Pose
 
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, DebugDrawer, state_action_color_pairs
-from stucco.env.real_env import DebugRvizDrawer
+from stucco.env.real_env import CombinedVisualizer
 
 from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
 from tf2_geometry_msgs import WrenchStamped
@@ -77,42 +76,6 @@ def pose_msg_to_pos_quaternion(pm: Pose):
 def xy_pose_distance(a: Pose, b: Pose):
     pos_distance = np.linalg.norm(ros_numpy.numpify(a.position)[:2] - ros_numpy.numpify(b.position)[:2])
     return pos_distance
-
-
-class CombinedVisualizer(Visualizer):
-    def __init__(self):
-        self.ros: typing.Optional[DebugRvizDrawer] = None
-        self.sim: typing.Optional[DebugDrawer] = None
-
-    def init_sim(self, *args, **kwargs):
-        self.sim = DebugDrawer(*args, **kwargs)
-
-    def init_ros(self, *args, **kwargs):
-        self.ros = DebugRvizDrawer(*args, **kwargs)
-
-    def draw_point(self, *args, **kwargs):
-        if self.sim is not None:
-            self.sim.draw_point(*args, **kwargs)
-        if self.ros is not None:
-            self.ros.draw_point(*args, **kwargs)
-
-    def draw_2d_line(self, *args, **kwargs):
-        if self.sim is not None:
-            self.sim.draw_2d_line(*args, **kwargs)
-        if self.ros is not None:
-            self.ros.draw_2d_line(*args, **kwargs)
-
-    def draw_2d_pose(self, *args, **kwargs):
-        if self.sim is not None:
-            self.sim.draw_2d_pose(*args, **kwargs)
-        if self.ros is not None:
-            self.ros.draw_2d_pose(*args, **kwargs)
-
-    def clear_visualizations(self, names=None):
-        if self.sim is not None:
-            self.sim.clear_visualizations(names)
-        if self.ros is not None:
-            self.ros.clear_visualizations(names)
 
 
 class RealArmEnv(Env):

@@ -1,6 +1,7 @@
 # utilities for real environments that are typically using ROS
 import copy
 import os.path
+import typing
 from datetime import datetime
 
 import rospy
@@ -14,6 +15,8 @@ from arm_video_recorder.srv import TriggerVideoRecording, TriggerVideoRecordingR
 from stucco import cfg
 from stucco.env.env import Visualizer
 import logging
+
+from stucco.env.pybullet_env import DebugDrawer
 
 logger = logging.getLogger(__name__)
 
@@ -289,3 +292,45 @@ class DebugRvizDrawer(Visualizer):
         marker.color.g = 0.3
 
         self.marker_pub.publish(marker)
+
+
+class CombinedVisualizer(Visualizer):
+    def __init__(self):
+        self.ros: typing.Optional[DebugRvizDrawer] = None
+        self.sim: typing.Optional[DebugDrawer] = None
+
+    def init_sim(self, *args, **kwargs):
+        self.sim = DebugDrawer(*args, **kwargs)
+
+    def init_ros(self, *args, **kwargs):
+        self.ros = DebugRvizDrawer(*args, **kwargs)
+
+    def draw_point(self, *args, **kwargs):
+        if self.sim is not None:
+            self.sim.draw_point(*args, **kwargs)
+        if self.ros is not None:
+            self.ros.draw_point(*args, **kwargs)
+
+    def draw_2d_line(self, *args, **kwargs):
+        if self.sim is not None:
+            self.sim.draw_2d_line(*args, **kwargs)
+        if self.ros is not None:
+            self.ros.draw_2d_line(*args, **kwargs)
+
+    def draw_2d_pose(self, *args, **kwargs):
+        if self.sim is not None:
+            self.sim.draw_2d_pose(*args, **kwargs)
+        if self.ros is not None:
+            self.ros.draw_2d_pose(*args, **kwargs)
+
+    def clear_visualizations(self, names=None):
+        if self.sim is not None:
+            self.sim.clear_visualizations(names)
+        if self.ros is not None:
+            self.ros.clear_visualizations(names)
+
+    def clear_visualization_after(self, prefix, index):
+        if self.sim is not None:
+            self.sim.clear_visualization_after(prefix, index)
+        if self.ros is not None:
+            self.ros.clear_visualization_after(prefix, index)
