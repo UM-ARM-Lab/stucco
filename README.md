@@ -12,8 +12,7 @@
 1. install required libraries (clone then cd and `pip install -e .`)
    [pytorch utilities](https://github.com/UM-ARM-Lab/arm_pytorch_utilities),
    [pytorch kinematics](https://github.com/UM-ARM-Lab/pytorch_kinematics),
-   [multidim indexing](https://github.com/LemonPi/multidim_indexing),
-   [YCB object models](https://github.com/eleramp/pybullet-object-models) (only for testing envs)
+   [multidim indexing](https://github.com/LemonPi/multidim_indexing)
 2. `pip install -e .`
 
 ## Usage

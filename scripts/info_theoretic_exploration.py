@@ -22,7 +22,6 @@ from matplotlib import pyplot as plt
 
 from arm_pytorch_utilities import tensor_utils, rand
 from arm_pytorch_utilities.grad import jacobian
-from pybullet_object_models import ycb_objects
 from torchmcubes import marching_cubes
 
 from stucco import cfg, icp
@@ -480,7 +479,7 @@ class YCBObjectFactory(PybulletObjectFactory):
         self.vis_frame_rot = vis_frame_rot
 
     def make_collision_obj(self, z, rgba=None):
-        obj_id = p.loadURDF(os.path.join(ycb_objects.getDataPath(), self.ycb_name, "model.urdf"),
+        obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
                             [0., 0., z * 3],
                             p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale)
         ranges = np.array([[-.15, .15], [-.15, .15], [-0.05, .5]]) * self.scale
@@ -491,7 +490,7 @@ class YCBObjectFactory(PybulletObjectFactory):
     def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
         if visual_shape_id is None:
             visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
-                                                  fileName=os.path.join(ycb_objects.getDataPath(), self.ycb_name,
+                                                  fileName=os.path.join(cfg.URDF_DIR, self.ycb_name,
                                                                         "textured_simple_reoriented.obj"),
                                                   rgbaColor=rgba, meshScale=[self.scale, self.scale, self.scale],
                                                   visualFrameOrientation=self.vis_frame_rot,
@@ -945,19 +944,19 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    experiment = ICPEVExperiment()
-    for normal_weight in [0.05]:
-        for gt_num in [500]:
-            for seed in range(10):
-                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                         name=f"stein icp {gt_num} mp", viewing_delay=0, # num_points_list=[100],
-                         normal_scale=normal_weight)
-    plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
+    # experiment = ICPEVExperiment()
+    # for normal_weight in [0.05]:
+    #     for gt_num in [500]:
+    #         for seed in range(10):
+    #             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+    #                      name=f"stein icp {gt_num} mp", viewing_delay=0, # num_points_list=[100],
+    #                      normal_scale=normal_weight)
+    # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    # exp_name = "voxelized"
-    # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-    #                "evaluate_icpev_correlation": False, "debug_name": exp_name}
+    exp_name = "stein"
+    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
+                   "evaluate_icpev_correlation": False, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
@@ -966,14 +965,14 @@ if __name__ == "__main__":
     #                              policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
+    experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
+                                 policy_args=policy_args)
     # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
     # experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    # for seed in range(10):
-    #     experiment.run(run_name=exp_name, seed=seed, timesteps=150)
+    for seed in range(10):
+        experiment.run(run_name=exp_name, seed=seed)
     # plot_exploration_results(logy=True, names_to_include=lambda
-    #     name: "random_sample" in name and "icpev" not in name or "voxelized" in name)
+    #     name: "random_sample" in name and "icpev" not in name or "voxelized" in name or "stein" in name)
     # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")
