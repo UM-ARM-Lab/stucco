@@ -30,6 +30,7 @@ from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
+from stucco.env.real_env import CombinedVisualizer
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
     PybulletObjectFactory
 
@@ -472,11 +473,9 @@ def make_sphere_preconfig(z):
 
 
 class YCBObjectFactory(PybulletObjectFactory):
-    def __init__(self, name, ycb_name, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1), **kwargs):
+    def __init__(self, name, ycb_name, **kwargs):
         super(YCBObjectFactory, self).__init__(name, **kwargs)
         self.ycb_name = ycb_name
-        self.vis_frame_pos = vis_frame_pos
-        self.vis_frame_rot = vis_frame_rot
 
     def make_collision_obj(self, z, rgba=None):
         obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
@@ -487,16 +486,8 @@ class YCBObjectFactory(PybulletObjectFactory):
             p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
         return obj_id, ranges
 
-    def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
-        if visual_shape_id is None:
-            visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
-                                                  fileName=os.path.join(cfg.URDF_DIR, self.ycb_name,
-                                                                        "textured_simple_reoriented.obj"),
-                                                  rgbaColor=rgba, meshScale=[self.scale, self.scale, self.scale],
-                                                  visualFrameOrientation=self.vis_frame_rot,
-                                                  visualFramePosition=self.vis_frame_pos)
-        obj_id = p.createMultiBody(baseMass=0, basePosition=pos, baseVisualShapeIndex=visual_shape_id)
-        return visual_shape_id, obj_id
+    def get_mesh_resource_filename(self):
+        return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
 
 class ShapeExplorationExperiment(abc.ABC):
@@ -520,9 +511,11 @@ class ShapeExplorationExperiment(abc.ABC):
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         p.setGravity(0, 0, -10)
         p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
-        self.dd = DebugDrawer(0.8, 0.8)
-        self.dd.toggle_3d(True)
-        self.dd.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+        self.dd = CombinedVisualizer()
+        self.dd.init_sim(0.8, 0.8)
+        self.dd.sim.toggle_3d(True)
+        self.dd.sim.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+        # TODO init rviz visualization
 
         # log video
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
@@ -530,6 +523,15 @@ class ShapeExplorationExperiment(abc.ABC):
 
         self.z = 0.1
         self.objId, self.ranges = self.obj_factory.make_collision_obj(self.z)
+
+        # draw base object (in pybullet will already be there since we loaded the collision shape)
+        pose = p.getBasePositionAndOrientation(self.objId)
+        self.dd.draw_mesh("icp_distribution", self.obj_factory.get_mesh_resource_filename(),
+                          pose, scale=self.obj_factory.scale,
+                          rgba=(0, 0., 0., 0.5),
+                          vis_frame_pos=self.obj_factory.vis_frame_pos,
+                          vis_frame_rot=self.obj_factory.vis_frame_rot)
+
         # also needs to be collision since we will test collision against it to get distance
         self.visId, _ = self.obj_factory.make_collision_obj(self.z, rgba=[0.2, 0.2, 1.0, 0.5])
         p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)

@@ -255,6 +255,7 @@ class DebugDrawer(Visualizer):
         self._default_height = default_height
         self._3dmode = False
         self._inv_camera_tsf = None
+        self._mesh_shape_ids = {}
         self.set_camera_position([0, 0])
 
     def set_camera_position(self, camera_pos, yaw=0, pitch=-89):
@@ -441,3 +442,20 @@ class DebugDrawer(Visualizer):
                                                    textSize=2,
                                                    replaceItemUniqueId=uid)
         return self._debug_ids[name]
+
+    def draw_mesh(self, name, model, pose, rgba=(0, 0, 0, 1.), scale=1., object_id=None, vis_frame_pos=(0, 0, 0),
+                  vis_frame_rot=(0, 0, 0, 1)):
+        visual_shape_id = self._mesh_shape_ids.get(model, None)
+        if visual_shape_id is None:
+            visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
+                                                  fileName=model,
+                                                  rgbaColor=rgba, meshScale=[scale, scale, scale],
+                                                  visualFrameOrientation=vis_frame_rot,
+                                                  visualFramePosition=vis_frame_pos)
+            self._mesh_shape_ids[model] = visual_shape_id
+        pos, rot = pose
+        if object_id is None:
+            object_id = p.createMultiBody(baseMass=0, basePosition=pos, baseVisualShapeIndex=visual_shape_id)
+        p.resetBasePositionAndOrientation(object_id, pos, rot)
+
+        return object_id

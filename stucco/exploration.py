@@ -16,6 +16,7 @@ from multidim_indexing import torch_view
 
 from stucco import cfg
 from stucco import icp
+from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 
 logger = logging.getLogger(__name__)
@@ -88,18 +89,19 @@ def sample_dx_on_tangent_plane(n, alpha, num_samples=100):
 
 
 class PybulletObjectFactory(abc.ABC):
-    def __init__(self, name, scale=2.5):
+    def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1)):
         self.name = name
         self.scale = scale
+        self.vis_frame_pos = vis_frame_pos
+        self.vis_frame_rot = vis_frame_rot
 
     @abc.abstractmethod
     def make_collision_obj(self, z, rgba=None):
         """Create collision object of fixed and position along x-y; returns the object ID and bounding box"""
 
     @abc.abstractmethod
-    def make_visual_obj(self, visual_shape_id=None, pos=(0, 0, 0), rgba=(0, 0.8, 0.2, 0.2)):
-        """Create visual object, reusing a visual shape for instancing if given;
-        returns the visual shape ID and object ID"""
+    def get_mesh_resource_filename(self):
+        """Return the path to the mesh resource file (.obj, .stl, ...)"""
 
 
 # TODO score with freespace penetration
@@ -148,7 +150,8 @@ class PlotPointType(enum.Enum):
 
 
 class ShapeExplorationPolicy(abc.ABC):
-    def __init__(self, icp_pose_score=ICPPoseScore(), vis=None, plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS,
+    def __init__(self, icp_pose_score=ICPPoseScore(), vis: Visualizer = None,
+                 plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS,
                  vis_obj_id=None, debug=False, debug_name=""):
         self.model_points = None
         self.model_normals = None
@@ -325,7 +328,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
 
         # for creating visual shapes in debugging
         self.debug_obj_factory = debug_obj_factory
-        self.debug_obj_ids = []
+        self.debug_obj_ids = {}
         self.debug_visual_shape_id = None
 
     def register_transforms(self, T, rmse, best_T=None):
@@ -374,9 +377,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # do ICP
                 self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
                                                           given_init_pose=self.best_tsf_guess, batch=self.B)
-                self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
-                                                      given_init_pose=self.T.inverse(),
-                                                      batch=self.B)
+                # self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
+                #                                       given_init_pose=self.T.inverse(),
+                #                                       batch=self.B)
 
             # every time we update T need to clear the transform cache
             self._clear_cached_tf()
@@ -496,12 +499,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
 
     def _debug_icp_distribution(self, new_points_world_frame, icp_error_var):
         # create visual objects
-        if not len(self.debug_obj_ids):
-            for b in range(self.B):
-                self.debug_visual_shape_id, debug_obj_id = self.debug_obj_factory.make_visual_obj(
-                    self.debug_visual_shape_id)
-                self.debug_obj_ids.append(debug_obj_id)
-
         # transform to the ICP'd pose
         # plot distribution of poses and the candidate points in terms of their information metric
         m = self._link_to_world_tf().get_matrix()
@@ -509,7 +506,13 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             pos = m[b, :3, 3]
             rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
             rot = tf.wxyz_to_xyzw(rot)
-            p.resetBasePositionAndOrientation(self.debug_obj_ids[b], pos, rot)
+            object_id = self.debug_obj_ids.get(b, None)
+            object_id = self.dd.draw_mesh("icp_distribution", self.debug_obj_factory.get_mesh_resource_filename(),
+                                          (pos, rot), scale=self.debug_obj_factory.scale, object_id=object_id,
+                                          rgba=(0, 0.8, 0.2, 0.2),
+                                          vis_frame_pos=self.debug_obj_factory.vis_frame_pos,
+                                          vis_frame_rot=self.debug_obj_factory.vis_frame_rot)
+            self.debug_obj_ids[b] = object_id
 
         # plot the candidate points in world frame with color map indicating their ICPEV metric
         import matplotlib.colors, matplotlib.cm

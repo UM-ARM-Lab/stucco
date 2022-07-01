@@ -293,6 +293,35 @@ class DebugRvizDrawer(Visualizer):
 
         self.marker_pub.publish(marker)
 
+    def draw_transition(self, x, new_x):
+        pass
+
+    def draw_mesh(self, name, model, pose, rgba=(0, 0, 0, 1.), scale=1., object_id=None, vis_frame_pos=(0, 0, 0),
+                  vis_frame_rot=(0, 0, 0, 1)):
+        if object_id is None:
+            if name not in self._ns:
+                object_id = 0
+            else:
+                object_id = max(self._ns[name]) + 1
+
+        marker = self.make_marker(name, marker_type=Marker.MESH_RESOURCE, scale=scale)
+        marker.id = object_id
+        # sanitize resource link
+        marker.mesh_resource = cfg.ensure_rviz_resource_path(model)
+        marker.mesh_use_embedded_materials = True
+
+        pos, rot = pose
+        marker.pose.position.x = pos[0]
+        marker.pose.position.y = pos[1]
+        marker.pose.position.z = pos[2]
+        # rot is given in xyzw
+        marker.pose.orientation.x = rot[0]
+        marker.pose.orientation.y = rot[1]
+        marker.pose.orientation.z = rot[2]
+        marker.pose.orientation.w = rot[3]
+
+        return object_id
+
 
 class CombinedVisualizer(Visualizer):
     def __init__(self):
@@ -334,3 +363,15 @@ class CombinedVisualizer(Visualizer):
             self.sim.clear_visualization_after(prefix, index)
         if self.ros is not None:
             self.ros.clear_visualization_after(prefix, index)
+
+    def draw_transition(self, x, new_x):
+        if self.sim is not None:
+            self.sim.draw_transition(x, new_x)
+        if self.ros is not None:
+            self.ros.draw_transition(x, new_x)
+
+    def draw_mesh(self, *args, **kwargs):
+        if self.sim is not None:
+            self.sim.draw_mesh(*args, **kwargs)
+        if self.ros is not None:
+            self.ros.draw_mesh(*args, **kwargs)

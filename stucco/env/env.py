@@ -116,6 +116,27 @@ class Visualizer:
     def clear_visualization_after(self, prefix, index):
         pass
 
+    @abc.abstractmethod
+    def draw_transition(self, x, new_x):
+        pass
+
+    @abc.abstractmethod
+    def draw_mesh(self, name, model, pose, rgba=(0, 0, 0, 1.), scale=1., object_id=None, vis_frame_pos=(0, 0, 0),
+                  vis_frame_rot=(0, 0, 0, 1)):
+        """
+        :param name: name for group of mesh markers
+        :param model: mesh resource file (e.g. mesh.obj)
+        :param pose: (position, xyzw unit quaternion)
+        :param rgba:
+        :param scale:
+        :param object_id: ID for the object for redrawing; pass back in to change its pose instead of drawing a new
+            mesh
+        :param vis_frame_pos position of the visual frame wrt the object frame
+        :param vis_frame_rot xyzw unit quaternion of the visual frame wrt the object frame
+        :return: object ID for the object drawn; will be the same as the input one if it's non-default
+        """
+        pass
+
 
 class Env:
     @property
