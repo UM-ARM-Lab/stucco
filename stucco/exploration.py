@@ -374,6 +374,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # do ICP
                 self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
                                                           given_init_pose=self.best_tsf_guess, batch=self.B)
+                self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
+                                                      given_init_pose=self.T.inverse(),
+                                                      batch=self.B)
 
             # every time we update T need to clear the transform cache
             self._clear_cached_tf()
