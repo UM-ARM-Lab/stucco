@@ -38,6 +38,17 @@ from stucco.retrieval_controller import sample_model_points
 
 import pytorch_kinematics.transforms as tf
 
+try:
+    import rospy
+
+    rospy.init_node("info_retrieval", log_level=rospy.INFO)
+    # without this we get not logging from the library
+    import importlib
+
+    importlib.reload(logging)
+except RuntimeError as e:
+    print("Proceeding without ROS: {}".format(e))
+
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
@@ -516,6 +527,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.dd.sim.toggle_3d(True)
         self.dd.sim.set_camera_position([0., 0.3], yaw=0, pitch=-30)
         # TODO init rviz visualization
+        self.dd.init_ros(world_frame="world")
 
         # log video
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
@@ -526,7 +538,7 @@ class ShapeExplorationExperiment(abc.ABC):
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
         pose = p.getBasePositionAndOrientation(self.objId)
-        self.dd.draw_mesh("icp_distribution", self.obj_factory.get_mesh_resource_filename(),
+        self.dd.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
                           pose, scale=self.obj_factory.scale,
                           rgba=(0, 0., 0., 0.5),
                           vis_frame_pos=self.obj_factory.vis_frame_pos,
@@ -956,7 +968,7 @@ if __name__ == "__main__":
     # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    exp_name = "stein"
+    exp_name = "temp"
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
                    "evaluate_icpev_correlation": False, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
@@ -975,6 +987,6 @@ if __name__ == "__main__":
     for seed in range(10):
         experiment.run(run_name=exp_name, seed=seed)
     # plot_exploration_results(logy=True, names_to_include=lambda
-    #     name: "random_sample" in name and "icpev" not in name or "voxelized" in name or "stein" in name)
+    #     name: "random_sample" in name and "cached" not in name and "icpev" not in name or "stein" in name or "temp" in name)
     # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")

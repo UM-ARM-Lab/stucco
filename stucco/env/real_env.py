@@ -304,8 +304,7 @@ class DebugRvizDrawer(Visualizer):
             else:
                 object_id = max(self._ns[name]) + 1
 
-        marker = self.make_marker(name, marker_type=Marker.MESH_RESOURCE, scale=scale)
-        marker.id = object_id
+        marker = self.make_marker(name, marker_type=Marker.MESH_RESOURCE, scale=scale, id=object_id)
         # sanitize resource link
         marker.mesh_resource = cfg.ensure_rviz_resource_path(model)
         marker.mesh_use_embedded_materials = True
@@ -320,7 +319,9 @@ class DebugRvizDrawer(Visualizer):
         marker.pose.orientation.z = rot[2]
         marker.pose.orientation.w = rot[3]
 
-        return object_id
+        self.marker_pub.publish(marker)
+        rospy.sleep(0.1)
+        self.marker_pub.publish(marker)
 
 
 class CombinedVisualizer(Visualizer):
