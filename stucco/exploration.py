@@ -424,7 +424,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
     def _debug_icpev_correlation(self, icp_points, new_points_world_frame, query_icp_error):
         # evaluate how good of a proxy is ICPEV for how much our ICP
         # estimated parameter distribution change as a result of knowing contact at a point
-        # TODO evaluate distribution differences as a result of stein ICP
         # TODO consider orientation as well, which have to be modelled with a mixture of gaussians
         T = self.T.inverse()
         translations = T[:, :2, 2]
@@ -458,22 +457,47 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             actual_diff.append(diff.item())
 
         import matplotlib.pyplot as plt
-
         save_loc = os.path.join(cfg.DATA_DIR, "icpev_correlation")
         os.makedirs(save_loc, exist_ok=True)
 
-        def save_and_close_fig(f, name):
-            plt.savefig(os.path.join(save_loc, f"{self.debug_name} {name}.png"))
-            plt.close(f)
+        def do_plot(extra_name="", highlight_point=None):
+            def save_and_close_fig(f, name):
+                plt.savefig(os.path.join(save_loc, f"{self.debug_name} {name}.png"))
+                plt.close(f)
 
-        f = plt.figure()
-        fig_name = f"{len(icp_points)} points explored"
-        f.suptitle(fig_name)
-        ax = plt.gca()
-        ax.scatter(icpevs, actual_diff, alpha=0.5)
-        ax.set_xlabel("ICPEV")
-        ax.set_ylabel("KL divergence")
-        save_and_close_fig(f, fig_name)
+            f = plt.figure()
+            fig_name = f"{len(icp_points)} points explored {extra_name}"
+            f.suptitle(fig_name)
+            ax = plt.gca()
+            ax.scatter(icpevs, actual_diff, alpha=0.5)
+            if highlight_point is not None:
+                ax.scatter(highlight_point[0], highlight_point[1], color='r')
+            ax.set_xlabel("ICPEV")
+            ax.set_ylabel("KL divergence")
+            save_and_close_fig(f, fig_name)
+
+        do_plot()
+
+        # TODO examine problematic points qualitatively
+        def map_to_quantile(values):
+            values = torch.tensor(values)
+            values = values - values.min()
+            return values / values.max()
+
+        icpev_quantile = map_to_quantile(icpevs)
+        kl_quantile = map_to_quantile(actual_diff)
+
+        higher_icpev_than_expected = icpev_quantile / (kl_quantile + 1e-8)
+        lower_icpev_than_expected = kl_quantile / (icpev_quantile + 1e-8)
+
+        interesting_indices_1 = torch.argsort(higher_icpev_than_expected)
+        interesting_indices_2 = torch.argsort(lower_icpev_than_expected)
+        for interesting_indices in [interesting_indices_1, interesting_indices_2]:
+            for i in range(5):
+                x = icpevs[interesting_indices[i]]
+                y = actual_diff[interesting_indices[i]]
+                # TODO actually go to this state again so we can see it in the visualizer
+                do_plot(f"{(x, y)}", (x, y))
 
     def _debug_verify_icp_error(self, new_points_world_frame, query_icp_error):
         # compare our method of transforming all points to link frame with transforming all objects

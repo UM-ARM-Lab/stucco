@@ -970,7 +970,7 @@ if __name__ == "__main__":
     # -- exploration experiment
     exp_name = "temp"
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-                   "evaluate_icpev_correlation": False, "debug_name": exp_name}
+                   "evaluate_icpev_correlation": True, "debug_name": exp_name}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,

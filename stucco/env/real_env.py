@@ -372,7 +372,9 @@ class CombinedVisualizer(Visualizer):
             self.ros.draw_transition(x, new_x)
 
     def draw_mesh(self, *args, **kwargs):
+        res = None
         if self.sim is not None:
-            self.sim.draw_mesh(*args, **kwargs)
+            res = self.sim.draw_mesh(*args, **kwargs)
         if self.ros is not None:
-            self.ros.draw_mesh(*args, **kwargs)
+            res = self.ros.draw_mesh(*args, **kwargs)
+        return res
