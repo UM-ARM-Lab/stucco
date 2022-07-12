@@ -844,11 +844,13 @@ class Means:
     ARITHMETIC = 1
 
 
-def plot_exploration_results(names_to_include=None, logy=False, marginalize_over_name=None, used_mean=Means.ARITHMETIC):
+def plot_exploration_results(names_to_include=None, logy=False, marginalize_over_name=None, plot_just_avg=True, used_mean=Means.ARITHMETIC):
     fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
     cache = torch.load(fullname)
 
-    fig, axs = plt.subplots(3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+    fig, axs = plt.subplots(1 if plot_just_avg else 3, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+    if plot_just_avg:
+        axs = [axs]
 
     if logy:
         for ax in axs:
@@ -900,7 +902,7 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
         elif used_mean is Means.ARITHMETIC:
             avg_err = avg_err.mean(dim=0)
 
-        for i, errors in enumerate([errors_at_model, errors_at_rep, avg_err]):
+        for i, errors in enumerate([avg_err] if plot_just_avg else [errors_at_model, errors_at_rep, avg_err]):
             # assume all the num errors are the same
             # convert to cm^2 (saved as m^2, so multiply by 100^2)
             errors = np.stack(errors)
@@ -919,15 +921,17 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
                 print(f"{name} {x[i]:>4} : {mean[i]:.2f} ({std[i]:.2f})")
             print()
 
-    axs[0].set_ylabel('error at model points')
-    axs[1].set_ylabel('error at rep surface')
-    axs[2].set_ylabel('average error')
+    if plot_just_avg:
+        axs[0].set_ylabel('average error')
+    else:
+        axs[0].set_ylabel('error at model points')
+        axs[1].set_ylabel('error at rep surface')
+        axs[2].set_ylabel('average error')
     axs[-1].set_xlabel('step')
     axs[-1].legend()
     if not logy:
-        axs[0].set_ylim(bottom=0)
-        axs[1].set_ylim(bottom=0)
-        axs[2].set_ylim(bottom=0)
+        for ax in axs:
+            ax.set_ylim(bottom=0)
     plt.show()
 
 
@@ -945,6 +949,16 @@ task_map = {"FB": Levels.FLAT_BOX, "BC": Levels.BEHIND_CAN, "IB": Levels.IN_BETW
 parser.add_argument('--task', default="IB", choices=task_map.keys(), help='what task to run')
 
 args = parser.parse_args()
+
+
+def ignore_beyond_distance(threshold):
+    def filter(distances):
+        d = distances.clone()
+        d[d > threshold] = threshold
+        return d
+
+    return filter
+
 
 if __name__ == "__main__":
     level = task_map[args.task]
@@ -968,9 +982,10 @@ if __name__ == "__main__":
     # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
 
     # -- exploration experiment
-    exp_name = "temp"
+    exp_name = "tukey voxel 0.1"
     policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-                   "evaluate_icpev_correlation": True, "debug_name": exp_name}
+                   "evaluate_icpev_correlation": False, "debug_name": exp_name,
+                   "distance_filter": ignore_beyond_distance(0.1)}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
@@ -979,14 +994,14 @@ if __name__ == "__main__":
     #                              policy_args=policy_args)
     # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
-                                 policy_args=policy_args)
+    # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
+    #                              policy_args=policy_args)
     # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
     # experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
     #                              policy_args=policy_args)
-    for seed in range(10):
-        experiment.run(run_name=exp_name, seed=seed)
-    # plot_exploration_results(logy=True, names_to_include=lambda
-    #     name: "random_sample" in name and "cached" not in name and "icpev" not in name or "stein" in name or "temp" in name)
+    # for seed in range(10):
+    #     experiment.run(run_name=exp_name, seed=seed)
+    plot_exploration_results(logy=True, names_to_include=lambda
+        name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
     # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")

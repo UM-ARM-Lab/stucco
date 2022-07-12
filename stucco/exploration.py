@@ -300,6 +300,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                  alpha_evaluate=0.05,
                  upright_bias=0.3,
                  verify_icp_error=False, evaluate_icpev_correlation=False,
+                 distance_filter=None,
                  debug_obj_factory: PybulletObjectFactory = None, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
@@ -321,6 +322,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         # need a method to measure the distance to the surface of the object in object frame
         # treat this as a signed distance function
         self.obj_frame_sdf = obj_frame_sdf
+        self.distance_filter = distance_filter
 
         # debug flags
         self.verify_icp_error = verify_icp_error
@@ -394,6 +396,9 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             query_icp_error = self.obj_frame_sdf(new_points_object_frame)
             # don't care about sign of penetration or separation
             query_icp_error = query_icp_error.abs()
+            # pass through filters
+            if self.distance_filter is not None:
+                query_icp_error = self.distance_filter(query_icp_error)
 
             if self.debug and self.verify_icp_error:
                 self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
