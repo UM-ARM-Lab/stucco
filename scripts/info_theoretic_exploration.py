@@ -145,10 +145,12 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # T, distances, _ = icp.icp_3(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
         #                             batch=B, normal_scale=normal_scale, A_normals=model_normals_world_frame,
         #                             B_normals=model_normals_register)
-        T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
+        # T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
+        #                                  given_init_pose=best_tsf_guess, batch=B)
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
                                          given_init_pose=best_tsf_guess, batch=B)
-        T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
-                                     batch=B)
+        # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
+        #                              batch=B)
 
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
                                                      viewing_delay)
@@ -538,7 +540,7 @@ class ShapeExplorationExperiment(abc.ABC):
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
         pose = p.getBasePositionAndOrientation(self.objId)
-        self.dd.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
+        self.dd.ros.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
                           pose, scale=self.obj_factory.scale,
                           rgba=(0, 0., 0., 0.5),
                           vis_frame_pos=self.obj_factory.vis_frame_pos,
@@ -844,7 +846,8 @@ class Means:
     ARITHMETIC = 1
 
 
-def plot_exploration_results(names_to_include=None, logy=False, marginalize_over_name=None, plot_just_avg=True, used_mean=Means.ARITHMETIC):
+def plot_exploration_results(names_to_include=None, logy=False, marginalize_over_name=None, plot_just_avg=True,
+                             used_mean=Means.ARITHMETIC):
     fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
     cache = torch.load(fullname)
 
@@ -935,22 +938,6 @@ def plot_exploration_results(names_to_include=None, logy=False, marginalize_over
     plt.show()
 
 
-parser = argparse.ArgumentParser(description='Downstream task of blind object retrieval')
-parser.add_argument('method',
-                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
-                    help='which method to run')
-parser.add_argument('--seed', metavar='N', type=int, nargs='+',
-                    default=[0],
-                    help='random seed(s) to run')
-parser.add_argument('--no_gui', action='store_true', help='force no GUI')
-# run parameters
-task_map = {"FB": Levels.FLAT_BOX, "BC": Levels.BEHIND_CAN, "IB": Levels.IN_BETWEEN, "SC": Levels.SIMPLE_CLUTTER,
-            "TC": Levels.TOMATO_CAN}
-parser.add_argument('--task', default="IB", choices=task_map.keys(), help='what task to run')
-
-args = parser.parse_args()
-
-
 def ignore_beyond_distance(threshold):
     def filter(distances):
         d = distances.clone()
@@ -961,9 +948,6 @@ def ignore_beyond_distance(threshold):
 
 
 if __name__ == "__main__":
-    level = task_map[args.task]
-    method_name = args.method
-
     # -- Build object models (sample points from their surface)
     # experiment = ICPEVExperiment()
     # for num_points in (5, 10, 20, 30, 40, 50, 100):
@@ -972,20 +956,20 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    # experiment = ICPEVExperiment()
-    # for normal_weight in [0.05]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                      name=f"stein icp {gt_num} mp", viewing_delay=0, # num_points_list=[100],
-    #                      normal_scale=normal_weight)
-    # plot_icp_results(names_to_include=lambda name: not name.startswith("point2plane"))
+    experiment = ICPEVExperiment()
+    for normal_weight in [0.05]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+                         name=f"pytorch-sgd icp 6d {gt_num} mp", viewing_delay=0,
+                         normal_scale=normal_weight)
+    plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name)
 
     # -- exploration experiment
-    exp_name = "tukey voxel 0.1"
-    policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-                   "evaluate_icpev_correlation": False, "debug_name": exp_name,
-                   "distance_filter": ignore_beyond_distance(0.1)}
+    # exp_name = "tukey voxel 0.1"
+    # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
+    #                "evaluate_icpev_correlation": False, "debug_name": exp_name,
+    #                "distance_filter": ignore_beyond_distance(0.1)}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
     #                            register_num_points=500,
@@ -1001,7 +985,7 @@ if __name__ == "__main__":
     #                              policy_args=policy_args)
     # for seed in range(10):
     #     experiment.run(run_name=exp_name, seed=seed)
-    plot_exploration_results(logy=True, names_to_include=lambda
-        name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
+    # plot_exploration_results(logy=True, names_to_include=lambda
+    #     name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
     # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
     # experiment.run(run_name="gp_var")

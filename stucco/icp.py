@@ -6,6 +6,7 @@ import time
 from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops import knn_points
 import pytorch3d.transforms as tf
+from stucco.icp_sgd import iterative_closest_point_sgd
 
 
 # from https://github.com/richardos/icp
@@ -475,6 +476,21 @@ def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
 
     res = iterative_closest_point(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
                                   allow_reflection=True)
+    T = torch.eye(4).repeat(batch, 1, 1)
+    T[:, :3, :3] = res.RTs.R.transpose(-1, -2)
+    T[:, :3, 3] = res.RTs.T
+    distances = res.rmse
+    return T, distances
+
+
+def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30):
+    given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
+                                                            given_init_pose=given_init_pose)
+    given_init_pose = given_init_pose[:, :3, :3], given_init_pose[:, :3, 3], torch.ones(batch, device=A.device,
+                                                                                        dtype=A.dtype)
+
+    res = iterative_closest_point_sgd(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                      allow_reflection=True)
     T = torch.eye(4).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R.transpose(-1, -2)
     T[:, :3, 3] = res.RTs.T
