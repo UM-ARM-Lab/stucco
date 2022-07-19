@@ -259,7 +259,7 @@ class DebugRvizDrawer(Visualizer):
 
     def clear_visualization_after(self, prefix, index):
         ns = self._ns.get(prefix, None)
-        if ns not in self._ns:
+        if ns is None:
             return
         ns = copy.deepcopy(ns)
 
