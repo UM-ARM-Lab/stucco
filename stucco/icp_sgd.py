@@ -6,10 +6,9 @@ from torch.nn import MSELoss
 from pytorch3d.ops import knn_points
 from pytorch3d.ops import utils as oputil
 from pytorch3d.structures import utils as strutil
-from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform, _apply_similarity_transform, \
-    AMBIGUOUS_ROT_SINGULAR_THR
-from pytorch3d.transforms import quaternion_to_matrix, random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix, \
-    matrix_to_quaternion
+from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform, _apply_similarity_transform
+from pytorch3d.ops.knn import _KNN
+from pytorch3d.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
 
 
 def iterative_closest_point_sgd(
@@ -23,6 +22,7 @@ def iterative_closest_point_sgd(
         sgd_iterations: int = 50,
         sgd_lr: float = 0.001,
         verbose: bool = False,
+        pose_cost=None
 ) -> ICPSolution:
     """
     Executes the iterative closest point (ICP) algorithm [1, 2] in order to find
@@ -143,14 +143,15 @@ def iterative_closest_point_sgd(
 
     # the main loop over ICP iterations
     for iteration in range(max_iterations):
-        Xt_nn_points = knn_points(
-            Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True
-        ).knn[:, :, 0, :]
+        knn_res = knn_points(Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True)
+        # closest point
+        Xt_nn_points = knn_res.knn[:, :, 0, :]
 
         # get the alignment of the nearest neighbors from Yt with Xt_init
         R, T, s = corresponding_points_alignment_sgd(
             Xt_init,
             Xt_nn_points,
+            knn_res,
             weights=mask_X,
             estimate_scale=estimate_scale,
             allow_reflection=allow_reflection,
@@ -158,7 +159,8 @@ def iterative_closest_point_sgd(
             T=T,
             s=s,
             iterations=sgd_iterations,
-            lr=sgd_lr
+            lr=sgd_lr,
+            pose_cost=pose_cost,
         )
 
         # apply the estimated similarity transform to Xt_init
@@ -208,6 +210,7 @@ def iterative_closest_point_sgd(
 def corresponding_points_alignment_sgd(
         X: Union[torch.Tensor, "Pointclouds"],
         Y: Union[torch.Tensor, "Pointclouds"],
+        knn_res: _KNN,
         weights: Union[torch.Tensor, List[torch.Tensor], None] = None,
         estimate_scale: bool = False,
         allow_reflection: bool = False,
@@ -215,6 +218,7 @@ def corresponding_points_alignment_sgd(
         R: torch.Tensor = None, T: torch.tensor = None, s: torch.tensor = None,
         iterations: int = 50,
         lr: float = 0.001,
+        pose_cost=None,
 ) -> SimilarityTransform:
     """
     Finds a similarity transformation (rotation `R`, translation `T`
@@ -326,21 +330,35 @@ def corresponding_points_alignment_sgd(
     optimizer = torch.optim.Adam([q, T, s], lr=lr)
     loss = MSELoss()
 
-    for epoch in range(iterations):
+    def get_usable_transform_representation():
+        # we get a more usable representation of R
         R = rotation_6d_to_matrix(q)
+        # we compute T based on the specifics of the problem
+        if estimate_scale:
+            # s is trained in this case
+            T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
+        else:
+            T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
+        return R, T
+
+    for epoch in range(iterations):
+        R, T = get_usable_transform_representation()
+        if estimate_scale:
+            # s is trained in this case
+            T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
+        else:
+            T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
+
         yhat = s[:, None, None] * torch.bmm(Xc, R)
 
         this_loss = loss(yhat, Yc)
+        if pose_cost is not None:
+            other_loss = pose_cost(knn_res, R, T, s)
+            this_loss += other_loss
 
         this_loss.backward()
         optimizer.step()
         optimizer.zero_grad()
 
-    R = rotation_6d_to_matrix(q)
-    if estimate_scale:
-        # s is trained in this case
-        T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
-    else:
-        T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
-
+    R, T = get_usable_transform_representation()
     return SimilarityTransform(R.detach().clone(), T.detach().clone(), s.detach().clone())
