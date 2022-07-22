@@ -344,6 +344,7 @@ class DebugRvizDrawer(Visualizer):
         self.marker_pub.publish(marker)
         rospy.sleep(0.1)
         self.marker_pub.publish(marker)
+        return object_id
 
 
 class CombinedVisualizer(Visualizer):
