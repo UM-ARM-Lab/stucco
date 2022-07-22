@@ -4,6 +4,7 @@ import os.path
 import typing
 from datetime import datetime
 
+import torch
 import rospy
 from geometry_msgs.msg import Point
 from rospy import ServiceException
@@ -15,6 +16,7 @@ from arm_video_recorder.srv import TriggerVideoRecording, TriggerVideoRecordingR
 from stucco import cfg
 from stucco.env.env import Visualizer
 import logging
+from pytorch_kinematics.transforms import quaternion_to_matrix, matrix_to_quaternion, xyzw_to_wxyz, wxyz_to_xyzw
 
 from stucco.env.pybullet_env import DebugDrawer
 
@@ -307,9 +309,21 @@ class DebugRvizDrawer(Visualizer):
         marker = self.make_marker(name, marker_type=Marker.MESH_RESOURCE, scale=scale, id=object_id)
         # sanitize resource link
         marker.mesh_resource = cfg.ensure_rviz_resource_path(model)
-        marker.mesh_use_embedded_materials = True
 
+        # apply offset in visual frame
         pos, rot = pose
+        h1 = torch.eye(4, dtype=torch.float)
+        h1[:3, 3] = torch.tensor(pos, dtype=h1.dtype)
+        h1[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(torch.tensor(rot, dtype=h1.dtype)))
+
+        h2 = torch.eye(4, dtype=h1.dtype)
+        h2[:3, 3] = torch.tensor(vis_frame_pos, dtype=h1.dtype)
+        h2[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(torch.tensor(vis_frame_rot, dtype=h1.dtype)))
+
+        h = h1 @ h2
+        pos = h[:3, 3]
+        rot = wxyz_to_xyzw(matrix_to_quaternion(h[:3, :3]))
+
         marker.pose.position.x = pos[0]
         marker.pose.position.y = pos[1]
         marker.pose.position.z = pos[2]
@@ -318,6 +332,14 @@ class DebugRvizDrawer(Visualizer):
         marker.pose.orientation.y = rot[1]
         marker.pose.orientation.z = rot[2]
         marker.pose.orientation.w = rot[3]
+
+        if rgba != (0, 0, 0, 1.):
+            marker.color.r = rgba[0]
+            marker.color.b = rgba[1]
+            marker.color.b = rgba[2]
+            marker.color.a = rgba[3]
+        else:
+            marker.mesh_use_embedded_materials = True
 
         self.marker_pub.publish(marker)
         rospy.sleep(0.1)
