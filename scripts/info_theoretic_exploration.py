@@ -34,6 +34,7 @@ from stucco.env.real_env import CombinedVisualizer
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
     PybulletObjectFactory
 from stucco import icp_costs
+from stucco import util
 
 from stucco.retrieval_controller import sample_model_points
 
@@ -153,7 +154,7 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         # T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
         #                                  given_init_pose=best_tsf_guess, batch=B)
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=norm_cost)
+                                             given_init_pose=best_tsf_guess, batch=B)
         # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
         #                              batch=B)
 
@@ -168,11 +169,14 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         print(f"num {num_points_list[i]} err {errors[i]}")
 
 
-def test_icp_freespace(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_cache=False,
+def test_icp_freespace(exp,
+                       seed=0, name="", clean_cache=False,
                        viewing_delay=0.3,
                        register_num_points=500, eval_num_points=200, num_points=10,
                        # number of known contact points
+                       interior_threshold=-0.01,
                        num_freespace_points_list=(0, 10, 20, 30, 40, 50, 100),
+                       surface_delta=0.01,
                        model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace.pkl')
     if os.path.exists(fullname):
@@ -183,6 +187,11 @@ def test_icp_freespace(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name=
             cache[name][seed] = {}
     else:
         cache = {name: {seed: {}}}
+
+    target_obj_id = exp.objId
+    vis_obj_id = exp.visId
+    vis = exp.dd
+    freespace_ranges = exp.sdf.ranges
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
@@ -206,6 +215,20 @@ def test_icp_freespace(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name=
     model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
     model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
     model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
+    model_normals_world_frame_eval = link_to_current_tf_gt.transform_normals(model_normals_eval)
+
+    # get model interior points
+    model_voxels = exp.sdf.voxels
+    interior = model_voxels.raw_data < interior_threshold
+    indices = interior.nonzero()
+    model_interior_points = model_voxels.ensure_value_key(indices)
+    model_interior_weights = -model_voxels[model_interior_points]
+
+    model_interior_points_world_frame = link_to_current_tf_gt.transform_points(model_interior_points)
+    # i = 0
+    # for i, pt in enumerate(model_interior_points_world_frame):
+    #     vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
+    # vis.clear_visualization_after("mipt", i + 1)
 
     i = 0
     for i, pt in enumerate(model_points_world_frame):
@@ -216,18 +239,36 @@ def test_icp_freespace(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name=
 
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
     for num_freespace in num_freespace_points_list:
-        # TODO sample points in freespace and plot them
-
         rand.seed(seed)
+        free_voxels = util.VoxelGrid(0.01, freespace_ranges, dtype=dtype, device=device)
+        free_space_cost = icp_costs.FreeSpaceCost(free_voxels, model_interior_points.repeat(B, 1, 1),
+                                                  model_interior_weights,
+                                                  scale=1, vis=vis)
+
+        # sample points in freespace and plot them
+        # extrude model points that are on the surface of the object along their normal vector
+        free_space_world_frame_points = model_points_world_frame_eval[:num_freespace] - model_normals_world_frame_eval[
+                                                                                        :num_freespace] * surface_delta
+        free_voxels[free_space_world_frame_points] = 1
+
+        i = 0
+        for i, pt in enumerate(free_space_world_frame_points):
+            vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=4)
+        vis.clear_visualization_after("fspt", i + 1)
+
         # perform ICP and visualize the transformed points
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B)
+                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=free_space_cost,
+                                             )
 
-        # TODO draw all ICP's sample meshes
+        # draw all ICP's sample meshes
+        exp.policy.register_transforms(T, distances)
+        exp.policy._debug_icp_distribution(None, None)
 
-        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
+        errors_per_batch = evaluate_chamfer_distance(exp.policy, model_points_world_frame_eval, vis, vis_obj_id,
+                                                     distances,
                                                      viewing_delay)
         errors.append(np.mean(errors_per_batch))
 
@@ -301,11 +342,11 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
     # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
     B = T.shape[0]
     eval_num_points = model_points_world_frame_eval.shape[0]
-
     chamfer_distance = torch.zeros(B, eval_num_points)
     link_to_world = tf.Transform3d(matrix=T.inverse())
     m = link_to_world.get_matrix()
     errors_per_batch = []
+
     for b in range(B):
         pos = m[b, :3, 3]
         rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
@@ -598,13 +639,13 @@ class ShapeExplorationExperiment(abc.ABC):
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         p.setGravity(0, 0, -10)
-        p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
+        # p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
         self.dd = CombinedVisualizer()
         self.dd.init_sim(0.8, 0.8)
         self.dd.sim.toggle_3d(True)
         self.dd.sim.set_camera_position([0., 0.3], yaw=0, pitch=-30)
-        # TODO init rviz visualization
-        self.dd.init_ros(world_frame="world")
+        # init rviz visualization
+        # self.dd.init_ros(world_frame="world")
 
         # log video
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
@@ -615,11 +656,11 @@ class ShapeExplorationExperiment(abc.ABC):
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
         pose = p.getBasePositionAndOrientation(self.objId)
-        self.dd.ros.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
-                              pose, scale=self.obj_factory.scale,
-                              rgba=(0, 0., 0., 0.5),
-                              vis_frame_pos=self.obj_factory.vis_frame_pos,
-                              vis_frame_rot=self.obj_factory.vis_frame_rot)
+        self.dd.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
+                          pose, scale=self.obj_factory.scale,
+                          rgba=(1.0, 1.0, 0., 0.5),
+                          vis_frame_pos=self.obj_factory.vis_frame_pos,
+                          vis_frame_rot=self.obj_factory.vis_frame_rot)
 
         # also needs to be collision since we will test collision against it to get distance
         self.visId, _ = self.obj_factory.make_collision_obj(self.z, rgba=[0.2, 0.2, 1.0, 0.5])
@@ -748,10 +789,10 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         # inflate the range_per_dim to allow for pose estimates around a single point
         range_per_dim *= 2
         range_per_dim[2, 0] = -range_per_dim[2, 1]
-        cached_obj_frame_sdf = exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                                     obj_frame_sdf)
+        self.sdf = exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
+                                         obj_frame_sdf)
         self.set_policy(
-            policy_factory(cached_obj_frame_sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
+            policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
     def _start_step(self, xs, df):
         pass
@@ -1031,13 +1072,24 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
+    # experiment = ICPEVExperiment()
+    # for gt_num in [500]:
+    #     for seed in range(10):
+    #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
+    #                  name=f"pytorch-sgd icp norm {gt_num} mp", viewing_delay=0)
+    # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name)
+
+    # -- freespace ICP experiment
     experiment = ICPEVExperiment()
-    for normal_weight in [0.05]:
-        for gt_num in [500]:
-            for seed in range(10):
-                test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-                         name=f"pytorch-sgd icp norm {gt_num} mp", viewing_delay=0)
-    plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name)
+    for gt_num in [500]:
+        for seed in range(10):
+            test_icp_freespace(experiment, seed=seed, num_points=5,
+                               num_freespace_points_list=(10, 20, 30, 40, 50, 100),
+                               register_num_points=gt_num,
+                               name=f"pytorch-sgd 5np freespace weighted more scale {gt_num} mp",
+                               viewing_delay=0)
+    # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name,
+    #                  icp_res_file='icp_freespace.pkl')
 
     # -- exploration experiment
     # exp_name = "tukey voxel 0.1"

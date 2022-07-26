@@ -22,6 +22,7 @@ def iterative_closest_point_sgd(
         sgd_iterations: int = 50,
         sgd_lr: float = 0.001,
         verbose: bool = False,
+        learn_translation=True,
         pose_cost=None
 ) -> ICPSolution:
     """
@@ -148,7 +149,7 @@ def iterative_closest_point_sgd(
         Xt_nn_points = knn_res.knn[:, :, 0, :]
 
         # get the alignment of the nearest neighbors from Yt with Xt_init
-        R, T, s = corresponding_points_alignment_sgd(
+        sim_transform, rmse = corresponding_points_alignment_sgd(
             Xt_init,
             Xt_nn_points,
             knn_res,
@@ -161,7 +162,9 @@ def iterative_closest_point_sgd(
             iterations=sgd_iterations,
             lr=sgd_lr,
             pose_cost=pose_cost,
+            learn_translation=learn_translation
         )
+        R, T, s = sim_transform
 
         # apply the estimated similarity transform to Xt_init
         Xt = _apply_similarity_transform(Xt_init, R, T, s)
@@ -169,9 +172,10 @@ def iterative_closest_point_sgd(
         # add the current transformation to the history
         t_history.append(SimilarityTransform(R, T, s))
 
-        # compute the root mean squared error
-        Xt_sq_diff = ((Xt - Xt_nn_points) ** 2).sum(2)
-        rmse = oputil.wmean(Xt_sq_diff[:, :, None], mask_X).sqrt()[:, 0, 0]
+        # use the reported RMSE which includes other losses
+        # # compute the root mean squared error
+        # Xt_sq_diff = ((Xt - Xt_nn_points) ** 2).sum(2)
+        # rmse = oputil.wmean(Xt_sq_diff[:, :, None], mask_X).sqrt()[:, 0, 0]
 
         # compute the relative rmse
         if prev_rmse is None:
@@ -219,7 +223,8 @@ def corresponding_points_alignment_sgd(
         iterations: int = 50,
         lr: float = 0.001,
         pose_cost=None,
-) -> SimilarityTransform:
+        learn_translation: bool = True,
+) -> tuple[SimilarityTransform, torch.tensor]:
     """
     Finds a similarity transformation (rotation `R`, translation `T`
     and optionally scale `s`)  between two given sets of corresponding
@@ -328,37 +333,42 @@ def corresponding_points_alignment_sgd(
         s.requires_grad = True
 
     optimizer = torch.optim.Adam([q, T, s], lr=lr)
-    loss = MSELoss()
+    loss = MSELoss(reduction='none')
 
     def get_usable_transform_representation():
+        nonlocal T
         # we get a more usable representation of R
         R = rotation_6d_to_matrix(q)
-        # we compute T based on the specifics of the problem
-        if estimate_scale:
-            # s is trained in this case
-            T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
-        else:
-            T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
+        if not learn_translation:
+            # we compute T based on the specifics of the problem
+            if estimate_scale:
+                # s is trained in this case
+                T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
+            else:
+                T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
         return R, T
 
     for epoch in range(iterations):
         R, T = get_usable_transform_representation()
-        if estimate_scale:
-            # s is trained in this case
-            T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
+
+        if learn_translation:
+            yhat = _apply_similarity_transform(Xt, R, T, s)
+            this_loss = loss(yhat, Yt)
         else:
-            T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
+            yhat = s[:, None, None] * torch.bmm(Xc, R)
+            this_loss = loss(yhat, Yc)
+        # since using reduction None, need to reduce it to per batch
+        this_loss = this_loss.sum(dim=1).sum(dim=1)
 
-        yhat = s[:, None, None] * torch.bmm(Xc, R)
-
-        this_loss = loss(yhat, Yc)
         if pose_cost is not None:
             other_loss = pose_cost(knn_res, R, T, s)
-            this_loss += other_loss
+            # this_loss += other_loss
+            this_loss = other_loss
 
-        this_loss.backward()
+        this_loss.mean().backward()
         optimizer.step()
         optimizer.zero_grad()
 
+    print(f"rmse loss {this_loss.mean().item() - other_loss.mean().item()} pose loss {other_loss.mean().item()}")
     R, T = get_usable_transform_representation()
-    return SimilarityTransform(R.detach().clone(), T.detach().clone(), s.detach().clone())
+    return SimilarityTransform(R.detach().clone(), T.detach().clone(), s.detach().clone()), this_loss.detach().clone()

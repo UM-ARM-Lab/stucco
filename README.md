@@ -9,11 +9,12 @@
 
 ## Installation
 
-1. install required libraries (clone then cd and `pip install -e .`)
+1. install [pytorch3d](https://github.com/facebookresearch/pytorch3d) (various ways, but probably easiest through conda)
+2. install required libraries (clone then cd and `pip install -e .`)
    [pytorch utilities](https://github.com/UM-ARM-Lab/arm_pytorch_utilities),
    [pytorch kinematics](https://github.com/UM-ARM-Lab/pytorch_kinematics),
    [multidim indexing](https://github.com/LemonPi/multidim_indexing)
-2. `pip install -e .`
+3. `pip install -e .`
 
 ## Usage
 

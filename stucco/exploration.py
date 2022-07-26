@@ -16,6 +16,7 @@ from multidim_indexing import torch_view
 
 from stucco import cfg
 from stucco import icp
+from stucco import util
 from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 
@@ -237,36 +238,31 @@ class CachedSDF(ObjectFrameSDF):
     def __init__(self, object_name, resolution, range_per_dim, gt_sdf, debug_check_sdf=False):
         fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
         # cache for signed distance field to object
-        self._cache = None
+        self.voxels = None
         cached_underlying_sdf = None
         self.gt_sdf = gt_sdf
         self.resolution = resolution
 
-        # ensure value range divides resolution evenly
-        temp_range = []
-        for low, high in range_per_dim:
-            span = high - low
-            span = round(span / resolution)
-            temp_range.append((low, low + span * resolution))
-        range_per_dim = temp_range
+        range_per_dim = util.get_divisible_range_by_resolution(resolution, range_per_dim)
+        self.ranges = range_per_dim
 
         self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
         self.debug_check_sdf = debug_check_sdf
 
         if os.path.exists(fullname):
-            data = torch.load(fullname)
+            data = torch.load(fullname) or {}
             if self.name in data:
                 cached_underlying_sdf = data[self.name]
                 logger.info("cached sdf for %s loaded from %s", self.name, fullname)
+        else:
+            data = {}
 
         # if we didn't load anything, then we need to create the cache and save to it
         if cached_underlying_sdf is None:
             if gt_sdf is None:
                 raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
 
-            # create points along the value ranges
-            coords = [torch.arange(low, high + resolution, resolution) for low, high in range_per_dim]
-            pts = torch.cartesian_prod(*coords)
+            coords, pts = util.get_coordinates_and_points_in_grid(resolution, range_per_dim)
             sdf_val = gt_sdf(pts.unsqueeze(0)).squeeze(0)  # batch B = 1
             cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
             # confirm the values work
@@ -275,21 +271,21 @@ class CachedSDF(ObjectFrameSDF):
                 query = debug_view[pts]
                 assert torch.allclose(sdf_val, query)
 
-            data = {self.name: cached_underlying_sdf}
+            data[self.name] = cached_underlying_sdf
 
             torch.save(data, fullname)
             logger.info("caching sdf for %s to %s", self.name, fullname)
 
-        self._cache = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
+        self.voxels = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
 
     def __call__(self, points_in_object_frame):
-        res = self._cache[points_in_object_frame]
+        res = self.voxels[points_in_object_frame]
         if self.debug_check_sdf:
             res_gt = self.gt_sdf(points_in_object_frame)
             # the ones that are valid should be close enough to the ground truth
             diff = torch.abs(res - res_gt)
             close_enough = diff < self.resolution
-            within_bounds = self._cache.get_valid_values(points_in_object_frame)
+            within_bounds = self.voxels.get_valid_values(points_in_object_frame)
             assert torch.all(close_enough[within_bounds])
         return res
 
@@ -377,8 +373,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 self.unused_cache_transforms = False
             else:
                 # do ICP
-                self.T, self.icp_rmse = icp.icp_pytorch3d(this_pts, self.model_points,
-                                                          given_init_pose=self.best_tsf_guess, batch=self.B)
+                self.T, self.icp_rmse = icp.icp_pytorch3d_sgd(this_pts, self.model_points,
+                                                              given_init_pose=self.best_tsf_guess, batch=self.B)
                 # self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
                 #                                       given_init_pose=self.T.inverse(),
                 #                                       batch=self.B)
@@ -543,20 +539,21 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                                           vis_frame_rot=self.debug_obj_factory.vis_frame_rot)
             self.debug_obj_ids[b] = object_id
 
-        # plot the candidate points in world frame with color map indicating their ICPEV metric
-        import matplotlib.colors, matplotlib.cm
-        error_norm = matplotlib.colors.Normalize(vmin=0, vmax=icp_error_var.max())
-        color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
-        rgb = color_map.to_rgba(icp_error_var.reshape(-1))
-        rgb = rgb[:, :-1]
+        if new_points_world_frame is not None:
+            # plot the candidate points in world frame with color map indicating their ICPEV metric
+            import matplotlib.colors, matplotlib.cm
+            error_norm = matplotlib.colors.Normalize(vmin=0, vmax=icp_error_var.max())
+            color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+            rgb = color_map.to_rgba(icp_error_var.reshape(-1))
+            rgb = rgb[:, :-1]
 
-        for i in range(new_points_world_frame.shape[0]):
-            self.dd.draw_point(f"candidate_icpev_pt.{i}", new_points_world_frame[i], color=rgb[i], length=0.005)
+            for i in range(new_points_world_frame.shape[0]):
+                self.dd.draw_point(f"candidate_icpev_pt.{i}", new_points_world_frame[i], color=rgb[i], length=0.005)
 
-        most_informative_idx = icp_error_var.argmax()
-        self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0), length=0.01,
-                           label=f"icpev: {icp_error_var[most_informative_idx].item():.5f}")
-        print()
+            most_informative_idx = icp_error_var.argmax()
+            self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0), length=0.01,
+                               label=f"icpev: {icp_error_var[most_informative_idx].item():.5f}")
+            print()
 
 
 class RandomSlidePolicy(ICPEVExplorationPolicy):
