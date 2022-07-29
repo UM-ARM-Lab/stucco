@@ -1,5 +1,4 @@
 import abc
-import argparse
 import time
 import typing
 import re
@@ -9,6 +8,8 @@ import numpy as np
 import pybullet_data
 import pymeshlab
 import pytorch_kinematics
+import stucco.exploration
+import stucco.util
 import torch
 import pybullet as p
 import logging
@@ -25,9 +26,8 @@ from arm_pytorch_utilities.grad import jacobian
 from torchmcubes import marching_cubes
 
 from stucco import cfg, icp
-from stucco.env.arm import Levels
 from stucco.env.env import Visualizer
-from stucco.env.pybullet_env import make_sphere, DebugDrawer, closest_point_on_surface, ContactInfo, \
+from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
@@ -40,16 +40,15 @@ from stucco.retrieval_controller import sample_model_points
 
 import pytorch_kinematics.transforms as tf
 
-try:
-    import rospy
-
-    rospy.init_node("info_retrieval", log_level=rospy.INFO)
-    # without this we get not logging from the library
-    import importlib
-
-    importlib.reload(logging)
-except RuntimeError as e:
-    print("Proceeding without ROS: {}".format(e))
+# try:
+#     import rospy
+#
+#     rospy.init_node("info_retrieval", log_level=rospy.INFO)
+#     # without this we get not logging from the library
+#     import importlib
+#     importlib.reload(logging)
+# except RuntimeError as e:
+#     print("Proceeding without ROS: {}".format(e))
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
@@ -174,7 +173,6 @@ def test_icp_freespace(exp,
                        viewing_delay=0.3,
                        register_num_points=500, eval_num_points=200, num_points=10,
                        # number of known contact points
-                       interior_threshold=-0.01,
                        num_freespace_points_list=(0, 10, 20, 30, 40, 50, 100),
                        surface_delta=0.01,
                        model_name="mustard_normal"):
@@ -191,7 +189,7 @@ def test_icp_freespace(exp,
     target_obj_id = exp.objId
     vis_obj_id = exp.visId
     vis = exp.dd
-    freespace_ranges = exp.sdf.ranges
+    freespace_ranges = exp.ranges
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
@@ -217,19 +215,6 @@ def test_icp_freespace(exp,
     model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
     model_normals_world_frame_eval = link_to_current_tf_gt.transform_normals(model_normals_eval)
 
-    # get model interior points
-    model_voxels = exp.sdf.voxels
-    interior = model_voxels.raw_data < interior_threshold
-    indices = interior.nonzero()
-    model_interior_points = model_voxels.ensure_value_key(indices)
-    model_interior_weights = -model_voxels[model_interior_points]
-
-    model_interior_points_world_frame = link_to_current_tf_gt.transform_points(model_interior_points)
-    # i = 0
-    # for i, pt in enumerate(model_interior_points_world_frame):
-    #     vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-    # vis.clear_visualization_after("mipt", i + 1)
-
     i = 0
     for i, pt in enumerate(model_points_world_frame):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
@@ -237,13 +222,12 @@ def test_icp_freespace(exp,
     vis.clear_visualization_after("mpt", i + 1)
     vis.clear_visualization_after("mn", i + 1)
 
+    rand.seed(seed)
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
     for num_freespace in num_freespace_points_list:
         rand.seed(seed)
         free_voxels = util.VoxelGrid(0.01, freespace_ranges, dtype=dtype, device=device)
-        free_space_cost = icp_costs.FreeSpaceCost(free_voxels, model_interior_points.repeat(B, 1, 1),
-                                                  model_interior_weights,
-                                                  scale=1, vis=vis)
+        free_space_cost = icp_costs.VolumetricCost(free_voxels, exp.sdf, scale=20, vis=vis, debug=True)
 
         # sample points in freespace and plot them
         # extrude model points that are on the surface of the object along their normal vector
@@ -267,7 +251,7 @@ def test_icp_freespace(exp,
         exp.policy.register_transforms(T, distances)
         exp.policy._debug_icp_distribution(None, None)
 
-        errors_per_batch = evaluate_chamfer_distance(exp.policy, model_points_world_frame_eval, vis, vis_obj_id,
+        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
                                                      distances,
                                                      viewing_delay)
         errors.append(np.mean(errors_per_batch))
@@ -643,7 +627,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.dd = CombinedVisualizer()
         self.dd.init_sim(0.8, 0.8)
         self.dd.sim.toggle_3d(True)
-        self.dd.sim.set_camera_position([0., 0.3], yaw=0, pitch=-30)
+        self.dd.sim.set_camera_position([0.1, 0.35, 0.15], yaw=-20, pitch=-25)
         # init rviz visualization
         # self.dd.init_ros(world_frame="world")
 
@@ -785,12 +769,13 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
-        obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
+        obj_frame_sdf = stucco.exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
         # inflate the range_per_dim to allow for pose estimates around a single point
         range_per_dim *= 2
-        range_per_dim[2, 0] = -range_per_dim[2, 1]
-        self.sdf = exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                         obj_frame_sdf)
+        # fix the z dimension since there shouldn't be that much variance across it
+        range_per_dim[2] = [-range_per_dim[2, 1] * 0.4, range_per_dim[2, 1] * 0.6]
+        self.sdf = stucco.exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
+                                                obj_frame_sdf)
         self.set_policy(
             policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
@@ -1076,7 +1061,7 @@ if __name__ == "__main__":
     # for gt_num in [500]:
     #     for seed in range(10):
     #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                  name=f"pytorch-sgd icp norm {gt_num} mp", viewing_delay=0)
+    #                  name=f"temp {gt_num} mp", viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name)
 
     # -- freespace ICP experiment
@@ -1086,7 +1071,7 @@ if __name__ == "__main__":
             test_icp_freespace(experiment, seed=seed, num_points=5,
                                num_freespace_points_list=(10, 20, 30, 40, 50, 100),
                                register_num_points=gt_num,
-                               name=f"pytorch-sgd 5np freespace weighted more scale {gt_num} mp",
+                               name=f"pytorch-sgd 5np freespace custom grad {gt_num} mp",
                                viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name,
     #                  icp_res_file='icp_freespace.pkl')

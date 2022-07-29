@@ -20,7 +20,7 @@ def iterative_closest_point_sgd(
         estimate_scale: bool = False,
         allow_reflection: bool = False,
         sgd_iterations: int = 50,
-        sgd_lr: float = 0.001,
+        sgd_lr: float = 0.002,
         verbose: bool = False,
         learn_translation=True,
         pose_cost=None
@@ -362,10 +362,13 @@ def corresponding_points_alignment_sgd(
 
         if pose_cost is not None:
             other_loss = pose_cost(knn_res, R, T, s)
-            # this_loss += other_loss
-            this_loss = other_loss
+            this_loss += other_loss
+            # this_loss = other_loss
 
         this_loss.mean().backward()
+        # visualize gradients on the losses
+        pose_cost.visualize(R, T, s)
+
         optimizer.step()
         optimizer.zero_grad()
 

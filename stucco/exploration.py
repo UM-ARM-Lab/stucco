@@ -12,13 +12,13 @@ import logging
 from arm_pytorch_utilities import tensor_utils, rand, linalg
 from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
-from multidim_indexing import torch_view
 
 from stucco import cfg
 from stucco import icp
-from stucco import util
 from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
+from stucco import util
+from multidim_indexing import torch_view
 
 logger = logging.getLogger(__name__)
 
@@ -197,101 +197,8 @@ class ShapeExplorationPolicy(abc.ABC):
         self.model_normals_world_transformed_ground_truth = link_to_current_tf.transform_normals(self.model_normals)
 
 
-class ObjectFrameSDF(abc.ABC):
-    @abc.abstractmethod
-    def __call__(self, points_in_object_frame):
-        """
-        Evaluate the signed distance field at given points in the object frame
-
-        :param points_in_object_frame: B x N x d d-dimensional points (2 or 3) of B batches; located in object frame
-        :return: B x N signed distance from closest object surface in m
-        """
-
-
-class PyBulletNaiveSDF(ObjectFrameSDF):
-    def __init__(self, test_obj_id, plot_point_type=PlotPointType.NONE, vis=None):
-        self.test_obj_id = test_obj_id
-        self.plot_point_type = plot_point_type
-        self.vis = vis
-
-    def __call__(self, points_in_object_frame):
-        if len(points_in_object_frame.shape) == 2:
-            points_in_object_frame = points_in_object_frame.unsqueeze(0)
-        B, N, d = points_in_object_frame.shape
-        # compute ICP error for new sampled points
-        query_icp_error = torch.zeros(B, N, dtype=points_in_object_frame.dtype, device=points_in_object_frame.device)
-        # points are transformed to link frame, thus it needs to compare against the object in link frame
-        # objId is not in link frame and shouldn't be moved
-        for b in range(B):
-            for i in range(N):
-                closest = closest_point_on_surface(self.test_obj_id, points_in_object_frame[b, i])
-                query_icp_error[b, i] = closest[ContactInfo.DISTANCE]
-                if self.vis is not None and self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
-                    self.vis.draw_point("test_point", points_in_object_frame[b, i], color=(1, 0, 0), length=0.005)
-                    self.vis.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
-                                        length=0.005,
-                                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
-        return query_icp_error
-
-
-class CachedSDF(ObjectFrameSDF):
-    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, debug_check_sdf=False):
-        fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
-        # cache for signed distance field to object
-        self.voxels = None
-        cached_underlying_sdf = None
-        self.gt_sdf = gt_sdf
-        self.resolution = resolution
-
-        range_per_dim = util.get_divisible_range_by_resolution(resolution, range_per_dim)
-        self.ranges = range_per_dim
-
-        self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
-        self.debug_check_sdf = debug_check_sdf
-
-        if os.path.exists(fullname):
-            data = torch.load(fullname) or {}
-            if self.name in data:
-                cached_underlying_sdf = data[self.name]
-                logger.info("cached sdf for %s loaded from %s", self.name, fullname)
-        else:
-            data = {}
-
-        # if we didn't load anything, then we need to create the cache and save to it
-        if cached_underlying_sdf is None:
-            if gt_sdf is None:
-                raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
-
-            coords, pts = util.get_coordinates_and_points_in_grid(resolution, range_per_dim)
-            sdf_val = gt_sdf(pts.unsqueeze(0)).squeeze(0)  # batch B = 1
-            cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
-            # confirm the values work
-            if self.debug_check_sdf:
-                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
-                query = debug_view[pts]
-                assert torch.allclose(sdf_val, query)
-
-            data[self.name] = cached_underlying_sdf
-
-            torch.save(data, fullname)
-            logger.info("caching sdf for %s to %s", self.name, fullname)
-
-        self.voxels = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim, invalid_value=gt_sdf)
-
-    def __call__(self, points_in_object_frame):
-        res = self.voxels[points_in_object_frame]
-        if self.debug_check_sdf:
-            res_gt = self.gt_sdf(points_in_object_frame)
-            # the ones that are valid should be close enough to the ground truth
-            diff = torch.abs(res - res_gt)
-            close_enough = diff < self.resolution
-            within_bounds = self.voxels.get_valid_values(points_in_object_frame)
-            assert torch.all(close_enough[within_bounds])
-        return res
-
-
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
-    def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100,
+    def __init__(self, obj_frame_sdf: util.ObjectFrameSDF, num_samples_each_action=100,
                  icp_batch=30, alpha=0.01,
                  alpha_evaluate=0.05,
                  upright_bias=0.3,
@@ -551,7 +458,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 self.dd.draw_point(f"candidate_icpev_pt.{i}", new_points_world_frame[i], color=rgb[i], length=0.005)
 
             most_informative_idx = icp_error_var.argmax()
-            self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0), length=0.01,
+            self.dd.draw_point(f"most info pt", new_points_world_frame[most_informative_idx], color=(1, 0, 0),
+                               length=0.01,
                                label=f"icpev: {icp_error_var[most_informative_idx].item():.5f}")
             print()
 
@@ -859,3 +767,138 @@ def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=
     likelihood.eval()
 
     return likelihood, model
+
+
+class PyBulletNaiveSDF(util.ObjectFrameSDF):
+    def __init__(self, test_obj_id, plot_point_type=PlotPointType.NONE, vis=None):
+        self.test_obj_id = test_obj_id
+        self.plot_point_type = plot_point_type
+        self.vis = vis
+
+    def __call__(self, points_in_object_frame):
+        if len(points_in_object_frame.shape) == 2:
+            points_in_object_frame = points_in_object_frame.unsqueeze(0)
+        B, N, d = points_in_object_frame.shape
+        dtype = points_in_object_frame.dtype
+        device = points_in_object_frame.device
+        # compute SDF value for new sampled points
+        sdf = torch.zeros(B, N, dtype=dtype, device=device)
+        sdf_grad = [[None] * N for _ in range(B)]
+        # points are transformed to link frame, thus it needs to compare against the object in link frame
+        # objId is not in link frame and shouldn't be moved
+        for b in range(B):
+            for i in range(N):
+                closest = closest_point_on_surface(self.test_obj_id, points_in_object_frame[b, i])
+                sdf[b, i] = closest[ContactInfo.DISTANCE]
+                sdf_grad[b][i] = closest[ContactInfo.NORMAL_DIR_B]
+
+                if self.vis is not None and self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+                    self.vis.draw_point("test_point", points_in_object_frame[b, i], color=(1, 0, 0), length=0.005)
+                    self.vis.draw_2d_line(f"test_normal", points_in_object_frame[b, i],
+                                          [-v for v in closest[ContactInfo.NORMAL_DIR_B]], color=(0, 0, 0),
+                                          size=2., scale=0.03)
+                    self.vis.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
+                                        length=0.005,
+                                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
+        # want the gradient from low to high value (pointing out of surface), so need negative
+        sdf_grad = -torch.tensor(sdf_grad, dtype=dtype, device=device)
+        return sdf, sdf_grad
+
+    def get_voxel_view(self, voxels: util.VoxelGrid = None) -> torch_view.TorchMultidimView:
+        if voxels is None:
+            voxels = util.VoxelGrid(0.01, [[-1, 1], [-1, 1], [-0.6, 1]])
+
+        pts = voxels.get_voxel_center_points()
+        sdf_val, sdf_grad = self.__call__(pts.unsqueeze(0))
+        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
+
+        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim, invalid_value=self.__call__)
+
+
+class CachedSDF(util.ObjectFrameSDF):
+    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, debug_check_sdf=False):
+        fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
+        # cache for signed distance field to object
+        self.voxels = None
+        # voxel grid can't handle vector values yet
+        self.voxels_grad = None
+
+        cached_underlying_sdf = None
+        cached_underlying_sdf_grad = None
+
+        self.gt_sdf = gt_sdf
+        self.resolution = resolution
+
+        range_per_dim = util.get_divisible_range_by_resolution(resolution, range_per_dim)
+        self.ranges = range_per_dim
+
+        self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
+        self.debug_check_sdf = debug_check_sdf
+
+        if os.path.exists(fullname):
+            data = torch.load(fullname) or {}
+            try:
+                cached_underlying_sdf, cached_underlying_sdf_grad = data[self.name]
+                logger.info("cached sdf for %s loaded from %s", self.name, fullname)
+            except (ValueError, KeyError):
+                logger.info("cached sdf invalid %s from %s, recreating", self.name, fullname)
+        else:
+            data = {}
+
+        # if we didn't load anything, then we need to create the cache and save to it
+        if cached_underlying_sdf is None:
+            if gt_sdf is None:
+                raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
+
+            coords, pts = util.get_coordinates_and_points_in_grid(resolution, range_per_dim)
+            sdf_val, sdf_grad = gt_sdf(pts.unsqueeze(0))
+            cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
+            cached_underlying_sdf_grad = sdf_grad.squeeze(0)
+            # cached_underlying_sdf_grad = sdf_grad.reshape(cached_underlying_sdf.shape + (3,))
+            # confirm the values work
+            if self.debug_check_sdf:
+                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
+                                                          invalid_value=self._fallback_sdf_value_func)
+                query = debug_view[pts]
+                assert torch.allclose(sdf_val, query)
+
+            data[self.name] = cached_underlying_sdf, cached_underlying_sdf_grad
+
+            torch.save(data, fullname)
+            logger.info("caching sdf for %s to %s", self.name, fullname)
+
+        self.voxels = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
+                                                   invalid_value=self._fallback_sdf_value_func)
+        # TODO handle vector valued views
+        self.voxels_grad = cached_underlying_sdf_grad.squeeze()
+
+    def _fallback_sdf_value_func(self, *args, **kwargs):
+        sdf_val, _ = self.gt_sdf(*args, **kwargs)
+        return sdf_val
+
+    def __call__(self, points_in_object_frame):
+        res = self.voxels[points_in_object_frame]
+
+        keys = self.voxels.ensure_index_key(points_in_object_frame)
+        keys_ravelled = self.voxels.ravel_multi_index(keys, self.voxels.shape)
+        grad = self.voxels_grad[keys_ravelled]
+
+        if self.debug_check_sdf:
+            res_gt = self._fallback_sdf_value_func(points_in_object_frame)
+            # the ones that are valid should be close enough to the ground truth
+            diff = torch.abs(res - res_gt)
+            close_enough = diff < self.resolution
+            within_bounds = self.voxels.get_valid_values(points_in_object_frame)
+            assert torch.all(close_enough[within_bounds])
+        return res, grad
+
+    def get_voxel_view(self, voxels: util.VoxelGrid = None) -> torch_view.TorchMultidimView:
+        if voxels is None:
+            return self.voxels
+
+        pts = voxels.get_voxel_center_points()
+        sdf_val, sdf_grad = self.gt_sdf(pts.unsqueeze(0))
+        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
+
+        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim,
+                                            invalid_value=self._fallback_sdf_value_func)
