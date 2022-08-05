@@ -994,3 +994,39 @@ def icp_stein(A, B, given_init_pose=None, batch=30, max_dist=0.8):
     T[:, :3, 3] = t.squeeze(-1)
     distances = stein.stein_v_grads.abs().sum(dim=1)
     return T, distances
+
+
+def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_samples=100,
+            max_rot_mag=0.2, max_trans_mag=0.2,
+            rot_sigma=0.2, trans_sigma=0.2,
+            **kwargs):
+    from pytorch_mppi import mppi
+    from pytorch_kinematics.transforms import rotation_6d_to_matrix
+    # use the given cost function and run MPC with deltas on the transforms to optimize it
+    given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
+                                                            given_init_pose=given_init_pose)
+
+    d = A.device
+    nx = 16  # 4 x 4 transformation matrix
+    nu_r = 6
+    nu_t = 3
+    noise_sigma = torch.diag(torch.tensor([rot_sigma] * nu_r + [trans_sigma] * nu_t, device=d))
+
+    def dynamics(transform, delta_transform):
+        # convert flattened delta to its separate 6D rotations and 3D translations
+        dH = torch.eye(4, dtype=transform.dtype, device=d).repeat(num_samples, 1, 1)
+        dH[:, :3, :3] = rotation_6d_to_matrix(delta_transform[:, :6])
+        dH[:, :3, 3] = delta_transform[:, 6:]
+        return dH @ transform
+
+    ctrl = mppi.MPPI(dynamics, cost_func, nx, noise_sigma, num_samples=num_samples, horizon=horizon,
+                     device=d,
+                     u_min=torch.tensor([-max_rot_mag] * nu_r + [-max_trans_mag] * nu_t, device=d),
+                     u_max=torch.tensor([max_rot_mag] * nu_r + [max_trans_mag] * nu_t, device=d))
+
+    obs = given_init_pose
+    for i in range(100):
+        delta_H = ctrl.command(obs.view(-1))
+        obs = dynamics(obs, delta_H)
+
+    return obs, cost_func(obs)

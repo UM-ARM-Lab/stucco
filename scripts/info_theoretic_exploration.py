@@ -284,6 +284,13 @@ def test_icp_freespace(exp,
         free_space_cost = icp_costs.VolumetricCost(free_voxels, exp.sdf, scale=freespace_cost_scale, vis=vis,
                                                    debug=False)
 
+        def mpc_cost_wrapper(state, action):
+            R = state[:, :3, :3]
+            T = state[:, :3, 3]
+            s = torch.ones(state.shape[0], device=state.device, dtype=state.dtype)
+
+            return free_space_cost(None, R, T, s)
+
         # sample points in freespace and plot them
         # sample only on one side
         used_model_points = model_points_eval[:, 0] > 0
@@ -301,9 +308,12 @@ def test_icp_freespace(exp,
         # perform ICP and visualize the transformed points
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=free_space_cost,
-                                             )
+        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=free_space_cost,
+        #                                      )
+        T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+                                   given_init_pose=best_tsf_guess, batch=B, pose_cost=free_space_cost,
+                                   )
 
         # draw all ICP's sample meshes
         exp.policy.register_transforms(T, distances)
@@ -1123,20 +1133,20 @@ if __name__ == "__main__":
     # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "sgd" in name)
 
     # -- freespace ICP experiment
-    # experiment = ICPEVExperiment()
+    experiment = ICPEVExperiment()
     # # test_gradients(experiment)
     #
-    # for freespace_cost_scale in [20]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp_freespace(experiment, seed=seed, num_points=5,
-    #                                # num_freespace_points_list=(50, 100),
-    #                                register_num_points=gt_num,
-    #                                freespace_cost_scale=freespace_cost_scale,
-    #                                name=f"pytorch-sgd 5np only one side {gt_num} mp scale {freespace_cost_scale}",
-    #                                viewing_delay=0)
-    plot_icp_results(names_to_include=lambda name: "5np" in name and "one side" in name,
-                     icp_res_file='icp_freespace.pkl')
+    for freespace_cost_scale in [20]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp_freespace(experiment, seed=seed, num_points=5,
+                                   # num_freespace_points_list=(50, 100),
+                                   register_num_points=gt_num,
+                                   freespace_cost_scale=freespace_cost_scale,
+                                   name=f"mpc 5np only one side {gt_num} mp scale {freespace_cost_scale}",
+                                   viewing_delay=0)
+    # plot_icp_results(names_to_include=lambda name: "5np" in name and "one side" in name,
+    #                  icp_res_file='icp_freespace.pkl')
 
     # -- exploration experiment
     # exp_name = "tukey voxel 0.1"
