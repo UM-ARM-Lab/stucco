@@ -6,9 +6,27 @@ from torch.nn import MSELoss
 from pytorch3d.ops import knn_points
 from pytorch3d.ops import utils as oputil
 from pytorch3d.structures import utils as strutil
-from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform, _apply_similarity_transform
+from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform
 from pytorch3d.ops.knn import _KNN
 from pytorch3d.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
+
+
+def _apply_similarity_transform(
+        X: torch.Tensor, R: torch.Tensor, T: torch.Tensor = None, s: torch.Tensor = None
+) -> torch.Tensor:
+    """
+    Applies a similarity transformation parametrized with a batch of orthonormal
+    matrices `R` of shape `(minibatch, d, d)`, a batch of translations `T`
+    of shape `(minibatch, d)` and a batch of scaling factors `s`
+    of shape `(minibatch,)` to a given `d`-dimensional cloud `X`
+    of shape `(minibatch, num_points, d)`
+    """
+    if s is not None:
+        R = s[:, None, None] * R
+    X = R @ X.transpose(-1, -2)
+    if T is not None:
+        X = X + T[:, :, None]
+    return X.transpose(-1, -2)
 
 
 def iterative_closest_point_sgd(
@@ -23,7 +41,8 @@ def iterative_closest_point_sgd(
         sgd_lr: float = 0.002,
         verbose: bool = False,
         learn_translation=True,
-        pose_cost=None
+        pose_cost=None,
+        vis=None
 ) -> ICPSolution:
     """
     Executes the iterative closest point (ICP) algorithm [1, 2] in order to find
@@ -134,6 +153,19 @@ def iterative_closest_point_sgd(
         T = Xt.new_zeros((b, dim))
         s = Xt.new_ones(b)
 
+    # if vis is not None:
+    #     H = torch.eye(4)
+    #     H[:3, :3] = R[0]
+    #     H[:3, 3] = T[0]
+    #     x = torch.cat((Xt_init, torch.ones(Xt_init.shape[0], Xt_init.shape[1], 1)), dim=-1)
+    #     y = (H @ x.transpose(-1, -2)).transpose(-1, -2)
+    #     yy = (R @ Xt_init.transpose(-1, -2) + T[:, :, None]).transpose(-1, -2)
+    #
+    #     i = 0
+    #     for i, pt in enumerate(Xt[0]):
+    #         vis.draw_point(f"xtpt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
+    #     vis.clear_visualization_after("xtpt", i + 1)
+
     prev_rmse = None
     rmse = None
     iteration = -1
@@ -224,6 +256,7 @@ def corresponding_points_alignment_sgd(
         lr: float = 0.001,
         pose_cost=None,
         learn_translation: bool = True,
+        use_matching_loss: bool = True
 ) -> tuple[SimilarityTransform, torch.tensor]:
     """
     Finds a similarity transformation (rotation `R`, translation `T`
@@ -343,9 +376,9 @@ def corresponding_points_alignment_sgd(
             # we compute T based on the specifics of the problem
             if estimate_scale:
                 # s is trained in this case
-                T = Ymu[:, 0, :] - s[:, None] * torch.bmm(Xmu, R)[:, 0, :]
+                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R, s=s)[:, 0, :]
             else:
-                T = Ymu[:, 0, :] - torch.bmm(Xmu, R)[:, 0, :]
+                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R)[:, 0, :]
         return R, T
 
     for epoch in range(iterations):
@@ -353,25 +386,32 @@ def corresponding_points_alignment_sgd(
 
         if learn_translation:
             yhat = _apply_similarity_transform(Xt, R, T, s)
-            this_loss = loss(yhat, Yt)
+            alignment_loss = loss(yhat, Yt)
         else:
-            yhat = s[:, None, None] * torch.bmm(Xc, R)
-            this_loss = loss(yhat, Yc)
+            yhat = _apply_similarity_transform(Xc, R, s=s)
+            alignment_loss = loss(yhat, Yc)
         # since using reduction None, need to reduce it to per batch
-        this_loss = this_loss.sum(dim=1).sum(dim=1)
+        alignment_loss = alignment_loss.sum(dim=1).sum(dim=1)
 
+        total_loss = alignment_loss
         if pose_cost is not None:
             other_loss = pose_cost(knn_res, R, T, s)
-            this_loss += other_loss
-            # this_loss = other_loss
+            if use_matching_loss:
+                total_loss += other_loss
+            else:
+                total_loss = other_loss
 
-        this_loss.mean().backward()
-        # visualize gradients on the losses
-        pose_cost.visualize(R, T, s)
+        total_loss.mean().backward()
+
+        if pose_cost is not None:
+            # visualize gradients on the losses
+            pose_cost.visualize(R, T, s)
 
         optimizer.step()
         optimizer.zero_grad()
 
-    print(f"rmse loss {this_loss.mean().item() - other_loss.mean().item()} pose loss {other_loss.mean().item()}")
+    if pose_cost is not None:
+        print(f"rmse loss {alignment_loss.mean().item()} pose loss {other_loss.mean().item()}")
     R, T = get_usable_transform_representation()
-    return SimilarityTransform(R.detach().clone(), T.detach().clone(), s.detach().clone()), this_loss.detach().clone()
+    return SimilarityTransform(R.detach().clone(), T.detach().clone(),
+                               s.detach().clone()), alignment_loss.detach().clone()

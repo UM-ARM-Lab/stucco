@@ -168,13 +168,66 @@ def test_icp(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, name="", clean_
         print(f"num {num_points_list[i]} err {errors[i]}")
 
 
+def test_gradients(exp, seed=0, eval_num_points=200, register_num_points=500, num_points=50,
+                   model_name="mustard_normal"):
+    target_obj_id = exp.objId
+    vis_obj_id = exp.visId
+    vis = exp.dd
+    freespace_ranges = exp.ranges
+
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
+    device, dtype = model_points_eval.device, model_points_eval.dtype
+
+    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
+                                                                           name=model_name, seed=0)
+
+    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
+    pose = p.getBasePositionAndOrientation(target_obj_id)
+    link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+    model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
+    model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
+
+    free_voxels = util.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
+    free_space_cost = icp_costs.VolumetricCost(free_voxels, exp.sdf, scale=1, vis=vis, debug=True)
+
+    # mark some specific points as free and see how the gradients move the transforms
+    # free_space_world_frame_points = torch.tensor([[0.02, 0.05, 0.2]], dtype=dtype, device=device)
+    free_space_world_frame_points = torch.tensor([[0.02, -0.07, 0.4]], dtype=dtype, device=device)
+    free_voxels[free_space_world_frame_points] = 1
+
+    i = 0
+    for i, pt in enumerate(free_space_world_frame_points):
+        vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=4)
+    vis.clear_visualization_after("fspt", i + 1)
+
+    best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix()
+
+    # a = link_to_current_tf_gt.inverse()
+    # link_pts = a.transform_points(model_points_world_frame)
+    # i = 0
+    # for i, pt in enumerate(link_pts):
+    #     vis.draw_point(f"mppt.{i}", pt, color=(1, 1, 1), length=0.003, scale=4)
+    # vis.clear_visualization_after("mppt", i + 1)
+
+    B = 2
+    # # inside they use the opposite rotation; so instead of Y = RX, it's Y = XR
+    # best_tsf_guess[:, :3, :3] = best_tsf_guess[:, :3, :3].transpose(-1, -2)
+    T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                         given_init_pose=best_tsf_guess.repeat(B, 1, 1), batch=B,
+                                         pose_cost=free_space_cost,
+                                         vis=vis)
+    input()
+
+
 def test_icp_freespace(exp,
                        seed=0, name="", clean_cache=False,
                        viewing_delay=0.3,
                        register_num_points=500, eval_num_points=200, num_points=10,
                        # number of known contact points
                        num_freespace_points_list=(0, 10, 20, 30, 40, 50, 100),
-                       surface_delta=0.01,
+                       surface_delta=0.025,
+                       freespace_cost_scale=1,
                        model_name="mustard_normal"):
     fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace.pkl')
     if os.path.exists(fullname):
@@ -224,15 +277,20 @@ def test_icp_freespace(exp,
 
     rand.seed(seed)
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    # best_tsf_guess = None
     for num_freespace in num_freespace_points_list:
         rand.seed(seed)
-        free_voxels = util.VoxelGrid(0.01, freespace_ranges, dtype=dtype, device=device)
-        free_space_cost = icp_costs.VolumetricCost(free_voxels, exp.sdf, scale=20, vis=vis, debug=True)
+        free_voxels = util.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
+        free_space_cost = icp_costs.VolumetricCost(free_voxels, exp.sdf, scale=freespace_cost_scale, vis=vis,
+                                                   debug=False)
 
         # sample points in freespace and plot them
+        # sample only on one side
+        used_model_points = model_points_eval[:, 0] > 0
         # extrude model points that are on the surface of the object along their normal vector
-        free_space_world_frame_points = model_points_world_frame_eval[:num_freespace] - model_normals_world_frame_eval[
-                                                                                        :num_freespace] * surface_delta
+        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
+                                        model_normals_world_frame_eval[used_model_points][
+                                        :num_freespace] * surface_delta
         free_voxels[free_space_world_frame_points] = 1
 
         i = 0
@@ -1061,20 +1119,24 @@ if __name__ == "__main__":
     # for gt_num in [500]:
     #     for seed in range(10):
     #         test_icp(experiment.objId, experiment.visId, experiment.dd, seed=seed, register_num_points=gt_num,
-    #                  name=f"temp {gt_num} mp", viewing_delay=0)
-    # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name)
+    #                  name=f"sgd changed rotation frame {gt_num} mp", viewing_delay=0)
+    # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "sgd" in name)
 
     # -- freespace ICP experiment
-    experiment = ICPEVExperiment()
-    for gt_num in [500]:
-        for seed in range(10):
-            test_icp_freespace(experiment, seed=seed, num_points=5,
-                               num_freespace_points_list=(10, 20, 30, 40, 50, 100),
-                               register_num_points=gt_num,
-                               name=f"pytorch-sgd 5np freespace custom grad {gt_num} mp",
-                               viewing_delay=0)
-    # plot_icp_results(names_to_include=lambda name: "pytorch" in name or "stein" in name,
-    #                  icp_res_file='icp_freespace.pkl')
+    # experiment = ICPEVExperiment()
+    # # test_gradients(experiment)
+    #
+    # for freespace_cost_scale in [20]:
+    #     for gt_num in [500]:
+    #         for seed in range(10):
+    #             test_icp_freespace(experiment, seed=seed, num_points=5,
+    #                                # num_freespace_points_list=(50, 100),
+    #                                register_num_points=gt_num,
+    #                                freespace_cost_scale=freespace_cost_scale,
+    #                                name=f"pytorch-sgd 5np only one side {gt_num} mp scale {freespace_cost_scale}",
+    #                                viewing_delay=0)
+    plot_icp_results(names_to_include=lambda name: "5np" in name and "one side" in name,
+                     icp_res_file='icp_freespace.pkl')
 
     # -- exploration experiment
     # exp_name = "tukey voxel 0.1"

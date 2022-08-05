@@ -1,7 +1,7 @@
 import torch
 from torch.nn import MSELoss
 from pytorch3d.ops.knn import knn_gather, _KNN
-from pytorch3d.ops.points_alignment import _apply_similarity_transform
+from stucco.icp_sgd import _apply_similarity_transform
 from typing import Any
 
 from stucco import util
@@ -41,7 +41,7 @@ class SurfaceNormalCost(ICPPoseCost):
 
     def __call__(self, knn_res: _KNN, R, T, s):
         corresponding_ynorm = knn_gather(self.Ynorm, knn_res.idx).squeeze(-2)
-        transformed_norms = s[:, None, None] * torch.bmm(self.Xnorm, R)
+        transformed_norms = _apply_similarity_transform(self.Xnorm, R, s=s)
         return self.loss(corresponding_ynorm, transformed_norms) * self.scale
 
 
@@ -68,7 +68,7 @@ class KnownFreeSpaceCost(torch.autograd.Function):
             world_frame_interior_gradients, interior_point_weights = ctx.saved_tensors
             # SDF grads point away from the surface; in this case we want to move the surface away from the occupied
             # free space point, so the surface needs to go in the opposite direction
-            grads = ctx.occupied[:, :, None] * -world_frame_interior_gradients * interior_point_weights[None, :, None]
+            grads = ctx.occupied[:, :, None] * world_frame_interior_gradients * interior_point_weights[None, :, None]
             # TODO consider averaging the gradients out across all points?
             dl_dpts = grad_outputs[:, :, None] * grads
 
@@ -133,10 +133,11 @@ class VolumetricCost(ICPPoseCost):
 
     def _transform_model_to_world_frame(self, R, T, s):
         Rt = R.transpose(-1, -2)
-        self._pts = _apply_similarity_transform(self.model_interior_points, Rt, (-Rt @ T.view(-1, 3, 1)).squeeze(), s)
+        self._pts = _apply_similarity_transform(self.model_interior_points, Rt, (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1),
+                                                s)
         if self.debug:
             self._pts.retain_grad()
-        self._grad = torch.bmm(self.model_interior_normals, R.transpose(-1, -2))
+        self._grad = _apply_similarity_transform(self.model_interior_normals, Rt)
 
     def visualize(self, R, T, s):
         if not self.debug:
@@ -159,12 +160,15 @@ class VolumetricCost(ICPPoseCost):
                     # only visualize it for one sample at a time
                     if b != 0:
                         continue
+
+                    b = 0
                     i = 0
                     for i, pt in enumerate(self._pts[b]):
                         self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
                         self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2., scale=0.02)
                         # visualize the computed gradient on the point
-                        self.vis.draw_2d_line(f"mingrad.{i}", pt, self._pts.grad[b, i], color=(0, 1, 0), size=5.,
+                        # gradient descend goes along negative gradient so best to show the direction of movement
+                        self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts.grad[b, i], color=(0, 1, 0), size=5.,
                                               scale=10)
                     self.vis.clear_visualization_after("mipt", i + 1)
                     self.vis.clear_visualization_after("min", i + 1)
