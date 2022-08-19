@@ -143,8 +143,8 @@ class VolumetricCost(ICPPoseCost):
         # to facilitate comparison between volumes that are rotated, we sample points at the center of the object voxels
         interior_threshold = -0.01
         interior_filter = lambda voxel_sdf: voxel_sdf < interior_threshold
-        self.model_interior_points = self.sdf.get_filtered_points(interior_filter)
-        self.model_interior_weights, self.model_interior_normals = self.sdf(self.model_interior_points)
+        self.model_interior_points_orig = self.sdf.get_filtered_points(interior_filter)
+        self.model_interior_weights, self.model_interior_normals_orig = self.sdf(self.model_interior_points_orig)
         self.model_interior_weights *= -1
 
         self.model_all_points = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.01)
@@ -164,10 +164,10 @@ class VolumetricCost(ICPPoseCost):
 
     def __call__(self, knn_res: _KNN, R, T, s):
         # assign batch and reuse for later for efficiency
-        if self.B is None:
+        if self.B is None or self.B != R.shape[0]:
             self.B = R.shape[0]
-            self.model_interior_points = self.model_interior_points.repeat(self.B, 1, 1)
-            self.model_interior_normals = self.model_interior_normals.repeat(self.B, 1, 1)
+            self.model_interior_points = self.model_interior_points_orig.repeat(self.B, 1, 1)
+            self.model_interior_normals = self.model_interior_normals_orig.repeat(self.B, 1, 1)
 
         # voxels are in world frame
         # need points transformed into world frame
@@ -188,14 +188,14 @@ class VolumetricCost(ICPPoseCost):
                                                         known_sdf_voxel_centers, known_sdf_voxel_values)
             loss += known_sdf_loss * self.scale_known_sdf
 
-        return loss.sum(dim=-1) * self.scale
+        return loss * self.scale
 
     def _transform_model_to_world_frame(self, R, T, s):
         Rt = R.transpose(-1, -2)
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
         self._pts = _apply_similarity_transform(self.model_interior_points, Rt, tt, s)
         self._pts_all = _apply_similarity_transform(self.model_all_points, Rt, tt, s)
-        if self.debug:
+        if self.debug and self._pts.requires_grad:
             self._pts.retain_grad()
             self._pts_all.retain_grad()
         self._grad = _apply_similarity_transform(self.model_interior_normals, Rt)
@@ -235,3 +235,19 @@ class VolumetricCost(ICPPoseCost):
                     self.vis.clear_visualization_after("mipt", i + 1)
                     self.vis.clear_visualization_after("min", i + 1)
                     self.vis.clear_visualization_after("mingrad", i + 1)
+
+
+class ICPPoseCostMatrixInputWrapper:
+    def __init__(self, cost: ICPPoseCost, action_cost_scale=1.0):
+        self.cost = cost
+        self.action_cost_scale = action_cost_scale
+
+    def __call__(self, H, dH=None):
+        N = H.shape[0]
+        H = H.view(N, 4, 4)
+        R = H[:, :3, :3]
+        T = H[:, :3, 3]
+        s = torch.ones(N, dtype=T.dtype, device=T.device)
+        state_cost = self.cost.__call__(None, R, T, s)
+        action_cost = torch.norm(dH, dim=1) if dH is not None else 0
+        return state_cost + action_cost * self.action_cost_scale

@@ -168,11 +168,14 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         #                                      given_init_pose=best_tsf_guess, batch=B)
         # use only volumetric loss
         # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-                                             max_iterations = 20,
-                                             learn_translation=False,
-                                             use_matching_loss=False)
+        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+        #                                      max_iterations = 20,
+        #                                      learn_translation=False,
+        #                                      use_matching_loss=False)
+        T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+                                   icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
+                                   given_init_pose=best_tsf_guess, batch=B)
 
         # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
         #                              batch=B)
@@ -1151,7 +1154,7 @@ if __name__ == "__main__":
     for gt_num in [500]:
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=gt_num,
-                     name=f"volumetric loss fixed", viewing_delay=0)
+                     name=f"mpc", viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "sgd" in name or "volumetric" in name) and "norm" not in name)
 
     # -- freespace ICP experiment
