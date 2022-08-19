@@ -76,38 +76,88 @@ class KnownFreeSpaceCost(torch.autograd.Function):
         return dl_dpts, dl_dgrad, dl_dweights, dl_dvoxels
 
 
+class KnownSDFDistanceCost:
+    @staticmethod
+    def apply(world_frame_all_points: torch.tensor, all_point_weights: torch.tensor,
+              known_voxel_centers: torch.tensor, known_voxel_values: torch.tensor) -> torch.tensor:
+        # difference between current SDF value at each point and the desired one
+        sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
+        # vector from each known voxel's center with known value to each point
+        known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
+        known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
+
+        # loss for each point, corresponding to each known voxel center
+        # low distance should have low difference
+        loss = known_voxel_to_pt_dist / (sdf_diff + 1e-8)
+        # each point may not satisfy two targets simulatenously, so we just care about the best one
+        loss = loss.min(dim=1).values.mean(dim=-1)
+
+        # ctx.sdf_diff = sdf_diff
+        # ctx.known_voxel_to_pt = known_voxel_to_pt
+        # ctx.save_for_backward(world_frame_interior_gradients, interior_point_weights)
+        return loss
+
+    # @staticmethod
+    # def backward(ctx: Any, grad_outputs: Any) -> Any:
+    #     # need to output the gradient of the loss w.r.t. all the inputs of forward
+    #     dl_dpts = None
+    #     dl_dgrad = None
+    #     dl_dweights = None
+    #     dl_dvoxels = None
+    #     if ctx.needs_input_grad[0]:
+    #         world_frame_interior_gradients, interior_point_weights = ctx.saved_tensors
+    #         # SDF grads point away from the surface; in this case we want to move the surface away from the occupied
+    #         # free space point, so the surface needs to go in the opposite direction
+    #         grads = ctx.occupied[:, :, None] * world_frame_interior_gradients * interior_point_weights[None, :, None]
+    #         # TODO consider averaging the gradients out across all points?
+    #         dl_dpts = grad_outputs[:, :, None] * grads
+    #
+    #     # gradients for the other inputs not implemented
+    #     return dl_dpts, dl_dgrad, dl_dweights, dl_dvoxels
+
+
 class VolumetricCost(ICPPoseCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
-    def __init__(self, voxels: util.VoxelGrid, obj_sdf: util.ObjectFrameSDF, scale=1, vis=None, debug=False):
+    def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
+                 vis=None, debug=False, scale_known_freespace=1., scale_known_sdf=1.):
         """
-        :param voxels: representation of freespace
+        :param free_voxels: representation of freespace
+        :param sdf_voxels: voxels for which we know the exact SDF values for
         :param model_interior_points: points on the inside of the model (not on the surface)
         :param obj_sdf: signed distance function of the target object in object frame
         :param scale:
         """
 
-        self.voxels = voxels
+        self.free_voxels = free_voxels
+        self.sdf_voxels = sdf_voxels
+
         self.scale = scale
+        self.scale_known_freespace = scale_known_freespace
+        self.scale_known_sdf = scale_known_sdf
+
         # SDF gives us a volumetric representation of the target object
         self.sdf = obj_sdf
 
         # ---- for +, known free space points, we just have to care about interior points of the object
         # to facilitate comparison between volumes that are rotated, we sample points at the center of the object voxels
         interior_threshold = -0.01
-        model_voxels = self.sdf.get_voxel_view()
-        interior = model_voxels.raw_data < interior_threshold
-        indices = interior.nonzero()
-        # these points are in object frame
-        self.model_interior_points = model_voxels.ensure_value_key(indices)
+        interior_filter = lambda voxel_sdf: voxel_sdf < interior_threshold
+        self.model_interior_points = self.sdf.get_filtered_points(interior_filter)
         self.model_interior_weights, self.model_interior_normals = self.sdf(self.model_interior_points)
         self.model_interior_weights *= -1
+
+        self.model_all_points = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.01)
+        self.model_all_weights, self.model_all_normals = self.sdf(self.model_all_points)
+
         # batch
         self.B = None
 
         # intermediate products for visualization purposes
         self._pts = None
         self._grad = None
+
+        self._pts_all = None
         self.debug = debug
 
         self.vis = vis
@@ -126,17 +176,28 @@ class VolumetricCost(ICPPoseCost):
         self._transform_model_to_world_frame(R, T, s)
         # self.visualize(R, T, s)
 
-        known_free_space_loss = KnownFreeSpaceCost.apply(self._pts, self._grad, self.model_interior_weights,
-                                                         self.voxels)
-        loss = known_free_space_loss
+        loss = torch.zeros(self.B, device=self._pts.device, dtype=self._pts.dtype)
+
+        if self.scale_known_freespace != 0:
+            known_free_space_loss = KnownFreeSpaceCost.apply(self._pts, self._grad, self.model_interior_weights,
+                                                             self.free_voxels)
+            loss += known_free_space_loss * self.scale_known_freespace
+        if self.scale_known_sdf != 0:
+            known_sdf_voxel_centers, known_sdf_voxel_values = self.sdf_voxels.get_known_pos_and_values()
+            known_sdf_loss = KnownSDFDistanceCost.apply(self._pts_all, self.model_all_weights,
+                                                        known_sdf_voxel_centers, known_sdf_voxel_values)
+            loss += known_sdf_loss * self.scale_known_sdf
+
         return loss.sum(dim=-1) * self.scale
 
     def _transform_model_to_world_frame(self, R, T, s):
         Rt = R.transpose(-1, -2)
-        self._pts = _apply_similarity_transform(self.model_interior_points, Rt, (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1),
-                                                s)
+        tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
+        self._pts = _apply_similarity_transform(self.model_interior_points, Rt, tt, s)
+        self._pts_all = _apply_similarity_transform(self.model_all_points, Rt, tt, s)
         if self.debug:
             self._pts.retain_grad()
+            self._pts_all.retain_grad()
         self._grad = _apply_similarity_transform(self.model_interior_normals, Rt)
 
     def visualize(self, R, T, s):
@@ -151,7 +212,7 @@ class VolumetricCost(ICPPoseCost):
                 # coord = self.voxels.voxels.ensure_value_key(indices)
                 # for i, xyz in enumerate(coord):
                 #     self.vis.draw_point(f"free.{i}", xyz, color=(1, 0, 0), scale=5)
-                point_grads = self._pts.grad
+                point_grads = self._pts_all.grad
                 have_gradients = point_grads.sum(dim=-1).sum(dim=-1) != 0
 
                 batch_with_gradients = have_gradients.nonzero()
@@ -163,12 +224,13 @@ class VolumetricCost(ICPPoseCost):
 
                     b = 0
                     i = 0
-                    for i, pt in enumerate(self._pts[b]):
+                    for i, pt in enumerate(self._pts_all[b]):
                         self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-                        self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2., scale=0.02)
+                        # self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2.,
+                        #                       scale=0.02)
                         # visualize the computed gradient on the point
                         # gradient descend goes along negative gradient so best to show the direction of movement
-                        self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts.grad[b, i], color=(0, 1, 0), size=5.,
+                        self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0), size=5.,
                                               scale=10)
                     self.vis.clear_visualization_after("mipt", i + 1)
                     self.vis.clear_visualization_after("min", i + 1)

@@ -37,12 +37,8 @@ def iterative_closest_point_sgd(
         relative_rmse_thr: float = 1e-6,
         estimate_scale: bool = False,
         allow_reflection: bool = False,
-        sgd_iterations: int = 50,
-        sgd_lr: float = 0.002,
         verbose: bool = False,
-        learn_translation=True,
-        pose_cost=None,
-        vis=None
+        **kwargs,
 ) -> ICPSolution:
     """
     Executes the iterative closest point (ICP) algorithm [1, 2] in order to find
@@ -191,10 +187,7 @@ def iterative_closest_point_sgd(
             R=R,
             T=T,
             s=s,
-            iterations=sgd_iterations,
-            lr=sgd_lr,
-            pose_cost=pose_cost,
-            learn_translation=learn_translation
+            **kwargs
         )
         R, T, s = sim_transform
 

@@ -36,15 +36,31 @@ def get_coordinates_and_points_in_grid(resolution, range_per_dim, dtype=torch.fl
     return coords, pts
 
 
-class VoxelGrid:
+class Voxels(abc.ABC):
+    @abc.abstractmethod
+    def get_known_pos_and_values(self):
+        """Return the position (N x 3) and values (N) of known voxels"""
+
+
+class VoxelGrid(Voxels):
     def __init__(self, resolution, range_per_dim, dtype=torch.float, device='cpu'):
         self.resolution = resolution
+        self.invalid_val = 0
 
         self.range_per_dim = get_divisible_range_by_resolution(resolution, range_per_dim)
-        self.coords, self.pts = get_coordinates_and_points_in_grid(resolution, range_per_dim, dtype=dtype, device=device)
+        self.coords, self.pts = get_coordinates_and_points_in_grid(resolution, range_per_dim, dtype=dtype,
+                                                                   device=device)
         # underlying data
         self._data = torch.zeros([len(coord) for coord in self.coords], dtype=dtype, device=device)
-        self.voxels = torch_view.TorchMultidimView(self._data, range_per_dim, invalid_value=0)
+        self.voxels = torch_view.TorchMultidimView(self._data, range_per_dim, invalid_value=self.invalid_val)
+
+    def get_known_pos_and_values(self):
+        known = self.voxels.raw_data != self.invalid_val
+        indices = known.nonzero()
+        # these points are in object frame
+        pos = self.voxels.ensure_value_key(indices)
+        val = self.voxels.raw_data[indices]
+        return pos, val
 
     def get_voxel_center_points(self):
         return self.pts
@@ -54,6 +70,19 @@ class VoxelGrid:
 
     def __setitem__(self, pts, value):
         self.voxels[pts] = value
+
+
+class VoxelSet(Voxels):
+    def __init__(self, positions, values):
+        self.positions = positions
+        self.values = values
+
+    def __setitem__(self, pts, value):
+        self.positions = torch.cat((self.positions, pts.view(-1, self.positions.shape[-1])), dim=0)
+        self.values = torch.cat((self.values, value))
+
+    def get_known_pos_and_values(self):
+        return self.positions, self.values
 
 
 class ObjectFrameSDF(abc.ABC):
@@ -74,3 +103,17 @@ class ObjectFrameSDF(abc.ABC):
         implementation dependent
         :return:
         """
+
+    def get_filtered_points(self, unary_filter, voxels: VoxelGrid = None) -> torch.tensor:
+        """
+        Get a N x d sequence of points extracted from a voxel grid such that their SDF values satisfy a given
+        unary filter (on their SDF value)
+        :param unary_filter: filter on the SDF value of each point, evaluting to true results in accepting that point
+        :param voxels:
+        :return:
+        """
+        model_voxels = self.get_voxel_view(voxels)
+        interior = unary_filter(model_voxels.raw_data)
+        indices = interior.nonzero()
+        # these points are in object frame
+        return model_voxels.ensure_value_key(indices)
