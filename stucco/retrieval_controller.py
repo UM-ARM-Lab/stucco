@@ -238,7 +238,7 @@ def rot_2d_mat_to_angle(T):
 
 def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, force_z=None, mid_z=0, seed=0, name="",
                         sample_in_order=False, clean_cache=False, random_sample_sigma=0.1, vis: Visualizer = None,
-                        restricted_points=[], other_rejection_criteria=None):
+                        restricted_points=[], other_rejection_criteria=None, device="cpu"):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -247,7 +247,8 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
         if seed not in cache[name]:
             cache[name][seed] = {}
         if not clean_cache and num_points in cache[name][seed]:
-            return cache[name][seed][num_points]
+            res = cache[name][seed][num_points]
+            return (v.to(device=device) for v in res)
     else:
         cache = {name: {seed: {}}}
 
@@ -339,7 +340,7 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
     cache[name][seed][num_points] = points, normals, bb
     torch.save(cache, fullname)
 
-    return points, normals, bb
+    return points.to(device=device), normals.to(device=device), bb.to(device=device)
 
 
 def pose_error(target_pose, guess_pose):

@@ -814,8 +814,9 @@ class PyBulletNaiveSDF(util.ObjectFrameSDF):
 
 
 class CachedSDF(util.ObjectFrameSDF):
-    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, debug_check_sdf=False):
+    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, device="cpu", debug_check_sdf=False):
         fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
+        self.device = device
         # cache for signed distance field to object
         self.voxels = None
         # voxel grid can't handle vector values yet
@@ -865,6 +866,8 @@ class CachedSDF(util.ObjectFrameSDF):
             torch.save(data, fullname)
             logger.info("caching sdf for %s to %s", self.name, fullname)
 
+        cached_underlying_sdf = cached_underlying_sdf.to(device=device)
+        cached_underlying_sdf_grad = cached_underlying_sdf_grad.to(device=device)
         self.voxels = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
                                                    invalid_value=self._fallback_sdf_value_func)
         # TODO handle vector valued views
@@ -872,6 +875,7 @@ class CachedSDF(util.ObjectFrameSDF):
 
     def _fallback_sdf_value_func(self, *args, **kwargs):
         sdf_val, _ = self.gt_sdf(*args, **kwargs)
+        sdf_val = sdf_val.to(device=self.device)
         return sdf_val
 
     def __call__(self, points_in_object_frame):
@@ -896,6 +900,7 @@ class CachedSDF(util.ObjectFrameSDF):
 
         pts = voxels.get_voxel_center_points()
         sdf_val, sdf_grad = self.gt_sdf(pts.unsqueeze(0))
+        sdf_val = sdf_val.to(device=self.device)
         cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
 
         return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim,

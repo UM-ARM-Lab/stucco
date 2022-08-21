@@ -9,6 +9,7 @@ import math
 
 from datetime import datetime
 
+import torch
 from arm_pytorch_utilities import math_utils
 
 import pybullet_data
@@ -296,6 +297,8 @@ class DebugDrawer(Visualizer):
         uids = self._debug_ids[name]
         l = length
 
+        if torch.is_tensor(point):
+            point = point.detach().cpu()
         # ignore 3rd dimension if it exists to plot everything at the same height
         height = self._process_point_height(point, height)
 
@@ -364,6 +367,9 @@ class DebugDrawer(Visualizer):
         if name not in self._debug_ids:
             self._debug_ids[name] = -1
         uid = self._debug_ids[name]
+        if torch.is_tensor(start):
+            start = start.detach().cpu()
+            diff = diff.detach().cpu()
 
         self._debug_ids[name] = p.addUserDebugLine(start, np.add(start, [diff[0] * scale, diff[1] * scale,
                                                                          diff[2] * scale if len(diff) == 3 else 0]),

@@ -73,7 +73,7 @@ reject_model_pts = {
 }
 
 
-def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=False):
+def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=False, device="cpu"):
     points, normals, _ = sample_model_points(target_obj_id, reject_too_close=0.006,
                                              num_points=num_points,
                                              force_z=None,
@@ -81,6 +81,7 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
                                              seed=seed, clean_cache=True,
                                              random_sample_sigma=0.2,
                                              name=model_name, vis=None,
+                                             device=device,
                                              other_rejection_criteria=reject_model_pts[model_name],
                                              restricted_points=restricted_pts[model_name])
     for i, pt in enumerate(points):
@@ -112,12 +113,13 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
     freespace_ranges = exp.ranges
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                   device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0)
+                                                                           name=model_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -128,7 +130,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
+        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed,
+                                                             device=exp.device)
 
         pose = p.getBasePositionAndOrientation(target_obj_id)
         link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -153,7 +156,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         known_sdf = util.VoxelSet(model_points_world_frame,
                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
         volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=1, scale_known_freespace=0,
-                                                   vis=vis, debug=True)
+                                                   vis=vis, debug=False)
 
         rand.seed(seed)
         # perform ICP and visualize the transformed points
@@ -168,14 +171,14 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         #                                      given_init_pose=best_tsf_guess, batch=B)
         # use only volumetric loss
         # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
-        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-        #                                      max_iterations = 20,
-        #                                      learn_translation=False,
-        #                                      use_matching_loss=False)
-        T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
-                                   icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
-                                   given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+                                             max_iterations=20,
+                                             learn_translation=False,
+                                             use_matching_loss=False)
+        # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+        #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
+        #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
 
         # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
         #                              batch=B)
@@ -198,13 +201,15 @@ def test_gradients(exp, seed=0, eval_num_points=200, register_num_points=500, nu
     vis = exp.dd
     freespace_ranges = exp.ranges
 
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                   device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0)
+                                                                           name=model_name, seed=0, device=exp.device)
 
-    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
+    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed,
+                                                         device=exp.device)
     pose = p.getBasePositionAndOrientation(target_obj_id)
     link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
         tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
@@ -268,12 +273,13 @@ def test_icp_freespace(exp,
     freespace_ranges = exp.ranges
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                   device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0)
+                                                                           name=model_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -281,7 +287,8 @@ def test_icp_freespace(exp,
     B = 30
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed)
+    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed,
+                                                         device=exp.device)
 
     pose = p.getBasePositionAndOrientation(target_obj_id)
     link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -356,7 +363,7 @@ def test_icp_freespace(exp,
         print(f"num {num_freespace_points_list[i]} err {errors[i]}")
 
 
-def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=0, viewing_delay=0.1,
+def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
                                register_num_points=500, eval_num_points=200,
                                normal_scale=0.05, upto_index=-1, upright_bias=0.1,
                                model_name="mustard_normal", run_name=""):
@@ -365,16 +372,22 @@ def test_icp_on_experiment_run(target_obj_id, vis_obj_id, vis: Visualizer, seed=
     cache = torch.load(fullname)
     data = cache[name][seed]
 
+    target_obj_id = exp.objId
+    vis_obj_id = exp.visId
+    vis = exp.dd
+    freespace_ranges = exp.ranges
+
     for _ in range(1000):
         p.stepSimulation()
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0)
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                   device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0)
+                                                                           name=model_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -703,9 +716,11 @@ class ShapeExplorationExperiment(abc.ABC):
     def __init__(self, obj_factory=YCBObjectFactory("mustard_normal", "YcbMustardBottle",
                                                     vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
                                                     vis_frame_pos=[-0.014, -0.0125, 0.04]),
+                 device="cpu",
                  eval_period=10,
                  plot_per_eval_period=1,
                  plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
+        self.device = device
         self.policy: typing.Optional[ShapeExplorationPolicy] = None
         self.obj_factory = obj_factory
         self.plot_point_type = plot_point_type
@@ -773,6 +788,7 @@ class ShapeExplorationExperiment(abc.ABC):
                                                              seed=0, clean_cache=build_model,
                                                              random_sample_sigma=0.2,
                                                              name=model_name, vis=vis,
+                                                             device=self.device,
                                                              restricted_points=restricted_pts[model_name])
         pose = p.getBasePositionAndOrientation(target_obj_id)
 
@@ -871,7 +887,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         # fix the z dimension since there shouldn't be that much variance across it
         range_per_dim[2] = [-range_per_dim[2, 1] * 0.4, range_per_dim[2, 1] * 0.6]
         self.sdf = stucco.exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                                obj_frame_sdf)
+                                                obj_frame_sdf, device=self.device)
         self.set_policy(
             policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
@@ -1153,11 +1169,11 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    experiment = ICPEVExperiment()
+    experiment = ICPEVExperiment(device="cuda")
     for gt_num in [500]:
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=gt_num,
-                     name=f"mpc", viewing_delay=0)
+                     name=f"volumetric known sgd", viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "sgd" in name or "volumetric" in name) and "norm" not in name)
 
     # -- freespace ICP experiment
@@ -1182,7 +1198,7 @@ if __name__ == "__main__":
     #                "evaluate_icpev_correlation": False, "debug_name": exp_name,
     #                "distance_filter": ignore_beyond_distance(0.1)}
     # experiment = ICPEVExperiment()
-    # test_icp_on_experiment_run(experiment.objId, experiment.visId, experiment.dd, seed=2, upto_index=50,
+    # test_icp_on_experiment_run(experiment, seed=2, upto_index=50,
     #                            register_num_points=500,
     #                            run_name=exp_name, viewing_delay=0.5)
     # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
