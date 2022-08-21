@@ -412,9 +412,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         query_icp_error_ground_truth = torch.zeros(self.B, self.N)
         m = self._link_to_world_tf().get_matrix()
         for b in range(self.B):
-            pos = m[b, :3, 3]
-            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
-            rot = tf.wxyz_to_xyzw(rot)
+            pos, rot = util.matrix_to_pos_rot(m[b])
             p.resetBasePositionAndOrientation(self.visId, pos, rot)
 
             # transform our visual object to the pose

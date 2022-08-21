@@ -3,11 +3,16 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import torch
 import time
+
+import pytorch_kinematics
+from pytorch_kinematics.transforms import wxyz_to_xyzw, xyzw_to_wxyz
+
 from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops import knn_points
 from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
 from stucco.icp_sgd import iterative_closest_point_sgd
+from stucco import util
 
 
 # from https://github.com/richardos/icp
@@ -997,9 +1002,8 @@ def icp_stein(A, B, given_init_pose=None, batch=30, max_dist=0.8):
 
 
 def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_samples=100,
-            max_rot_mag=0.2, max_trans_mag=0.2, iterations=10,
-            rot_sigma=0.2, trans_sigma=0.2,
-            **kwargs):
+            max_rot_mag=0.01, max_trans_mag=0.01, iterations=10,
+            rot_sigma=0.001, trans_sigma=0.05, draw_mesh=None):
     from pytorch_mppi import mppi
     from pytorch_kinematics.transforms import rotation_6d_to_matrix
     # use the given cost function and run MPC with deltas on the transforms to optimize it
@@ -1008,6 +1012,7 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
 
     d = A.device
     nx = 16  # 4 x 4 transformation matrix
+    # TODO use axis angle representation for delta rotation
     nu_r = 6
     nu_t = 3
     noise_sigma = torch.diag(torch.tensor([rot_sigma] * nu_r + [trans_sigma] * nu_t, device=d))
@@ -1025,11 +1030,27 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
                      u_min=torch.tensor([-max_rot_mag] * nu_r + [-max_trans_mag] * nu_t, device=d),
                      u_max=torch.tensor([max_rot_mag] * nu_r + [max_trans_mag] * nu_t, device=d))
 
-    obs = given_init_pose[0]
+    visual_obj_id_map = {}
+    obs = given_init_pose[0].inverse().contiguous()
     for i in range(iterations):
         delta_H = ctrl.command(obs.view(-1))
+        rollout = ctrl.get_rollouts(obs.view(-1)).squeeze()
+        # visualize current state after each MPC step
+        if draw_mesh is not None:
+            pos, rot = util.matrix_to_pos_rot(obs.view(4, 4))
+            id = visual_obj_id_map.get(i, None)
+            visual_obj_id_map[i] = draw_mesh("state", (pos, rot), (0., i / iterations, i / iterations, 0.5),
+                                             object_id=id)
+            # visualize rollout
+            for j, x in enumerate(rollout):
+                pos, rot = util.matrix_to_pos_rot(x.view(4, 4))
+                internal_id = (j + 1) * iterations
+                id = visual_obj_id_map.get(internal_id, None)
+                visual_obj_id_map[internal_id] = draw_mesh("rollout", (pos, rot), (
+                (j + 1) / (len(rollout) + 1), i / iterations, i / iterations, 0.5),
+                                                           object_id=id)
+
         obs = dynamics(obs.unsqueeze(0), delta_H.unsqueeze(0))
-        # TODO visualize current state after each MPC step
 
     # TODO can't really do anything with the batch size?
     obs = obs.view(4, 4).repeat(batch, 1, 1)

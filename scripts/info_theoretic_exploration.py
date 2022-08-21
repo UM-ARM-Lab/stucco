@@ -175,7 +175,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         #                                      use_matching_loss=False)
         T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
                                    icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
-                                   given_init_pose=best_tsf_guess, batch=B)
+                                   given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
 
         # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
         #                              batch=B)
@@ -733,11 +733,7 @@ class ShapeExplorationExperiment(abc.ABC):
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
         pose = p.getBasePositionAndOrientation(self.objId)
-        self.dd.draw_mesh("base_object", self.obj_factory.get_mesh_resource_filename(),
-                          pose, scale=self.obj_factory.scale,
-                          rgba=(1.0, 1.0, 0., 0.5),
-                          vis_frame_pos=self.obj_factory.vis_frame_pos,
-                          vis_frame_rot=self.obj_factory.vis_frame_rot)
+        self.draw_mesh("base_object", pose, (1.0, 1.0, 0., 0.5))
 
         # also needs to be collision since we will test collision against it to get distance
         self.visId, _ = self.obj_factory.make_collision_obj(self.z, rgba=[0.2, 0.2, 1.0, 0.5])
@@ -746,6 +742,13 @@ class ShapeExplorationExperiment(abc.ABC):
         p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
 
         self.has_run = False
+
+    def draw_mesh(self, name, pose, rgba, object_id=None):
+        return self.dd.draw_mesh(name, self.obj_factory.get_mesh_resource_filename(),
+                                 pose, scale=self.obj_factory.scale,
+                                 rgba=rgba, object_id=object_id,
+                                 vis_frame_pos=self.obj_factory.vis_frame_pos,
+                                 vis_frame_rot=self.obj_factory.vis_frame_rot)
 
     def set_policy(self, policy: ShapeExplorationPolicy):
         self.policy = policy

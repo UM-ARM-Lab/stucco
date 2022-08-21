@@ -4,6 +4,15 @@ import matplotlib
 import torch
 from multidim_indexing import torch_view
 
+import pytorch_kinematics
+
+
+def matrix_to_pos_rot(m):
+    pos = m[:3, 3]
+    rot = pytorch_kinematics.matrix_to_quaternion(m[:3, :3])
+    rot = pytorch_kinematics.transforms.wxyz_to_xyzw(rot)
+    return pos, rot
+
 
 def move_figure(f, x, y):
     """Move figure's upper left corner to pixel (x, y)"""
