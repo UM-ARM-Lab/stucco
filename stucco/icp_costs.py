@@ -80,7 +80,7 @@ class KnownFreeSpaceCost(torch.autograd.Function):
 class KnownSDFDistanceCost:
     @staticmethod
     def apply(world_frame_all_points: torch.tensor, all_point_weights: torch.tensor,
-              known_voxel_centers: torch.tensor, known_voxel_values: torch.tensor, epsilon=0.005) -> torch.tensor:
+              known_voxel_centers: torch.tensor, known_voxel_values: torch.tensor, epsilon=0.01) -> torch.tensor:
         # difference between current SDF value at each point and the desired one
         sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
 
@@ -257,7 +257,7 @@ class VolumetricCost(ICPPoseCost):
                     known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
                     known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
 
-                    epsilon = 0.005
+                    epsilon = 0.01
                     # loss for each point, corresponding to each known voxel center
                     # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
                     mask = sdf_diff < epsilon
@@ -285,12 +285,12 @@ class VolumetricCost(ICPPoseCost):
                         self.vis.draw_2d_line(f"closest_grad",
                                               self._pts_all[b, min_idx[k]],
                                               -self._pts_all.grad[b, min_idx[k]],
-                                              color=(0, 1, 0), size=2., scale=1)
+                                              color=(0, 1, 0), size=2., scale=5)
 
                         # draw all losses corresponding to this to match voxel and color code their values
                         each_loss = loss[0, :, k].detach().cpu()
-                        # draw all the masked out ones as 0
-                        each_loss[each_loss > 1000] = each_loss.max()
+                        # draw all the masked out ones
+                        each_loss[each_loss > 1000] = 0
 
                         error_norm = matplotlib.colors.Normalize(vmin=0, vmax=each_loss.max())
                         color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
@@ -299,7 +299,7 @@ class VolumetricCost(ICPPoseCost):
 
                         for i in range(world_frame_all_points[0].shape[0]):
                             self.vis.draw_point(f"each_loss_pt.{i}", world_frame_all_points[0, i], color=rgb[i],
-                                                length=0.003)
+                                                length=0.003 if each_loss[i] > 0 else 0.0001)
 
                         print(min_values[k])
 
