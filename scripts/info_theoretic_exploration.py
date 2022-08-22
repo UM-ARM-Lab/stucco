@@ -309,19 +309,12 @@ def test_icp_freespace(exp,
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
     # best_tsf_guess = None
     for num_freespace in num_freespace_points_list:
-        rand.seed(seed)
-        free_voxels = util.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
+        free_voxels = util.VoxelGrid(0.015, freespace_ranges, dtype=dtype, device=device)
         known_sdf = util.VoxelSet(model_points_world_frame,
                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
-        volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=freespace_cost_scale, vis=vis,
-                                                   debug=False)
-
-        def mpc_cost_wrapper(state, action):
-            R = state[:, :3, :3]
-            T = state[:, :3, 3]
-            s = torch.ones(state.shape[0], device=state.device, dtype=state.dtype)
-
-            return volumetric_cost(None, R, T, s)
+        volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf,
+                                                   scale_known_freespace=freespace_cost_scale, vis=vis,
+                                                   debug=False, debug_freespace=True)
 
         # sample points in freespace and plot them
         # sample only on one side
@@ -334,20 +327,25 @@ def test_icp_freespace(exp,
 
         i = 0
         for i, pt in enumerate(free_space_world_frame_points):
-            vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=4)
+            vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=2, length=0.003)
         vis.clear_visualization_after("fspt", i + 1)
 
+        rand.seed(seed)
         # perform ICP and visualize the transformed points
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
-        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-        #                                      )
-        T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
-                                   given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-                                   )
+        # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+                                             max_iterations=20, lr=0.01,
+                                             learn_translation=True,
+                                             use_matching_loss=False)
+        # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+        #                            given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+        #                            )
 
         # draw all ICP's sample meshes
+        exp.policy._clear_cached_tf()
         exp.policy.register_transforms(T, distances)
         exp.policy._debug_icp_distribution(None, None)
 
@@ -438,9 +436,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
     errors_per_batch = []
 
     for b in range(B):
-        pos = m[b, :3, 3]
-        rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
-        rot = tf.wxyz_to_xyzw(rot)
+        pos, rot = util.matrix_to_pos_rot(m[b])
         p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
 
         # transform our visual object to the pose
@@ -1169,26 +1165,26 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    experiment = ICPEVExperiment(device="cuda")
-    for gt_num in [500]:
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=gt_num,
-                     name=f"volumetric mask known sgd learn translation", viewing_delay=0)
+    # experiment = ICPEVExperiment(device="cuda")
+    # for gt_num in [500]:
+    #     for seed in range(10):
+    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
+    #                  name=f"volumetric mask known sgd learn translation", viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name)
 
     # -- freespace ICP experiment
-    # experiment = ICPEVExperiment()
-    # # test_gradients(experiment)
-    #
-    # for freespace_cost_scale in [20]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp_freespace(experiment, seed=seed, num_points=5,
-    #                                # num_freespace_points_list=(50, 100),
-    #                                register_num_points=gt_num,
-    #                                freespace_cost_scale=freespace_cost_scale,
-    #                                name=f"mpc 5np only one side {gt_num} mp scale {freespace_cost_scale}",
-    #                                viewing_delay=0)
+    experiment = ICPEVExperiment(device="cuda")
+    # test_gradients(experiment)
+
+    for freespace_cost_scale in [20]:
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp_freespace(experiment, seed=seed, num_points=5,
+                                   # num_freespace_points_list=(0, 50, 100),
+                                   register_num_points=gt_num,
+                                   freespace_cost_scale=freespace_cost_scale,
+                                   name=f"volumetric 5np only one side {gt_num} mp scale {freespace_cost_scale}",
+                                   viewing_delay=0)
     # plot_icp_results(names_to_include=lambda name: "5np" in name and "one side" in name,
     #                  icp_res_file='icp_freespace.pkl')
 
