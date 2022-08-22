@@ -80,16 +80,26 @@ class KnownFreeSpaceCost(torch.autograd.Function):
 class KnownSDFDistanceCost:
     @staticmethod
     def apply(world_frame_all_points: torch.tensor, all_point_weights: torch.tensor,
-              known_voxel_centers: torch.tensor, known_voxel_values: torch.tensor) -> torch.tensor:
+              known_voxel_centers: torch.tensor, known_voxel_values: torch.tensor, epsilon=0.005) -> torch.tensor:
         # difference between current SDF value at each point and the desired one
         sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
+
         # vector from each known voxel's center with known value to each point
         known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
         known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
 
         # loss for each point, corresponding to each known voxel center
+        # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
+        mask = sdf_diff < epsilon
+        # ensure we have at least one element included in the mask
+        while torch.any(mask.sum(dim=0) == 0):
+            epsilon *= 2
+            mask = sdf_diff < epsilon
         # low distance should have low difference
-        loss = known_voxel_to_pt_dist / (sdf_diff + 1e-8)
+        # remove those not masked from contention
+        known_voxel_to_pt_dist[:, ~mask] = 10000
+
+        loss = known_voxel_to_pt_dist
         # each point may not satisfy two targets simulatenously, so we just care about the best one
         loss = loss.min(dim=1).values.mean(dim=-1)
 
@@ -247,26 +257,42 @@ class VolumetricCost(ICPPoseCost):
                     known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
                     known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
 
+                    epsilon = 0.005
                     # loss for each point, corresponding to each known voxel center
+                    # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
+                    mask = sdf_diff < epsilon
+                    # ensure we have at least one element included in the mask
+                    while torch.any(mask.sum(dim=0) == 0):
+                        epsilon *= 2
+                        mask = sdf_diff < epsilon
                     # low distance should have low difference
-                    loss = known_voxel_to_pt_dist / (sdf_diff + 1e-8)
+                    # remove those not masked from contention
+                    known_voxel_to_pt_dist[:, ~mask] = 10000
+
+                    loss = known_voxel_to_pt_dist
 
                     # closest of each known SDF; try to satisfy each target as best as possible
                     min_values, min_idx = loss.min(dim=1)
 
                     # just visualize the first one
-                    min_values = min_values[0]
-                    min_idx = min_idx[0]
+                    min_values = min_values[b]
+                    min_idx = min_idx[b]
                     for k in range(len(min_values)):
                         self.vis.draw_point(f"to_match", known_voxel_centers[k], color=(1, 0, 0), length=0.003,
                                             scale=10)
-                        self.vis.draw_point(f"closest", world_frame_all_points[0][min_idx[k]], color=(0, 1, 0),
+                        self.vis.draw_point(f"closest", world_frame_all_points[b, min_idx[k]], color=(0, 1, 0),
                                             length=0.003, scale=10)
+                        self.vis.draw_2d_line(f"closest_grad",
+                                              self._pts_all[b, min_idx[k]],
+                                              -self._pts_all.grad[b, min_idx[k]],
+                                              color=(0, 1, 0), size=2., scale=1)
 
                         # draw all losses corresponding to this to match voxel and color code their values
                         each_loss = loss[0, :, k].detach().cpu()
+                        # draw all the masked out ones as 0
+                        each_loss[each_loss > 1000] = each_loss.max()
 
-                        error_norm = matplotlib.colors.Normalize(vmin=each_loss.min(), vmax=each_loss.max())
+                        error_norm = matplotlib.colors.Normalize(vmin=0, vmax=each_loss.max())
                         color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
                         rgb = color_map.to_rgba(each_loss.reshape(-1))
                         rgb = rgb[:, :-1]
