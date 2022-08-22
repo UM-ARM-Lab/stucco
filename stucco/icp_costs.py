@@ -54,6 +54,7 @@ class KnownFreeSpaceCost(torch.autograd.Function):
         occupied = world_frame_voxels[world_frame_interior_points]
         # voxels should be 1 where it is known free space, otherwise 0
         loss = occupied * interior_point_weights
+        loss = loss.sum(dim=-1)
         ctx.occupied = occupied
         ctx.save_for_backward(world_frame_interior_gradients, interior_point_weights)
         return loss
@@ -71,7 +72,7 @@ class KnownFreeSpaceCost(torch.autograd.Function):
             # free space point, so the surface needs to go in the opposite direction
             grads = ctx.occupied[:, :, None] * world_frame_interior_gradients * interior_point_weights[None, :, None]
             # TODO consider averaging the gradients out across all points?
-            dl_dpts = grad_outputs[:, :, None] * grads
+            dl_dpts = grad_outputs[:, None, None] * grads
 
         # gradients for the other inputs not implemented
         return dl_dpts, dl_dgrad, dl_dweights, dl_dvoxels
@@ -103,36 +104,15 @@ class KnownSDFDistanceCost:
         # each point may not satisfy two targets simulatenously, so we just care about the best one
         loss = loss.min(dim=1).values.mean(dim=-1)
 
-        # ctx.sdf_diff = sdf_diff
-        # ctx.known_voxel_to_pt = known_voxel_to_pt
-        # ctx.save_for_backward(world_frame_interior_gradients, interior_point_weights)
         return loss
-
-    # @staticmethod
-    # def backward(ctx: Any, grad_outputs: Any) -> Any:
-    #     # need to output the gradient of the loss w.r.t. all the inputs of forward
-    #     dl_dpts = None
-    #     dl_dgrad = None
-    #     dl_dweights = None
-    #     dl_dvoxels = None
-    #     if ctx.needs_input_grad[0]:
-    #         world_frame_interior_gradients, interior_point_weights = ctx.saved_tensors
-    #         # SDF grads point away from the surface; in this case we want to move the surface away from the occupied
-    #         # free space point, so the surface needs to go in the opposite direction
-    #         grads = ctx.occupied[:, :, None] * world_frame_interior_gradients * interior_point_weights[None, :, None]
-    #         # TODO consider averaging the gradients out across all points?
-    #         dl_dpts = grad_outputs[:, :, None] * grads
-    #
-    #     # gradients for the other inputs not implemented
-    #     return dl_dpts, dl_dgrad, dl_dweights, dl_dvoxels
 
 
 class VolumetricCost(ICPPoseCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
     def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
-                 vis=None,  scale_known_freespace=1., scale_known_sdf=1.,
-                 debug=False, debug_known_sgd=False):
+                 vis=None, scale_known_freespace=1., scale_known_sdf=1.,
+                 debug=False, debug_known_sgd=False, debug_freespace=False):
         """
         :param free_voxels: representation of freespace
         :param sdf_voxels: voxels for which we know the exact SDF values for
@@ -166,12 +146,13 @@ class VolumetricCost(ICPPoseCost):
         self.B = None
 
         # intermediate products for visualization purposes
-        self._pts = None
+        self._pts_interior = None
         self._grad = None
 
         self._pts_all = None
         self.debug = debug
         self.debug_known_sgd = debug_known_sgd
+        self.debug_freespace = debug_freespace
 
         self.vis = vis
 
@@ -189,10 +170,11 @@ class VolumetricCost(ICPPoseCost):
         self._transform_model_to_world_frame(R, T, s)
         # self.visualize(R, T, s)
 
-        loss = torch.zeros(self.B, device=self._pts.device, dtype=self._pts.dtype)
+        loss = torch.zeros(self.B, device=self._pts_interior.device, dtype=self._pts_interior.dtype)
 
         if self.scale_known_freespace != 0:
-            known_free_space_loss = KnownFreeSpaceCost.apply(self._pts, self._grad, self.model_interior_weights,
+            known_free_space_loss = KnownFreeSpaceCost.apply(self._pts_interior, self._grad,
+                                                             self.model_interior_weights,
                                                              self.free_voxels)
             loss += known_free_space_loss * self.scale_known_freespace
         if self.scale_known_sdf != 0:
@@ -206,10 +188,10 @@ class VolumetricCost(ICPPoseCost):
     def _transform_model_to_world_frame(self, R, T, s):
         Rt = R.transpose(-1, -2)
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
-        self._pts = _apply_similarity_transform(self.model_interior_points, Rt, tt, s)
+        self._pts_interior = _apply_similarity_transform(self.model_interior_points, Rt, tt, s)
         self._pts_all = _apply_similarity_transform(self.model_all_points, Rt, tt, s)
-        if self.debug and self._pts.requires_grad:
-            self._pts.retain_grad()
+        if self.debug and self._pts_interior.requires_grad:
+            self._pts_interior.retain_grad()
             self._pts_all.retain_grad()
         self._grad = _apply_similarity_transform(self.model_interior_normals, Rt)
 
@@ -217,7 +199,7 @@ class VolumetricCost(ICPPoseCost):
         if not self.debug:
             return
         if self.vis is not None:
-            if self._pts is None:
+            if self._pts_interior is None:
                 self._transform_model_to_world_frame(R, T, s)
             with torch.no_grad():
                 # occupied = self.voxels.voxels.raw_data > 0
@@ -295,6 +277,18 @@ class VolumetricCost(ICPPoseCost):
                                                     length=0.003 if each_loss[i] > 0 else 0.0001)
 
                             print(min_values[k])
+                    elif self.debug_freespace:
+                        # draw all points that are in violation larger
+                        # interior points should not be occupied
+                        occupied = self.free_voxels[self._pts_interior]
+                        for i, pt in enumerate(self._pts_interior[b]):
+                            self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1),
+                                                length=0.005 if occupied[b, i] else 0.0005,
+                                                scale=4 if occupied[b, i] else 1)
+                            # gradient descend goes along negative gradient so best to show the direction of movement
+                            self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_interior.grad[b, i], color=(0, 1, 0),
+                                                  size=5.,
+                                                  scale=10)
                     else:
                         # visualize all points and losses
                         for i, pt in enumerate(self._pts_all[b]):
