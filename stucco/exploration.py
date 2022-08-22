@@ -433,9 +433,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         # plot distribution of poses and the candidate points in terms of their information metric
         m = self._link_to_world_tf().get_matrix()
         for b in range(self.B):
-            pos = m[b, :3, 3]
-            rot = pytorch_kinematics.matrix_to_quaternion(m[b, :3, :3])
-            rot = tf.wxyz_to_xyzw(rot)
+            pos, rot = util.matrix_to_pos_rot(m[b])
             object_id = self.debug_obj_ids.get(b, None)
             object_id = self.dd.draw_mesh("icp_distribution", self.debug_obj_factory.get_mesh_resource_filename(),
                                           (pos, rot), scale=self.debug_obj_factory.scale, object_id=object_id,
