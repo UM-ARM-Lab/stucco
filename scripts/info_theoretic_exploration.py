@@ -156,7 +156,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         known_sdf = util.VoxelSet(model_points_world_frame,
                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
         volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=1, scale_known_freespace=0,
-                                                   vis=vis, debug=False)
+                                                   vis=vis, debug=True)
 
         rand.seed(seed)
         # perform ICP and visualize the transformed points

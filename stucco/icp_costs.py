@@ -1,3 +1,4 @@
+import matplotlib.colors, matplotlib.cm
 import torch
 from torch.nn import MSELoss
 from pytorch3d.ops.knn import knn_gather, _KNN
@@ -224,17 +225,57 @@ class VolumetricCost(ICPPoseCost):
 
                     b = 0
                     i = 0
-                    for i, pt in enumerate(self._pts_all[b]):
-                        self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-                        # self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2.,
-                        #                       scale=0.02)
-                        # visualize the computed gradient on the point
-                        # gradient descend goes along negative gradient so best to show the direction of movement
-                        self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0), size=5.,
-                                              scale=10)
-                    self.vis.clear_visualization_after("mipt", i + 1)
-                    self.vis.clear_visualization_after("min", i + 1)
-                    self.vis.clear_visualization_after("mingrad", i + 1)
+                    # for i, pt in enumerate(self._pts_all[b]):
+                    #     self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
+                    #     # self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2.,
+                    #     #                       scale=0.02)
+                    #     # visualize the computed gradient on the point
+                    #     # gradient descend goes along negative gradient so best to show the direction of movement
+                    #     self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0), size=5.,
+                    #                           scale=10)
+                    # self.vis.clear_visualization_after("mipt", i + 1)
+                    # self.vis.clear_visualization_after("min", i + 1)
+                    # self.vis.clear_visualization_after("mingrad", i + 1)
+
+                    # visualize the known SDF loss directly
+                    known_voxel_centers, known_voxel_values = self.sdf_voxels.get_known_pos_and_values()
+                    world_frame_all_points = self._pts_all
+                    all_point_weights = self.model_all_weights
+                    # difference between current SDF value at each point and the desired one
+                    sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
+                    # vector from each known voxel's center with known value to each point
+                    known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
+                    known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
+
+                    # loss for each point, corresponding to each known voxel center
+                    # low distance should have low difference
+                    loss = known_voxel_to_pt_dist / (sdf_diff + 1e-8)
+
+                    # closest of each known SDF; try to satisfy each target as best as possible
+                    min_values, min_idx = loss.min(dim=1)
+
+                    # just visualize the first one
+                    min_values = min_values[0]
+                    min_idx = min_idx[0]
+                    for k in range(len(min_values)):
+                        self.vis.draw_point(f"to_match", known_voxel_centers[k], color=(1, 0, 0), length=0.003,
+                                            scale=10)
+                        self.vis.draw_point(f"closest", world_frame_all_points[0][min_idx[k]], color=(0, 1, 0),
+                                            length=0.003, scale=10)
+
+                        # draw all losses corresponding to this to match voxel and color code their values
+                        each_loss = loss[0, :, k].detach().cpu()
+
+                        error_norm = matplotlib.colors.Normalize(vmin=each_loss.min(), vmax=each_loss.max())
+                        color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+                        rgb = color_map.to_rgba(each_loss.reshape(-1))
+                        rgb = rgb[:, :-1]
+
+                        for i in range(world_frame_all_points[0].shape[0]):
+                            self.vis.draw_point(f"each_loss_pt.{i}", world_frame_all_points[0, i], color=rgb[i],
+                                                length=0.003)
+
+                        print(min_values[k])
 
 
 class ICPPoseCostMatrixInputWrapper:
