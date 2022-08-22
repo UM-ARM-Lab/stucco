@@ -131,7 +131,8 @@ class VolumetricCost(ICPPoseCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
     def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
-                 vis=None, debug=False, scale_known_freespace=1., scale_known_sdf=1.):
+                 vis=None,  scale_known_freespace=1., scale_known_sdf=1.,
+                 debug=False, debug_known_sgd=False):
         """
         :param free_voxels: representation of freespace
         :param sdf_voxels: voxels for which we know the exact SDF values for
@@ -170,6 +171,7 @@ class VolumetricCost(ICPPoseCost):
 
         self._pts_all = None
         self.debug = debug
+        self.debug_known_sgd = debug_known_sgd
 
         self.vis = vis
 
@@ -235,73 +237,75 @@ class VolumetricCost(ICPPoseCost):
 
                     b = 0
                     i = 0
-                    # for i, pt in enumerate(self._pts_all[b]):
-                    #     self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-                    #     # self.vis.draw_2d_line(f"min.{i}", pt, self._grad[b][i], color=(1, 0, 0), size=2.,
-                    #     #                       scale=0.02)
-                    #     # visualize the computed gradient on the point
-                    #     # gradient descend goes along negative gradient so best to show the direction of movement
-                    #     self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0), size=5.,
-                    #                           scale=10)
-                    # self.vis.clear_visualization_after("mipt", i + 1)
-                    # self.vis.clear_visualization_after("min", i + 1)
-                    # self.vis.clear_visualization_after("mingrad", i + 1)
 
-                    # visualize the known SDF loss directly
-                    known_voxel_centers, known_voxel_values = self.sdf_voxels.get_known_pos_and_values()
-                    world_frame_all_points = self._pts_all
-                    all_point_weights = self.model_all_weights
-                    # difference between current SDF value at each point and the desired one
-                    sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
-                    # vector from each known voxel's center with known value to each point
-                    known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
-                    known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
+                    # select what to visualize
+                    if self.debug_known_sgd:
+                        # visualize the known SDF loss directly
+                        known_voxel_centers, known_voxel_values = self.sdf_voxels.get_known_pos_and_values()
+                        world_frame_all_points = self._pts_all
+                        all_point_weights = self.model_all_weights
+                        # difference between current SDF value at each point and the desired one
+                        sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
+                        # vector from each known voxel's center with known value to each point
+                        known_voxel_to_pt = world_frame_all_points.unsqueeze(-2) - known_voxel_centers
+                        known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
 
-                    epsilon = 0.01
-                    # loss for each point, corresponding to each known voxel center
-                    # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
-                    mask = sdf_diff < epsilon
-                    # ensure we have at least one element included in the mask
-                    while torch.any(mask.sum(dim=0) == 0):
-                        epsilon *= 2
+                        epsilon = 0.01
+                        # loss for each point, corresponding to each known voxel center
+                        # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
                         mask = sdf_diff < epsilon
-                    # low distance should have low difference
-                    # remove those not masked from contention
-                    known_voxel_to_pt_dist[:, ~mask] = 10000
+                        # ensure we have at least one element included in the mask
+                        while torch.any(mask.sum(dim=0) == 0):
+                            epsilon *= 2
+                            mask = sdf_diff < epsilon
+                        # low distance should have low difference
+                        # remove those not masked from contention
+                        known_voxel_to_pt_dist[:, ~mask] = 10000
 
-                    loss = known_voxel_to_pt_dist
+                        loss = known_voxel_to_pt_dist
 
-                    # closest of each known SDF; try to satisfy each target as best as possible
-                    min_values, min_idx = loss.min(dim=1)
+                        # closest of each known SDF; try to satisfy each target as best as possible
+                        min_values, min_idx = loss.min(dim=1)
 
-                    # just visualize the first one
-                    min_values = min_values[b]
-                    min_idx = min_idx[b]
-                    for k in range(len(min_values)):
-                        self.vis.draw_point(f"to_match", known_voxel_centers[k], color=(1, 0, 0), length=0.003,
-                                            scale=10)
-                        self.vis.draw_point(f"closest", world_frame_all_points[b, min_idx[k]], color=(0, 1, 0),
-                                            length=0.003, scale=10)
-                        self.vis.draw_2d_line(f"closest_grad",
-                                              self._pts_all[b, min_idx[k]],
-                                              -self._pts_all.grad[b, min_idx[k]],
-                                              color=(0, 1, 0), size=2., scale=5)
+                        # just visualize the first one
+                        min_values = min_values[b]
+                        min_idx = min_idx[b]
+                        for k in range(len(min_values)):
+                            self.vis.draw_point(f"to_match", known_voxel_centers[k], color=(1, 0, 0), length=0.003,
+                                                scale=10)
+                            self.vis.draw_point(f"closest", world_frame_all_points[b, min_idx[k]], color=(0, 1, 0),
+                                                length=0.003, scale=10)
+                            self.vis.draw_2d_line(f"closest_grad",
+                                                  self._pts_all[b, min_idx[k]],
+                                                  -self._pts_all.grad[b, min_idx[k]],
+                                                  color=(0, 1, 0), size=2., scale=5)
 
-                        # draw all losses corresponding to this to match voxel and color code their values
-                        each_loss = loss[0, :, k].detach().cpu()
-                        # draw all the masked out ones
-                        each_loss[each_loss > 1000] = 0
+                            # draw all losses corresponding to this to match voxel and color code their values
+                            each_loss = loss[0, :, k].detach().cpu()
+                            # draw all the masked out ones
+                            each_loss[each_loss > 1000] = 0
 
-                        error_norm = matplotlib.colors.Normalize(vmin=0, vmax=each_loss.max())
-                        color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
-                        rgb = color_map.to_rgba(each_loss.reshape(-1))
-                        rgb = rgb[:, :-1]
+                            error_norm = matplotlib.colors.Normalize(vmin=0, vmax=each_loss.max())
+                            color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+                            rgb = color_map.to_rgba(each_loss.reshape(-1))
+                            rgb = rgb[:, :-1]
 
-                        for i in range(world_frame_all_points[0].shape[0]):
-                            self.vis.draw_point(f"each_loss_pt.{i}", world_frame_all_points[0, i], color=rgb[i],
-                                                length=0.003 if each_loss[i] > 0 else 0.0001)
+                            for i in range(world_frame_all_points[0].shape[0]):
+                                self.vis.draw_point(f"each_loss_pt.{i}", world_frame_all_points[0, i], color=rgb[i],
+                                                    length=0.003 if each_loss[i] > 0 else 0.0001)
 
-                        print(min_values[k])
+                            print(min_values[k])
+                    else:
+                        # visualize all points and losses
+                        for i, pt in enumerate(self._pts_all[b]):
+                            self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
+                            # gradient descend goes along negative gradient so best to show the direction of movement
+                            self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0),
+                                                  size=5.,
+                                                  scale=10)
+                        self.vis.clear_visualization_after("mipt", i + 1)
+                        self.vis.clear_visualization_after("min", i + 1)
+                        self.vis.clear_visualization_after("mingrad", i + 1)
 
 
 class ICPPoseCostMatrixInputWrapper:
