@@ -156,7 +156,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         known_sdf = util.VoxelSet(model_points_world_frame,
                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
         volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=1, scale_known_freespace=0,
-                                                   vis=vis, debug=True)
+                                                   vis=vis, debug=False)
 
         rand.seed(seed)
         # perform ICP and visualize the transformed points
@@ -173,8 +173,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
                                              given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-                                             max_iterations=20,
-                                             learn_translation=False,
+                                             max_iterations=20, lr=0.01,
+                                             learn_translation=True,
                                              use_matching_loss=False)
         # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
         #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
@@ -1173,8 +1173,8 @@ if __name__ == "__main__":
     for gt_num in [500]:
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=gt_num,
-                     name=f"volumetric known sgd", viewing_delay=0)
-    # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "sgd" in name or "volumetric" in name) and "norm" not in name)
+                     name=f"volumetric mask known sgd learn translation", viewing_delay=0)
+    # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name)
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment()

@@ -278,7 +278,7 @@ def corresponding_points_alignment_sgd(
         **eps**: A scalar for clamping to avoid dividing by zero. Active for the
             code that estimates the output scale `s`.
         **sgd_iterations**: Number of epochs to run
-        **sgd_lr**: Learning rate
+        **lr**: Learning rate
 
     Returns:
         3-element named tuple `SimilarityTransform` containing
