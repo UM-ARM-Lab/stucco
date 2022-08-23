@@ -170,15 +170,15 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
         #                                      given_init_pose=best_tsf_guess, batch=B)
         # use only volumetric loss
-        # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
-        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-        #                                      max_iterations=20, lr=0.01,
-        #                                      learn_translation=True,
-        #                                      use_matching_loss=False)
-        T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
-                                   icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
-                                   given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
+        best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+                                             max_iterations=20, lr=0.01,
+                                             learn_translation=True,
+                                             use_matching_loss=False)
+        # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+        #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
+        #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
 
         # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
         #                              batch=B)
@@ -754,6 +754,9 @@ class ShapeExplorationExperiment(abc.ABC):
 
         self.has_run = False
 
+    def close(self):
+        p.disconnect(self.physics_client)
+
     def draw_mesh(self, name, pose, rgba, object_id=None):
         return self.dd.draw_mesh(name, self.obj_factory.get_mesh_resource_filename(),
                                  pose, scale=self.obj_factory.scale,
@@ -1165,13 +1168,23 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    experiment = ICPEVExperiment(device="cuda")
-    for gt_num in [500]:
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=gt_num,
-                     # num_points_list=(30, 40, 50, 100),
-                     name=f"mpc", viewing_delay=0)
-    # plot_icp_results(names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name)
+    # experiment = ICPEVExperiment(device="cuda")
+    # for gt_num in [500]:
+    #     for seed in range(10):
+    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
+    #                  # num_points_list=(30, 40, 50, 100),
+    #                  name=f"mpc", viewing_delay=0)
+    # plot_icp_results(
+    #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name)
+
+    # -- ICP experiment seeing the effect of model SDF resolution
+    for sdf_res in [0.025, 0.015, 0.01, 0.005]:
+        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_res)
+        for gt_num in [500]:
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=gt_num,
+                         name=f"volumetric mask sdf res {sdf_res} gt init", viewing_delay=0)
+        experiment.close()
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")
