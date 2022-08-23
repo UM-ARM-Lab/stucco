@@ -2,7 +2,7 @@ import matplotlib.colors, matplotlib.cm
 import torch
 from torch.nn import MSELoss
 from pytorch3d.ops.knn import knn_gather, _KNN
-from stucco.icp_sgd import _apply_similarity_transform
+from stucco.icp.sgd import _apply_similarity_transform
 from typing import Any
 
 from stucco import util

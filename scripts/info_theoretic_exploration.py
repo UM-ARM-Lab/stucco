@@ -26,14 +26,13 @@ from arm_pytorch_utilities.grad import jacobian
 from torchmcubes import marching_cubes
 
 from stucco import cfg, icp
-from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
     PybulletObjectFactory
-from stucco import icp_costs
+from stucco.icp import costs as icp_costs
 from stucco import util
 
 from stucco.retrieval_controller import sample_model_points
