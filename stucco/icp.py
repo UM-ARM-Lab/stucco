@@ -1002,8 +1002,8 @@ def icp_stein(A, B, given_init_pose=None, batch=30, max_dist=0.8):
 
 
 def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_samples=100,
-            max_rot_mag=0.01, max_trans_mag=0.01, iterations=10,
-            rot_sigma=0.001, trans_sigma=0.05, draw_mesh=None):
+            max_rot_mag=0.05, max_trans_mag=0.1, steps=30,
+            rot_sigma=0.01, trans_sigma=0.03, draw_mesh=None):
     from pytorch_mppi import mppi
     from pytorch_kinematics.transforms import rotation_6d_to_matrix
     # use the given cost function and run MPC with deltas on the transforms to optimize it
@@ -1013,7 +1013,7 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
     d = A.device
     nx = 16  # 4 x 4 transformation matrix
     # TODO use axis angle representation for delta rotation
-    nu_r = 6
+    nu_r = 3
     nu_t = 3
     noise_sigma = torch.diag(torch.tensor([rot_sigma] * nu_r + [trans_sigma] * nu_t, device=d))
 
@@ -1021,9 +1021,12 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
         # convert flattened delta to its separate 6D rotations and 3D translations
         N = transform.shape[0]
         dH = torch.eye(4, dtype=transform.dtype, device=d).repeat(N, 1, 1)
-        dH[:, :3, :3] = rotation_6d_to_matrix(delta_transform[:, :6])
-        dH[:, :3, 3] = delta_transform[:, 6:]
+        # dH[:, :3, :3] = rotation_6d_to_matrix(delta_transform[:, :6])
+        # dH[:, :3, 3] = delta_transform[:, 6:]
+        dH[:, :3, :3] = tf.euler_angles_to_matrix(delta_transform[:, :3], "XYZ")
+        dH[:, :3, 3] = delta_transform[:, 3:]
         return (dH @ transform.view(dH.shape)).view(N, nx)
+        # return (transform.view(dH.shape) @ dH).view(N, nx)
 
     ctrl = mppi.MPPI(dynamics, cost_func, nx, noise_sigma, num_samples=num_samples, horizon=horizon,
                      device=d,
@@ -1032,23 +1035,23 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
 
     visual_obj_id_map = {}
     obs = given_init_pose[0].inverse().contiguous()
-    for i in range(iterations):
+    for i in range(steps):
         delta_H = ctrl.command(obs.view(-1))
         rollout = ctrl.get_rollouts(obs.view(-1)).squeeze()
         # visualize current state after each MPC step
         if draw_mesh is not None:
-            pos, rot = util.matrix_to_pos_rot(obs.view(4, 4))
+            pos, rot = util.matrix_to_pos_rot(obs.view(4, 4).inverse())
             id = visual_obj_id_map.get(i, None)
-            visual_obj_id_map[i] = draw_mesh("state", (pos, rot), (0., i / iterations, i / iterations, 0.5),
+            visual_obj_id_map[i] = draw_mesh("state", (pos, rot), (0., i / steps, i / steps, 0.5),
                                              object_id=id)
             # visualize rollout
-            for j, x in enumerate(rollout):
-                pos, rot = util.matrix_to_pos_rot(x.view(4, 4))
-                internal_id = (j + 1) * iterations
-                id = visual_obj_id_map.get(internal_id, None)
-                visual_obj_id_map[internal_id] = draw_mesh("rollout", (pos, rot), (
-                (j + 1) / (len(rollout) + 1), i / iterations, i / iterations, 0.5),
-                                                           object_id=id)
+            # for j, x in enumerate(rollout):
+            #     pos, rot = util.matrix_to_pos_rot(x.view(4, 4).inverse())
+            #     internal_id = (j + 1) * steps
+            #     id = visual_obj_id_map.get(internal_id, None)
+            #     visual_obj_id_map[internal_id] = draw_mesh("rollout", (pos, rot), (
+            #     (j + 1) / (len(rollout) + 1), i / steps, i / steps, 0.5),
+            #                                                object_id=id)
 
         obs = dynamics(obs.unsqueeze(0), delta_H.unsqueeze(0))
 
