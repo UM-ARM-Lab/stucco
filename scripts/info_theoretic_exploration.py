@@ -96,6 +96,7 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
 def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
              num_freespace=0,
+             freespace_on_one_side=True,
              surface_delta=0.025,
              freespace_cost_scale=1,
              model_name="mustard_normal"):
@@ -161,7 +162,10 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
         # sample points in freespace and plot them
         # sample only on one side
-        used_model_points = model_points_eval[:, 0] > 0
+        if freespace_on_one_side:
+            used_model_points = model_points_eval[:, 0] > 0
+        else:
+            used_model_points = model_points_eval[:, 0] > -10
         # extrude model points that are on the surface of the object along their normal vector
         free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
                                         model_normals_world_frame_eval[used_model_points][
@@ -1197,16 +1201,15 @@ if __name__ == "__main__":
             for seed in range(10):
                 test_icp(experiment, seed=seed, register_num_points=gt_num,
                          # num_points_list=(30, 40, 50, 100),
+                         freespace_on_one_side=False,
                          num_freespace=num_freespace,
                          freespace_cost_scale=20,
-                         name=f"volumetric free pts {num_freespace}", viewing_delay=0)
+                         name=f"volumetric free all side pts {num_freespace}", viewing_delay=0)
             experiment.close()
 
     # plot_icp_results(
     #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name or "factored out" in name)
-    # plot_icp_results(
-    #     names_to_include=lambda
-    #         name: "factored out" in name or "volumetric mask" in name and "norm" not in name)
+    # plot_icp_results( names_to_include=lambda name: "volumetric free pts 10" in name or "volumetric free pts 100" in name)
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")
