@@ -9,7 +9,7 @@ from stucco import util
 
 
 class ICPPoseCost:
-    def __call__(self, knn_res: _KNN, R, T, s):
+    def __call__(self,  R, T, s, knn_res: _KNN = None):
         """Cost for given pose guesses of ICP
 
         :param R: B x 3 x 3
@@ -40,7 +40,7 @@ class SurfaceNormalCost(ICPPoseCost):
         self.loss = MSELoss()
         self.scale = scale
 
-    def __call__(self, knn_res: _KNN, R, T, s):
+    def __call__(self,  R, T, s, knn_res: _KNN = None):
         corresponding_ynorm = knn_gather(self.Ynorm, knn_res.idx).squeeze(-2)
         transformed_norms = _apply_similarity_transform(self.Xnorm, R, s=s)
         return self.loss(corresponding_ynorm, transformed_norms) * self.scale
@@ -156,7 +156,7 @@ class VolumetricCost(ICPPoseCost):
 
         self.vis = vis
 
-    def __call__(self, knn_res: _KNN, R, T, s):
+    def __call__(self, R, T, s, knn_res: _KNN = None):
         # assign batch and reuse for later for efficiency
         if self.B is None or self.B != R.shape[0]:
             self.B = R.shape[0]

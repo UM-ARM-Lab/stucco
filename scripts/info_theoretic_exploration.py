@@ -169,12 +169,14 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
         #                                      given_init_pose=best_tsf_guess, batch=B)
         # use only volumetric loss
-        best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-                                             max_iterations=20, lr=0.01,
-                                             learn_translation=True,
-                                             use_matching_loss=False)
+        # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
+        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+        #                                      given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+        #                                      max_iterations=20, lr=0.01,
+        #                                      learn_translation=True,
+        #                                      use_matching_loss=False)
+        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, given_init_pose=best_tsf_guess,
+                                          batch=B, max_iterations=20, lr=0.01)
         # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
         #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
         #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
@@ -469,7 +471,8 @@ def marginalize_over_registration_num(name):
     return f"{registration_num[0]} registered points" if registration_num is not None else name
 
 
-def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=None, icp_res_file='icp_comparison.pkl'):
+def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None,
+                     icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
 
@@ -502,10 +505,14 @@ def plot_icp_results(names_to_include=None, logy=True, marginalize_over_name=Non
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
         mean = errors.mean(axis=0)
+        median = np.median(errors, axis=0)
         low = np.percentile(errors, 20, axis=0)
         high = np.percentile(errors, 80, axis=0)
         std = errors.std(axis=0)
-        axs.plot(x, mean, label=name)
+        if plot_median:
+            axs.plot(x, median, label=name)
+        else:
+            axs.plot(x, mean, label=name)
         # axs.errorbar(x, mean, std, label=name)
         axs.fill_between(x, low, high, alpha=0.2)
 
@@ -1162,6 +1169,7 @@ if __name__ == "__main__":
     # -- Build object models (sample points from their surface)
     # experiment = ICPEVExperiment()
     # for num_points in (5, 10, 20, 30, 40, 50, 100):
+    # for num_points in (300, 400, 500):
     #     for seed in range(10):
     #         build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
     #                     pause_at_end=False)
@@ -1172,18 +1180,19 @@ if __name__ == "__main__":
     #     for seed in range(10):
     #         test_icp(experiment, seed=seed, register_num_points=gt_num,
     #                  # num_points_list=(30, 40, 50, 100),
-    #                  name=f"mpc", viewing_delay=0)
+    #                  name=f"factored out volumetric", viewing_delay=0)
     # plot_icp_results(
-    #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name)
+    #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name or "factored out" in name)
+    plot_icp_results(
+        names_to_include=lambda
+            name: "factored out" in name or "volumetric mask known sgd" in name and "gt init" not in name)
 
     # -- ICP experiment seeing the effect of model SDF resolution
-    for sdf_res in [0.025, 0.015, 0.01, 0.005]:
-        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_res)
-        for gt_num in [500]:
-            for seed in range(10):
-                test_icp(experiment, seed=seed, register_num_points=gt_num,
-                         name=f"volumetric mask sdf res {sdf_res} gt init", viewing_delay=0)
-        experiment.close()
+    # experiment = ICPEVExperiment(device="cuda")
+    # for gt_num in [300, 400, 500]:
+    #     for seed in range(10):
+    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
+    #                  name=f"pytorch3d icp {gt_num} mp gt init", viewing_delay=0)
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")

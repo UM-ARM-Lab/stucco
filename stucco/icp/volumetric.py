@@ -1,42 +1,19 @@
 import torch
 import warnings
-from typing import List, NamedTuple, Optional, TYPE_CHECKING, Union
-from torch.nn import MSELoss
-
-from pytorch3d.ops import knn_points
+from typing import Union, Optional
 from pytorch3d.ops import utils as oputil
-from pytorch3d.structures import utils as strutil
-from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform
-from pytorch3d.ops.knn import _KNN
-from pytorch3d.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
+from stucco.icp.sgd import ICPSolution, SimilarityTransform, _apply_similarity_transform
+from stucco.icp.costs import VolumetricCost
+from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
 
 
-def _apply_similarity_transform(
-        X: torch.Tensor, R: torch.Tensor, T: torch.Tensor = None, s: torch.Tensor = None
-) -> torch.Tensor:
-    """
-    Applies a similarity transformation parametrized with a batch of orthonormal
-    matrices `R` of shape `(minibatch, d, d)`, a batch of translations `T`
-    of shape `(minibatch, d)` and a batch of scaling factors `s`
-    of shape `(minibatch,)` to a given `d`-dimensional cloud `X`
-    of shape `(minibatch, num_points, d)`
-    """
-    if s is not None:
-        R = s[:, None, None] * R
-    X = R @ X.transpose(-1, -2)
-    if T is not None:
-        X = X + T[:, :, None]
-    return X.transpose(-1, -2)
-
-
-def iterative_closest_point_sgd(
+def iterative_closest_point_volumetric(
+        volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
-        Y: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
         max_iterations: int = 100,
         relative_rmse_thr: float = 1e-6,
         estimate_scale: bool = False,
-        allow_reflection: bool = False,
         verbose: bool = False,
         **kwargs,
 ) -> ICPSolution:
@@ -89,36 +66,12 @@ def iterative_closest_point_sgd(
             **s**: batch of scaling factors of shape `(minibatch, )`.
         **t_history**: A list of named tuples `SimilarityTransform`
             the transformation parameters after each ICP iteration.
-
-    References:
-        [1] Besl & McKay: A Method for Registration of 3-D Shapes. TPAMI, 1992.
-        [2] https://en.wikipedia.org/wiki/Iterative_closest_point
     """
 
     # make sure we convert input Pointclouds structures to
     # padded tensors of shape (N, P, 3)
     Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-    Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(Y)
-
     b, size_X, dim = Xt.shape
-
-    if (Xt.shape[2] != Yt.shape[2]) or (Xt.shape[0] != Yt.shape[0]):
-        raise ValueError(
-            "Point sets X and Y have to have the same "
-            + "number of batches and data dimensions."
-        )
-
-    if ((num_points_Y < Yt.shape[1]).any() or (num_points_X < Xt.shape[1]).any()) and (
-            num_points_Y != num_points_X
-    ).any():
-        # we have a heterogeneous input (e.g. because X/Y is
-        # an instance of Pointclouds)
-        mask_X = (
-                torch.arange(size_X, dtype=torch.int64, device=Xt.device)[None]
-                < num_points_X[:, None]
-        ).type_as(Xt)
-    else:
-        mask_X = Xt.new_ones(b, size_X)
 
     # clone the initial point cloud
     Xt_init = Xt.clone()
@@ -149,19 +102,6 @@ def iterative_closest_point_sgd(
         T = Xt.new_zeros((b, dim))
         s = Xt.new_ones(b)
 
-    # if vis is not None:
-    #     H = torch.eye(4)
-    #     H[:3, :3] = R[0]
-    #     H[:3, 3] = T[0]
-    #     x = torch.cat((Xt_init, torch.ones(Xt_init.shape[0], Xt_init.shape[1], 1)), dim=-1)
-    #     y = (H @ x.transpose(-1, -2)).transpose(-1, -2)
-    #     yy = (R @ Xt_init.transpose(-1, -2) + T[:, :, None]).transpose(-1, -2)
-    #
-    #     i = 0
-    #     for i, pt in enumerate(Xt[0]):
-    #         vis.draw_point(f"xtpt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-    #     vis.clear_visualization_after("xtpt", i + 1)
-
     prev_rmse = None
     rmse = None
     iteration = -1
@@ -172,18 +112,11 @@ def iterative_closest_point_sgd(
 
     # the main loop over ICP iterations
     for iteration in range(max_iterations):
-        knn_res = knn_points(Xt, Yt, lengths1=num_points_X, lengths2=num_points_Y, K=1, return_nn=True)
-        # closest point
-        Xt_nn_points = knn_res.knn[:, :, 0, :]
-
         # get the alignment of the nearest neighbors from Yt with Xt_init
-        sim_transform, rmse = corresponding_points_alignment_sgd(
+        sim_transform, rmse = volumetric_points_alignment(
+            volumetric_cost,
             Xt_init,
-            Xt_nn_points,
-            knn_res,
-            weights=mask_X,
             estimate_scale=estimate_scale,
-            allow_reflection=allow_reflection,
             R=R,
             T=T,
             s=s,
@@ -196,11 +129,6 @@ def iterative_closest_point_sgd(
 
         # add the current transformation to the history
         t_history.append(SimilarityTransform(R, T, s))
-
-        # use the reported RMSE which includes other losses
-        # # compute the root mean squared error
-        # Xt_sq_diff = ((Xt - Xt_nn_points) ** 2).sum(2)
-        # rmse = oputil.wmean(Xt_sq_diff[:, :, None], mask_X).sqrt()[:, 0, 0]
 
         # compute the relative rmse
         if prev_rmse is None:
@@ -236,20 +164,14 @@ def iterative_closest_point_sgd(
     return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
 
 
-def corresponding_points_alignment_sgd(
+def volumetric_points_alignment(
+        volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
-        Y: Union[torch.Tensor, "Pointclouds"],
-        knn_res: _KNN,
-        weights: Union[torch.Tensor, List[torch.Tensor], None] = None,
         estimate_scale: bool = False,
-        allow_reflection: bool = False,
-        eps: float = 1e-9,
         R: torch.Tensor = None, T: torch.tensor = None, s: torch.tensor = None,
         iterations: int = 50,
-        lr: float = 0.001,
-        pose_cost=None,
-        learn_translation: bool = True,
-        use_matching_loss: bool = True
+        lr: float = 0.01,
+        verbose = False
 ) -> tuple[SimilarityTransform, torch.tensor]:
     """
     Finds a similarity transformation (rotation `R`, translation `T`
@@ -263,20 +185,9 @@ def corresponding_points_alignment_sgd(
     Args:
         **X**: Batch of `d`-dimensional points of shape `(minibatch, num_point, d)`
             or a `Pointclouds` object.
-        **Y**: Batch of `d`-dimensional points of shape `(minibatch, num_point, d)`
-            or a `Pointclouds` object.
-        **weights**: Batch of non-negative weights of
-            shape `(minibatch, num_point)` or list of `minibatch` 1-dimensional
-            tensors that may have different shapes; in that case, the length of
-            i-th tensor should be equal to the number of points in X_i and Y_i.
-            Passing `None` means uniform weights.
         **estimate_scale**: If `True`, also estimates a scaling component `s`
             of the transformation. Otherwise assumes an identity
             scale and returns a tensor of ones.
-        **allow_reflection**: If `True`, allows the algorithm to return `R`
-            which is orthonormal but has determinant==-1.
-        **eps**: A scalar for clamping to avoid dividing by zero. Active for the
-            code that estimates the output scale `s`.
         **sgd_iterations**: Number of epochs to run
         **lr**: Learning rate
 
@@ -285,58 +196,11 @@ def corresponding_points_alignment_sgd(
         - **R**: Batch of orthonormal matrices of shape `(minibatch, d, d)`.
         - **T**: Batch of translations of shape `(minibatch, d)`.
         - **s**: batch of scaling factors of shape `(minibatch, )`.
-
-    References:
-        [1] Shinji Umeyama: Least-Suqares Estimation of
-        Transformation Parameters Between Two Point Patterns
     """
 
     # make sure we convert input Pointclouds structures to tensors
     Xt, num_points = oputil.convert_pointclouds_to_tensor(X)
-    Yt, num_points_Y = oputil.convert_pointclouds_to_tensor(Y)
-
-    if (Xt.shape != Yt.shape) or (num_points != num_points_Y).any():
-        raise ValueError(
-            "Point sets X and Y have to have the same \
-            number of batches, points and dimensions."
-        )
-    if weights is not None:
-        if isinstance(weights, list):
-            if any(np != w.shape[0] for np, w in zip(num_points, weights)):
-                raise ValueError(
-                    "number of weights should equal to the "
-                    + "number of points in the point cloud."
-                )
-            weights = [w[..., None] for w in weights]
-            weights = strutil.list_to_padded(weights)[..., 0]
-
-        if Xt.shape[:2] != weights.shape:
-            raise ValueError("weights should have the same first two dimensions as X.")
-
     b, n, dim = Xt.shape
-
-    if (num_points < Xt.shape[1]).any() or (num_points < Yt.shape[1]).any():
-        # in case we got Pointclouds as input, mask the unused entries in Xc, Yc
-        mask = (
-                torch.arange(n, dtype=torch.int64, device=Xt.device)[None]
-                < num_points[:, None]
-        ).type_as(Xt)
-        weights = mask if weights is None else mask * weights.type_as(Xt)
-
-    # compute the centroids of the point sets
-    Xmu = oputil.wmean(Xt, weight=weights, eps=eps)
-    Ymu = oputil.wmean(Yt, weight=weights, eps=eps)
-
-    # mean-center the point sets
-    Xc = Xt - Xmu
-    Yc = Yt - Ymu
-
-    total_weight = torch.clamp(num_points, 1)
-    # special handling for heterogeneous point clouds and/or input weights
-    if weights is not None:
-        Xc *= weights[:, :, None]
-        Yc *= weights[:, :, None]
-        total_weight = torch.clamp(weights.sum(1), eps)
 
     if (num_points < (dim + 1)).any():
         warnings.warn(
@@ -349,7 +213,7 @@ def corresponding_points_alignment_sgd(
         T = torch.randn((b, dim), dtype=Xt.dtype, device=Xt.device)
         s = torch.ones(b, dtype=Xt.dtype, device=Xt.device)
 
-    # convert to quaternions for non-redundant representation
+    # convert to non-redundant representation
     q = matrix_to_rotation_6d(R)
 
     # set them up as parameters for training
@@ -359,52 +223,27 @@ def corresponding_points_alignment_sgd(
         s.requires_grad = True
 
     optimizer = torch.optim.Adam([q, T, s], lr=lr)
-    loss = MSELoss(reduction='none')
 
     def get_usable_transform_representation():
         nonlocal T
         # we get a more usable representation of R
         R = rotation_6d_to_matrix(q)
-        if not learn_translation:
-            # we compute T based on the specifics of the problem
-            if estimate_scale:
-                # s is trained in this case
-                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R, s=s)[:, 0, :]
-            else:
-                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R)[:, 0, :]
         return R, T
 
     for epoch in range(iterations):
         R, T = get_usable_transform_representation()
 
-        if learn_translation:
-            yhat = _apply_similarity_transform(Xt, R, T, s)
-            alignment_loss = loss(yhat, Yt)
-        else:
-            yhat = _apply_similarity_transform(Xc, R, s=s)
-            alignment_loss = loss(yhat, Yc)
-        # since using reduction None, need to reduce it to per batch
-        alignment_loss = alignment_loss.sum(dim=1).sum(dim=1)
-
-        total_loss = alignment_loss
-        if pose_cost is not None:
-            other_loss = pose_cost(R, T, s, knn_res)
-            if use_matching_loss:
-                total_loss += other_loss
-            else:
-                total_loss = other_loss
-
+        total_loss = volumetric_cost(R, T, s)
         total_loss.mean().backward()
 
-        if pose_cost is not None:
-            # visualize gradients on the losses
-            pose_cost.visualize(R, T, s)
+        # visualize gradients on the losses
+        volumetric_cost.visualize(R, T, s)
 
         optimizer.step()
         optimizer.zero_grad()
 
-    if pose_cost is not None:
-        print(f"rmse loss {alignment_loss.mean().item()} pose loss {other_loss.mean().item()}")
+    if verbose:
+        print(f"pose loss {total_loss.mean().item()}")
     R, T = get_usable_transform_representation()
     return SimilarityTransform(R.detach().clone(), T.detach().clone(),
-                               s.detach().clone()), alignment_loss.detach().clone()
+                               s.detach().clone()), total_loss.detach().clone()

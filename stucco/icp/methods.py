@@ -7,6 +7,7 @@ from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
 from stucco.icp.sgd import iterative_closest_point_sgd
+from stucco.icp.volumetric import iterative_closest_point_volumetric
 from stucco import util
 
 
@@ -507,26 +508,20 @@ def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
     return T, distances
 
 
-# def icp_simpleicp(A, B, given_init_pose=None, batch=30):
-#     from simpleicp import PointCloud, SimpleICP
-#
-#     Ts = []
-#     for b in range(batch):
-#         pc_fix = PointCloud(A.numpy(), columns=["x", "y", "z"])
-#         pc_mov = PointCloud(B.numpy(), columns=["x", "y", "z"])
-#         icp_4 = SimpleICP()
-#         icp_4.add_point_clouds(pc_fix, pc_mov)
-#         # upright prior
-#         rbp_observed_values = (0., 0., np.random.rand() * 360, 0., 0., 0.)
-#         rbp_observation_weights = (10., 10., 0., 0., 0., 0.)
-#         T, X_mov_transformed, rigid_body_transformation_params = icp_4.run(max_overlap_distance=1,
-#                                                                            rbp_observed_values=rbp_observed_values,
-#                                                                            rbp_observation_weights=rbp_observation_weights)
-#         Ts.append(T)
-#     T = torch.from_numpy(np.stack(Ts))
-#     distances = None
-#     return T, distances
+def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, **kwargs):
+    given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
+                                                            given_init_pose=given_init_pose)
+    given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
+                                          given_init_pose[:, :3, 3],
+                                          torch.ones(batch, device=A.device, dtype=A.dtype))
 
+    res = iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                             **kwargs)
+    T = torch.eye(4).repeat(batch, 1, 1)
+    T[:, :3, :3] = res.RTs.R
+    T[:, :3, 3] = res.RTs.T
+    distances = res.rmse
+    return T, distances
 
 
 def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_samples=100,
