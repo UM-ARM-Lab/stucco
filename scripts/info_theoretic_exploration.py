@@ -95,7 +95,11 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
 
 def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
+             num_freespace=0,
+             surface_delta=0.025,
+             freespace_cost_scale=1,
              model_name="mustard_normal"):
+
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -138,6 +142,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
         model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
         model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
+        model_normals_world_frame_eval = link_to_current_tf_gt.transform_points(model_normals_eval)
+
 
         i = 0
         for i, pt in enumerate(model_points_world_frame):
@@ -146,16 +152,26 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         vis.clear_visualization_after("mpt", i + 1)
         vis.clear_visualization_after("mn", i + 1)
 
-        # training on this does not work well, but its cost decreases when training on just the point positions
-        # meaning there are many local minima and the gradient information is not very informative
-        norm_cost = icp_costs.SurfaceNormalCost(model_normals_world_frame.repeat(B, 1, 1),
-                                                model_normals_register.repeat(B, 1, 1))
-
         free_voxels = util.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
         known_sdf = util.VoxelSet(model_points_world_frame,
                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
-        volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=1, scale_known_freespace=0,
+        volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, exp.sdf, scale=1,
+                                                   scale_known_freespace=freespace_cost_scale,
                                                    vis=vis, debug=False)
+
+        # sample points in freespace and plot them
+        # sample only on one side
+        used_model_points = model_points_eval[:, 0] > 0
+        # extrude model points that are on the surface of the object along their normal vector
+        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
+                                        model_normals_world_frame_eval[used_model_points][
+                                        :num_freespace] * surface_delta
+        free_voxels[free_space_world_frame_points] = 1
+
+        i = 0
+        for i, pt in enumerate(free_space_world_frame_points):
+            vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=2, length=0.003)
+        vis.clear_visualization_after("fspt", i + 1)
 
         rand.seed(seed)
         # perform ICP and visualize the transformed points
@@ -319,7 +335,7 @@ def test_icp_freespace(exp,
 
         # sample points in freespace and plot them
         # sample only on one side
-        used_model_points = model_points_eval[:, 0] > -10
+        used_model_points = model_points_eval[:, 0] > 0
         # extrude model points that are on the surface of the object along their normal vector
         free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
                                         model_normals_world_frame_eval[used_model_points][
@@ -1175,24 +1191,22 @@ if __name__ == "__main__":
     #                     pause_at_end=False)
 
     # -- ICP experiment
-    # experiment = ICPEVExperiment(device="cuda")
-    # for gt_num in [500]:
-    #     for seed in range(10):
-    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
-    #                  # num_points_list=(30, 40, 50, 100),
-    #                  name=f"factored out volumetric", viewing_delay=0)
+    for gt_num in [500]:
+        for num_freespace in (0, 10, 20, 30, 40, 50, 100):
+            experiment = ICPEVExperiment(device="cuda")
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=gt_num,
+                         # num_points_list=(30, 40, 50, 100),
+                         num_freespace=num_freespace,
+                         freespace_cost_scale=20,
+                         name=f"volumetric free pts {num_freespace}", viewing_delay=0)
+            experiment.close()
+
     # plot_icp_results(
     #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name or "factored out" in name)
-    plot_icp_results(
-        names_to_include=lambda
-            name: "factored out" in name or "volumetric mask known sgd" in name and "gt init" not in name)
-
-    # -- ICP experiment seeing the effect of model SDF resolution
-    # experiment = ICPEVExperiment(device="cuda")
-    # for gt_num in [300, 400, 500]:
-    #     for seed in range(10):
-    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
-    #                  name=f"pytorch3d icp {gt_num} mp gt init", viewing_delay=0)
+    # plot_icp_results(
+    #     names_to_include=lambda
+    #         name: "factored out" in name or "volumetric mask" in name and "norm" not in name)
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")
