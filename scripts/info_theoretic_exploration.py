@@ -491,7 +491,7 @@ def marginalize_over_registration_num(name):
 
 
 def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None,
-                     icp_res_file='icp_comparison.pkl'):
+                     leave_out_percentile=20, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
 
@@ -523,6 +523,15 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         # assume all the num errors are the same
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
+
+        if leave_out_percentile > 0:
+            remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=0)
+            to_keep = errors < remove_threshold
+            temp = []
+            for i in range(to_keep.shape[1]):
+                temp.append(errors[to_keep[:, i], i])
+            errors = np.stack(temp, axis=1)
+
         mean = errors.mean(axis=0)
         median = np.median(errors, axis=0)
         low = np.percentile(errors, 20, axis=0)
@@ -1164,12 +1173,12 @@ def ignore_beyond_distance(threshold):
 
 if __name__ == "__main__":
     # -- Build object models (sample points from their surface)
-    experiment = ICPEVExperiment()
-    # for num_points in (5, 10, 20, 30, 40, 50, 100):
-    for num_points in (300, 400, 500):
-        for seed in range(10):
-            build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
-                        pause_at_end=False)
+    # experiment = ICPEVExperiment()
+    # # for num_points in (5, 10, 20, 30, 40, 50, 100):
+    # for num_points in (300, 400, 500):
+    #     for seed in range(10):
+    #         build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
+    #                     pause_at_end=False)
 
     # -- ICP experiment
     # for gt_num in [500]:
@@ -1197,8 +1206,8 @@ if __name__ == "__main__":
 
     # plot_icp_results(
     #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name or "factored out" in name)
-    # plot_icp_results( names_to_include=lambda name: "volumetric free pts 100" in name or name == "volumetric free pts 0")
-    plot_icp_results( names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
+    plot_icp_results( names_to_include=lambda name: "volumetric free pts 20" in name or name == "volumetric free pts 0")
+    # plot_icp_results(names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")
