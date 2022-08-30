@@ -26,12 +26,12 @@ from arm_pytorch_utilities.grad import jacobian
 from torchmcubes import marching_cubes
 
 from stucco import cfg, icp
+from stucco.env.poke import YCBObjectFactory
 from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
-from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration, \
-    PybulletObjectFactory
+from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
 from stucco import util
 
@@ -100,7 +100,6 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              surface_delta=0.025,
              freespace_cost_scale=1,
              model_name="mustard_normal"):
-
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -145,7 +144,6 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
         model_normals_world_frame_eval = link_to_current_tf_gt.transform_points(model_normals_eval)
 
-
         i = 0
         for i, pt in enumerate(model_points_world_frame):
             vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
@@ -186,8 +184,9 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         #                             B_normals=model_normals_register)
         # T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
         #                                  given_init_pose=best_tsf_guess, batch=B)
-        # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-        #                                      given_init_pose=best_tsf_guess, batch=B)
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
+                                             use_matching_loss=True)
         # use only volumetric loss
         # best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
         # T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
@@ -195,8 +194,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         #                                      max_iterations=20, lr=0.01,
         #                                      learn_translation=True,
         #                                      use_matching_loss=False)
-        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, given_init_pose=best_tsf_guess,
-                                          batch=B, max_iterations=20, lr=0.01)
+        # T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, given_init_pose=best_tsf_guess,
+        #                                   batch=B, max_iterations=20, lr=0.01)
         # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
         #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
         #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
@@ -713,24 +712,6 @@ def make_sphere_preconfig(z):
     return objId, ranges
 
 
-class YCBObjectFactory(PybulletObjectFactory):
-    def __init__(self, name, ycb_name, **kwargs):
-        super(YCBObjectFactory, self).__init__(name, **kwargs)
-        self.ycb_name = ycb_name
-
-    def make_collision_obj(self, z, rgba=None):
-        obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
-                            [0., 0., z * 3],
-                            p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale)
-        ranges = np.array([[-.15, .15], [-.15, .15], [-0.05, .5]]) * self.scale
-        if rgba is not None:
-            p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
-        return obj_id, ranges
-
-    def get_mesh_resource_filename(self):
-        return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
-
-
 class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
@@ -783,12 +764,8 @@ class ShapeExplorationExperiment(abc.ABC):
     def close(self):
         p.disconnect(self.physics_client)
 
-    def draw_mesh(self, name, pose, rgba, object_id=None):
-        return self.dd.draw_mesh(name, self.obj_factory.get_mesh_resource_filename(),
-                                 pose, scale=self.obj_factory.scale,
-                                 rgba=rgba, object_id=object_id,
-                                 vis_frame_pos=self.obj_factory.vis_frame_pos,
-                                 vis_frame_rot=self.obj_factory.vis_frame_rot)
+    def draw_mesh(self, *args, **kwargs):
+        return self.obj_factory.draw_mesh(self.dd, *args, **kwargs)
 
     def set_policy(self, policy: ShapeExplorationPolicy):
         self.policy = policy
@@ -1187,29 +1164,41 @@ def ignore_beyond_distance(threshold):
 
 if __name__ == "__main__":
     # -- Build object models (sample points from their surface)
-    # experiment = ICPEVExperiment()
+    experiment = ICPEVExperiment()
     # for num_points in (5, 10, 20, 30, 40, 50, 100):
-    # for num_points in (300, 400, 500):
-    #     for seed in range(10):
-    #         build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
-    #                     pause_at_end=False)
+    for num_points in (300, 400, 500):
+        for seed in range(10):
+            build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
+                        pause_at_end=False)
 
     # -- ICP experiment
-    for gt_num in [500]:
-        for num_freespace in (0, 10, 20, 30, 40, 50, 100):
-            experiment = ICPEVExperiment(device="cuda")
-            for seed in range(10):
-                test_icp(experiment, seed=seed, register_num_points=gt_num,
-                         # num_points_list=(30, 40, 50, 100),
-                         freespace_on_one_side=False,
-                         num_freespace=num_freespace,
-                         freespace_cost_scale=20,
-                         name=f"volumetric free all side pts {num_freespace}", viewing_delay=0)
-            experiment.close()
+    # for gt_num in [500]:
+    #     experiment = ICPEVExperiment(device="cuda")
+    #     for seed in range(10):
+    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
+    #                  # num_points_list=(30, 40, 50, 100),
+    #                  num_freespace=0,
+    #                  freespace_cost_scale=20,
+    #                  name=f"pytorch3d sgd rerun", viewing_delay=0)
+    #     experiment.close()
+
+    # for gt_num in [500]:
+    #     for surface_delta in [0.01, 0.05]:
+    #         for num_freespace in (10, 20, 30, 40, 50, 100):
+    #             experiment = ICPEVExperiment(device="cuda")
+    #             for seed in range(10):
+    #                 test_icp(experiment, seed=seed, register_num_points=gt_num,
+    #                          # num_points_list=(30, 40, 50, 100),
+    #                          num_freespace=num_freespace,
+    #                          freespace_cost_scale=20,
+    #                          surface_delta=surface_delta,
+    #                          name=f"volumetric free pts {num_freespace} delta {surface_delta}", viewing_delay=0)
+    #             experiment.close()
 
     # plot_icp_results(
     #     names_to_include=lambda name: ("pytorch" in name or "volumetric mask" in name) and "norm" not in name or "factored out" in name)
-    # plot_icp_results( names_to_include=lambda name: "volumetric free pts 10" in name or "volumetric free pts 100" in name)
+    # plot_icp_results( names_to_include=lambda name: "volumetric free pts 100" in name or name == "volumetric free pts 0")
+    plot_icp_results( names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
 
     # -- freespace ICP experiment
     # experiment = ICPEVExperiment(device="cuda")
@@ -1231,7 +1220,7 @@ if __name__ == "__main__":
     # exp_name = "tukey voxel 0.1"
     # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
     #                "evaluate_icpev_correlation": False, "debug_name": exp_name,
-    #                "distance_filter": ignore_beyond_distance(0.1)}
+    #                "distance_filter": ignore_beyond_distance(0.}
     # experiment = ICPEVExperiment()
     # test_icp_on_experiment_run(experiment, seed=2, upto_index=50,
     #                            register_num_points=500,
