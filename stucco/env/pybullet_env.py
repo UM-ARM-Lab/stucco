@@ -106,6 +106,9 @@ def surface_normal_at_point(object_id, query_point):
 
 
 class PybulletEnv(Env):
+    LINK_FRAME_POS = [0, 0, 0]
+    LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
+
     def __init__(self, mode=Mode.DIRECT, log_video=False, default_debug_height=0, camera_dist=1.5):
         self.log_video = log_video
         self.mode = mode
