@@ -1,5 +1,4 @@
 import abc
-import time
 import typing
 import re
 
@@ -31,6 +30,7 @@ from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, Conta
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
+from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
 from stucco import util
@@ -440,39 +440,6 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
 
     errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
                                                  viewing_delay)
-
-
-def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances, viewing_delay):
-    # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
-    # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
-    # evaluation model points on the ground truth object surface, and the surface points of the object transformed
-    # by our estimated pose (which is infinitely dense)
-    # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
-    B = T.shape[0]
-    eval_num_points = model_points_world_frame_eval.shape[0]
-    chamfer_distance = torch.zeros(B, eval_num_points)
-    link_to_world = tf.Transform3d(matrix=T.inverse())
-    m = link_to_world.get_matrix()
-    errors_per_batch = []
-
-    for b in range(B):
-        pos, rot = util.matrix_to_pos_rot(m[b])
-        p.resetBasePositionAndOrientation(vis_obj_id, pos, rot)
-
-        # transform our visual object to the pose
-        for i in range(eval_num_points):
-            closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
-            chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
-
-        vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
-                       label=f"err: {chamfer_distance[b].abs().mean().item():.5f}")
-        if distances is not None:
-            vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
-        time.sleep(viewing_delay)
-
-        errors_per_transform = chamfer_distance.mean(dim=-1)
-        errors_per_batch.append(errors_per_transform.mean())
-    return errors_per_batch
 
 
 def marginalize_over_suffix(name):
