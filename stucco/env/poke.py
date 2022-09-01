@@ -228,7 +228,7 @@ class PokeEnv(PybulletEnv):
             DebugVisualization.REACTION_IN_STATE: False,
             DebugVisualization.GOAL: False,
             DebugVisualization.INIT: False,
-            DebugVisualization.FREE_VOXELS: True,
+            DebugVisualization.FREE_VOXELS: False,
         }
         if debug_visualizations is not None:
             self._debug_visualizations.update(debug_visualizations)
@@ -548,7 +548,7 @@ class PokeEnv(PybulletEnv):
         pose = (new_ee_pos, new_ee_orientation)
         if self.contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
             dx = np.subtract(new_ee_pos, self.last_ee_pos)
-            self.contact_detector.observe_dx(dx[:2])
+            self.contact_detector.observe_dx(dx)
             info[InfoKeys.DEE_IN_CONTACT] = dx
         self.last_ee_pos = new_ee_pos
 

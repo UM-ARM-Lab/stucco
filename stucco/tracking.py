@@ -581,12 +581,13 @@ def squared_error(x, y, sigma=1.):
 
 class ContactSet(serialization.Serializable):
     def __init__(self, params: ContactParameters, immovable_collision_checker=None, device='cpu', dtype=torch.float32,
-                 visualizer=None):
+                 visualizer=None, dim=2):
         self.device = device
         self.dtype = dtype
         self.p = params
         self.immovable_collision_checker = immovable_collision_checker
         self.visualizer = visualizer
+        self.dim = dim
 
     @abc.abstractmethod
     def update(self, x, dx, p=None, info=None):
@@ -1069,7 +1070,7 @@ class ContactSetSoft(ContactSet):
         if len(p.shape) < 2:
             p = p.reshape(1, -1)
         N = len(p)
-        cur_pt = p[:, :2]
+        cur_pt = p[:, :self.dim]
         # 1 dx per sensor
         prev_pt, prev_config = self.pxdyn(cur_pt.view(N, -1), cur_config.view(1, -1), -dx)
         u = u.repeat(N, 1)

@@ -122,17 +122,18 @@ class RetrievalPredeterminedController(Controller):
 class OursRetrievalPredeterminedController(RetrievalPredeterminedController):
 
     def __init__(self, contact_detector: detection.ContactDetector, contact_set: tracking.ContactSet, controls,
-                 nu=None):
+                 nu=None, dim=2):
         super().__init__(controls, nu=nu)
         self.contact_detector = contact_detector
         self.contact_set = contact_set
+        self.dim = dim
         self.contact_indices = []
 
     def update(self, obs, info, visualizer=None):
         if self.contact_detector.in_contact():
             self.contact_indices.append(self.i)
 
-        x = self.x_history[-1][:2]
+        x = self.x_history[-1][:self.dim]
         pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
         # from stucco.tracking import InfoKeys
         # if dx is not None:
@@ -385,9 +386,10 @@ class SoftTrackingIterator:
 
 
 class OurTrackingMethod(TrackingMethod):
-    def __init__(self, env):
+    def __init__(self, env, **kwargs):
         self.env = env
         self.ctrl = None
+        self.ctrl_kwargs = kwargs
 
     @property
     @abc.abstractmethod
@@ -398,15 +400,16 @@ class OurTrackingMethod(TrackingMethod):
         env.visualize_contact_set(self.contact_set)
 
     def create_controller(self, controls):
-        self.ctrl = OursRetrievalPredeterminedController(self.env.contact_detector, self.contact_set, controls)
+        self.ctrl = OursRetrievalPredeterminedController(self.env.contact_detector, self.contact_set, controls,
+                                                         **self.ctrl_kwargs)
         return self.ctrl
 
 
 class OurSoftTrackingMethod(OurTrackingMethod):
-    def __init__(self, env, contact_params, pt_to_config):
+    def __init__(self, env, contact_params, pt_to_config, dim=2, **kwargs):
         self.contact_params = contact_params
-        self._contact_set = tracking.ContactSetSoft(pt_to_config, self.contact_params)
-        super(OurSoftTrackingMethod, self).__init__(env)
+        self._contact_set = tracking.ContactSetSoft(pt_to_config, self.contact_params, dim=dim)
+        super(OurSoftTrackingMethod, self).__init__(env, dim=dim, **kwargs)
 
     @property
     def contact_set(self) -> tracking.ContactSetSoft:
@@ -457,12 +460,12 @@ class HardTrackingIterator:
 
 
 class OurHardTrackingMethod(OurTrackingMethod):
-    def __init__(self, env, contact_params, hard_contact_params):
+    def __init__(self, env, contact_params, hard_contact_params, **kwargs):
         self.contact_params = contact_params
         self.hard_contact_params = hard_contact_params
         self._contact_set = tracking.ContactSetHard(self.contact_params, hard_params=hard_contact_params,
                                                     contact_object_factory=self.create_contact_object)
-        super(OurHardTrackingMethod, self).__init__(env)
+        super(OurHardTrackingMethod, self).__init__(env, **kwargs)
 
     @property
     def contact_set(self) -> tracking.ContactSetHard:
