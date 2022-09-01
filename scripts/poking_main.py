@@ -61,7 +61,11 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
     predetermined_control = {}
 
-    ctrl = [[0., 0., 1]] * 10
+    ctrl = [[1., 0., 0]] * 3
+    ctrl += [[-1., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 3
+    ctrl += [[-1., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 3
     # ctrl += [[0.4, 0.4], [.5, -1]] * 6
     # ctrl += [[-0.2, 1]] * 4
     # ctrl += [[0.3, -0.3], [0.4, 1]] * 4
@@ -136,8 +140,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         transforms_per_object = []
         rmse_per_object = []
         best_segment_idx = None
-        k = -1
         for k, this_pts in enumerate(method):
+            if len(this_pts) < 4:
+                continue
             # this_pts corresponds to tracked contact points that are segmented together
             this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
             volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
@@ -174,7 +179,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 best_segment_idx = k
 
         # has at least one contact segment
-        if k != -1:
+        if best_segment_idx is not None:
             method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
             logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
             best_T = best_tsf_guess.inverse()
@@ -279,7 +284,7 @@ def grasp_at_pose(env, pose):
 
 def main(env, method_name, registration_method, seed=0, name=""):
     methods_to_run = {
-        'ours': OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env)),
+        'ours': OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env), dim=3),
         'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
                                               inertia_ratio=0.2,
                                               threshold=0.08),
