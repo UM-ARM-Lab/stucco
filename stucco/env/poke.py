@@ -161,6 +161,7 @@ class PokeEnv(PybulletEnv):
                  sdf_resolution=0.025,
                  freespace_voxel_resolution=0.025,
                  clean_cache=False,
+                 immovable_target=True,
                  **kwargs):
         """
         :param environment_level: what obstacles should show up in the environment
@@ -218,6 +219,7 @@ class PokeEnv(PybulletEnv):
         self.freespace_voxel_resolution = freespace_voxel_resolution
         self.z = 0.1
         self.clean_cache = clean_cache
+        self.immovable_target = immovable_target
 
         self._debug_visualizations = {
             DebugVisualization.STATE: False,
@@ -753,7 +755,7 @@ class PokeEnv(PybulletEnv):
                                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
                                                 vis_frame_pos=[-0.014, -0.0125, 0.04], flags=flags,
                                                 ranges=np.array([[-.15, .15], [-.15, .15], [-0.15, .4]]),
-                                                useFixedBase=immovable)
+                                                useFixedBase=False)
 
             self.z = 0.1
         else:
@@ -762,11 +764,11 @@ class PokeEnv(PybulletEnv):
         # reset target and robot to their object frame to create the SDF
         # self.target_pose = target_pos, target_rot
         self.target_object_id, self.ranges = self.obj_factory.make_collision_obj(self.z)
-        p.changeDynamics(self.target_object_id, -1, mass=mass)
         # initialize object at intended target, then we get to see what its achievable pose is
         p.resetBasePositionAndOrientation(self.target_object_id, target_pos, target_rot)
         for _ in range(1000):
             p.stepSimulation()
+        p.changeDynamics(self.target_object_id, -1, mass=0 if immovable else mass)
         self.target_pose = p.getBasePositionAndOrientation(self.target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
 
@@ -848,7 +850,7 @@ class PokeEnv(PybulletEnv):
         # all targets are upright
         target_rot = p.getQuaternionFromEuler([0, 0, self.goal[3]])
 
-        self.create_target_obj(target_pos, target_rot, flags)
+        self.create_target_obj(target_pos, target_rot, flags, immovable=self.immovable_target)
         p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.8)
         self.movable.append(self.target_object_id)
 
