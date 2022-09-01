@@ -150,7 +150,7 @@ class PokeEnv(PybulletEnv):
     def control_cost(cls):
         return np.diag([1 for _ in range(cls.nu)])
 
-    def __init__(self, goal=(0.4, 0.0, 0.2, 0.), init=(0., 0., 0.2),
+    def __init__(self, goal=(0.25, 0.0, 0.2, 0.), init=(0., 0., 0.2),
                  environment_level=0, sim_step_wait=None, mini_steps=15, wait_sim_steps_per_mini_step=20,
                  debug_visualizations=None, dist_for_done=0.04, camera_dist=0.6,
                  contact_residual_threshold=1.,
@@ -772,7 +772,6 @@ class PokeEnv(PybulletEnv):
         self.target_pose = p.getBasePositionAndOrientation(self.target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
 
-
         # test target object that stays in object frame to allow ground truth object frame (naive) SDF lookup
         # shouldn't collide with anything other than the collision checker
         self.testObjId, range_per_dim = self.obj_factory.make_collision_obj(self.z)
@@ -828,6 +827,23 @@ class PokeEnv(PybulletEnv):
             self.vis.clear_visualization_after("mipt", 0)
 
         self.free_voxels = util.VoxelGrid(self.freespace_voxel_resolution, self.ranges, device=self.device)
+
+        # register floor as freespace
+
+        floor_range = self.ranges.copy()
+        # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
+        # so for debugging/visualization use the following lines; otherwise uncomment it and use the whole floor
+        floor_offset = 0.15
+        floor_range[0, 0] = self.target_pose[0][0] - floor_offset
+        floor_range[0, 1] = self.target_pose[0][0] + floor_offset
+        floor_range[1, 0] = self.target_pose[0][1] - floor_offset
+        floor_range[1, 1] = self.target_pose[0][1] + floor_offset
+
+        floor_range[2, 0] = -self.freespace_voxel_resolution * 3
+        floor_range[2, 1] = -self.freespace_voxel_resolution
+        floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
+                                                                         dtype=self.dtype, device=self.device)
+        self.free_voxels[floor_pts] = 1
 
         # restore robot pose
         p.resetBasePositionAndOrientation(self.robot_id, rob_pos, rob_rot)
