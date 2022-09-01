@@ -90,11 +90,12 @@ def sample_dx_on_tangent_plane(n, alpha, num_samples=100):
 
 
 class PybulletObjectFactory(abc.ABC):
-    def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1)):
+    def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1), **kwargs):
         self.name = name
         self.scale = scale
         self.vis_frame_pos = vis_frame_pos
         self.vis_frame_rot = vis_frame_rot
+        self.other_load_kwargs = kwargs
 
     @abc.abstractmethod
     def make_collision_obj(self, z, rgba=None):
@@ -812,7 +813,8 @@ class PyBulletNaiveSDF(util.ObjectFrameSDF):
 
 
 class CachedSDF(util.ObjectFrameSDF):
-    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, device="cpu", debug_check_sdf=False):
+    def __init__(self, object_name, resolution, range_per_dim, gt_sdf, device="cpu", clean_cache=False,
+                 debug_check_sdf=False):
         fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
         self.device = device
         # cache for signed distance field to object
@@ -843,7 +845,7 @@ class CachedSDF(util.ObjectFrameSDF):
             data = {}
 
         # if we didn't load anything, then we need to create the cache and save to it
-        if cached_underlying_sdf is None:
+        if cached_underlying_sdf is None or clean_cache:
             if gt_sdf is None:
                 raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
 
