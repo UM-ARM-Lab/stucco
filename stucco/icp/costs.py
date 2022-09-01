@@ -134,12 +134,12 @@ class VolumetricCost(ICPPoseCost):
         # ---- for +, known free space points, we just have to care about interior points of the object
         # to facilitate comparison between volumes that are rotated, we sample points at the center of the object voxels
         interior_threshold = -0.01
-        interior_filter = lambda voxel_sdf: voxel_sdf < interior_threshold
-        self.model_interior_points_orig = self.sdf.get_filtered_points(interior_filter)
+        surface_threshold = -interior_threshold
+        self.model_interior_points_orig = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < interior_threshold)
         self.model_interior_weights, self.model_interior_normals_orig = self.sdf(self.model_interior_points_orig)
         self.model_interior_weights *= -1
 
-        self.model_all_points = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.01)
+        self.model_all_points = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < surface_threshold)
         self.model_all_weights, self.model_all_normals = self.sdf(self.model_all_points)
 
         # batch
