@@ -1209,67 +1209,70 @@ def main_poke(env, method_name, registration_method, seed=0, name=""):
     return run_poke(env, methods_to_run[method_name], registration_method, seed=seed, name=name)
 
 
-def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory):
+def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=False):
     # -- Ground truth initialization experiment
-    experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
-    for seed in range(10):
-        test_icp(experiment, seed=seed, register_num_points=500,
-                 num_freespace=0,
-                 name=f"gt init pytorch3d",
-                 icp_method=icp.ICPMethod.ICP,
-                 ground_truth_initialization=True,
-                 viewing_delay=0)
-    experiment.close()
-
-    for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
-        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
+    if not plot_only:
+        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500,
                      num_freespace=0,
-                     name=f"gt init volumetric sdf res {sdf_resolution}",
-                     icp_method=icp.ICPMethod.VOLUMETRIC,
+                     name=f"gt init pytorch3d",
+                     icp_method=icp.ICPMethod.ICP,
                      ground_truth_initialization=True,
                      viewing_delay=0)
         experiment.close()
-    for sdf_resolution in [0.025]:
-        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500,
-                     num_freespace=100,
-                     surface_delta=0.01,
-                     freespace_on_one_side=False,
-                     freespace_cost_scale=20,
-                     name=f"gt init volumetric freespace sdf res {sdf_resolution}",
-                     icp_method=icp.ICPMethod.VOLUMETRIC,
-                     ground_truth_initialization=True,
-                     viewing_delay=0)
-        experiment.close()
+
+        for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
+            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=500,
+                         num_freespace=0,
+                         name=f"gt init volumetric sdf res {sdf_resolution}",
+                         icp_method=icp.ICPMethod.VOLUMETRIC,
+                         ground_truth_initialization=True,
+                         viewing_delay=0)
+            experiment.close()
+        for sdf_resolution in [0.025]:
+            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=500,
+                         num_freespace=100,
+                         surface_delta=0.01,
+                         freespace_on_one_side=False,
+                         freespace_cost_scale=20,
+                         name=f"gt init volumetric freespace sdf res {sdf_resolution}",
+                         icp_method=icp.ICPMethod.VOLUMETRIC,
+                         ground_truth_initialization=True,
+                         viewing_delay=0)
+            experiment.close()
     file = f"icp_comparison_{obj_factory.name}.pkl"
     plot_icp_results(icp_res_file=file, names_to_include=lambda name: name.startswith("gt init") and "0.025" in name)
     plot_icp_results(icp_res_file=file, names_to_include=lambda name: name.startswith("gt init") and "0.025" in name,
                      x_filter=lambda x: x < 40)
 
 
-def experiment_vary_num_points_and_num_freespace(obj_factory):
+def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False):
     # -- Differing number of freespace experiment while varying number of known points
-    for surface_delta in [0.025, 0.05]:
-        for num_freespace in (0, 10, 20, 30, 40, 50, 100):
-            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
-            for seed in range(10):
-                test_icp(experiment, seed=seed, register_num_points=500,
-                         # num_points_list=(50,),
-                         num_freespace=num_freespace,
-                         freespace_cost_scale=20,
-                         surface_delta=surface_delta,
-                         name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
-                         icp_method=icp.ICPMethod.VOLUMETRIC,
-                         viewing_delay=0)
-            experiment.close()
+    if not plot_only:
+        for surface_delta in [0.025, 0.05]:
+            for num_freespace in (0, 10, 20, 30, 40, 50, 100):
+                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+                for seed in range(10):
+                    test_icp(experiment, seed=seed, register_num_points=500,
+                             # num_points_list=(50,),
+                             num_freespace=num_freespace,
+                             freespace_cost_scale=20,
+                             surface_delta=surface_delta,
+                             name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
+                             icp_method=icp.ICPMethod.VOLUMETRIC,
+                             viewing_delay=0)
+                experiment.close()
     file = f"icp_comparison_{obj_factory.name}.pkl"
     # TODO adjust the plotter here
     plot_icp_results(icp_res_file=file, names_to_include=lambda
         name: "volumetric fixed sdf free pts 30" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
-
+    plot_icp_results(icp_res_file=file, names_to_include=lambda
+        name: name == "volumetric fixed sdf free pts 0 delta 0.025" or "rerun" in name)
 
 
 parser = argparse.ArgumentParser(description='Object registration from contact')
@@ -1298,6 +1301,8 @@ parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 task_map = {"mustard_normal": poke.Levels.MUSTARD, "coffee": poke.Levels.COFFEE_CAN, "cracker": poke.Levels.CRACKER}
 parser.add_argument('--task', default="mustard_normal", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
+parser.add_argument('--plot_only', action='store_true',
+                    help='plot only (previous) results without running any experiments')
 
 obj_factory_map = {
     "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
@@ -1324,9 +1329,9 @@ if __name__ == "__main__":
                             pause_at_end=False)
 
     elif args.experiment == "globalmin":
-        experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory)
+        experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=args.plot_only)
     elif args.experiment == "random-sample":
-        experiment_vary_num_points_and_num_freespace(obj_factory)
+        experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=args.plot_only)
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False)
         fmis = []
