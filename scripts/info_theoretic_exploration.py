@@ -93,6 +93,38 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
     vis.clear_visualizations()
 
 
+def do_icp(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost, icp_method):
+    # perform ICP and visualize the transformed points
+    # compare not against current model points (which may be few), but against the maximum number of model points
+    if icp_method == icp.ICPMethod.ICP:
+        T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
+                                         given_init_pose=best_tsf_guess, batch=B)
+    elif icp_method == icp.ICPMethod.ICP_SGD:
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
+                                             use_matching_loss=True)
+    # use only volumetric loss
+    elif icp_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
+        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+                                             max_iterations=20, lr=0.01,
+                                             learn_translation=True,
+                                             use_matching_loss=False)
+    elif icp_method == icp.ICPMethod.VOLUMETRIC:
+        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
+                                          given_init_pose=best_tsf_guess.inverse(),
+                                          batch=B, max_iterations=20, lr=0.01)
+    else:
+        raise RuntimeError(f"Unsupported ICP method {icp_method}")
+    # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
+    #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
+    #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
+
+    # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
+    #                              batch=B)
+    return T, distances
+
+
 def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
              num_freespace=0,
@@ -197,38 +229,6 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
     torch.save(cache, fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
-
-
-def do_icp(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost, icp_method):
-    # perform ICP and visualize the transformed points
-    # compare not against current model points (which may be few), but against the maximum number of model points
-    if icp_method == icp.ICPMethod.ICP:
-        T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
-                                         given_init_pose=best_tsf_guess, batch=B)
-    elif icp_method == icp.ICPMethod.ICP_SGD:
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
-                                             use_matching_loss=True)
-    # use only volumetric loss
-    elif icp_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
-                                             max_iterations=20, lr=0.01,
-                                             learn_translation=True,
-                                             use_matching_loss=False)
-    elif icp_method == icp.ICPMethod.VOLUMETRIC:
-        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
-                                          given_init_pose=best_tsf_guess.inverse(),
-                                          batch=B, max_iterations=20, lr=0.01)
-    else:
-        raise RuntimeError(f"Unsupported ICP method {icp_method}")
-    # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
-    #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
-    #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
-
-    # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
-    #                              batch=B)
-    return T, distances
 
 
 def test_gradients(exp, seed=0, eval_num_points=200, register_num_points=500, num_points=50,
@@ -471,7 +471,7 @@ def marginalize_over_registration_num(name):
     return f"{registration_num[0]} registered points" if registration_num is not None else name
 
 
-def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None,
+def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None, x_filter=None,
                      leave_out_percentile=20, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
@@ -499,11 +499,16 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
     # sort by name
     to_plot = dict(sorted(to_plot.items()))
     for name, data in to_plot.items():
-        x = data[0]
+        x = np.array(data[0])
         errors = data[1]
         # assume all the num errors are the same
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
+
+        if x_filter is not None:
+            to_keep = x_filter(x)
+            x = x[to_keep]
+            errors = errors[:, to_keep]
 
         if leave_out_percentile > 0:
             remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=0)
@@ -518,6 +523,7 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         low = np.percentile(errors, 20, axis=0)
         high = np.percentile(errors, 80, axis=0)
         std = errors.std(axis=0)
+
         if plot_median:
             axs.plot(x, median, label=name)
         else:
@@ -1151,29 +1157,46 @@ def ignore_beyond_distance(threshold):
 
     return filter
 
+
 def experiment_ground_truth_initialization_for_global_minima_comparison():
     # -- Ground truth initialization experiment
-    # experiment = ICPEVExperiment(device="cuda")
-    # for seed in range(10):
-    #     test_icp(experiment, seed=seed, register_num_points=500,
-    #              num_freespace=0,
-    #              name=f"gt init pytorch3d",
-    #              icp_method=icp.ICPMethod.ICP,
-    #              ground_truth_initialization=True,
-    #              viewing_delay=0)
-    # experiment.close()
+    experiment = ICPEVExperiment(device="cuda")
+    for seed in range(10):
+        test_icp(experiment, seed=seed, register_num_points=500,
+                 num_freespace=0,
+                 name=f"gt init pytorch3d",
+                 icp_method=icp.ICPMethod.ICP,
+                 ground_truth_initialization=True,
+                 viewing_delay=0)
+    experiment.close()
 
-    # for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
-    #     experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_resolution)
-    #     for seed in range(10):
-    #         test_icp(experiment, seed=seed, register_num_points=500,
-    #                  num_freespace=0,
-    #                  name=f"gt init volumetric sdf res {sdf_resolution}",
-    #                  icp_method=icp.ICPMethod.VOLUMETRIC,
-    #                  ground_truth_initialization=True,
-    #                  viewing_delay=0)
-    #     experiment.close()
-    plot_icp_results(names_to_include=lambda name: name.startswith("gt init"))
+    for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
+        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_resolution)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500,
+                     num_freespace=0,
+                     name=f"gt init volumetric sdf res {sdf_resolution}",
+                     icp_method=icp.ICPMethod.VOLUMETRIC,
+                     ground_truth_initialization=True,
+                     viewing_delay=0)
+        experiment.close()
+    for sdf_resolution in [0.025]:
+        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_resolution)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500,
+                     num_freespace=100,
+                     surface_delta=0.01,
+                     freespace_on_one_side=False,
+                     freespace_cost_scale=20,
+                     name=f"gt init volumetric freespace sdf res {sdf_resolution}",
+                     icp_method=icp.ICPMethod.VOLUMETRIC,
+                     ground_truth_initialization=True,
+                     viewing_delay=0)
+        experiment.close()
+    plot_icp_results(names_to_include=lambda name: name.startswith("gt init") and "0.025" in name)
+    plot_icp_results(names_to_include=lambda name: name.startswith("gt init") and "0.025" in name,
+                     x_filter=lambda x: x < 40)
+
 
 if __name__ == "__main__":
     # -- Build object models (sample points from their surface)
@@ -1197,7 +1220,6 @@ if __name__ == "__main__":
     #     experiment.close()
 
     experiment_ground_truth_initialization_for_global_minima_comparison()
-
 
     # -- Differing number of freespace experiment while varying number of known points
     # for gt_num in [500]:
