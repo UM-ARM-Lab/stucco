@@ -1,12 +1,17 @@
 import abc
 import typing
 import re
+import copy
 
+import argparse
 import matplotlib
 import numpy as np
 import pybullet_data
 import pymeshlab
 import pytorch_kinematics
+from pytorch_kinematics import transforms as tf
+from sklearn.cluster import Birch, DBSCAN, KMeans
+
 import stucco.exploration
 import stucco.util
 import torch
@@ -19,25 +24,27 @@ import gpytorch
 import matplotlib.colors, matplotlib.cm
 from matplotlib import cm
 from matplotlib import pyplot as plt
-
 from arm_pytorch_utilities import tensor_utils, rand
-from arm_pytorch_utilities.grad import jacobian
 from torchmcubes import marching_cubes
 
-from stucco import cfg, icp
+from stucco import cfg, icp, exploration, util
+from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco.defines import NO_CONTACT_ID
+from stucco.env import poke
+from stucco.env.env import InfoKeys
 from stucco.env.poke import YCBObjectFactory
 from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
-from stucco.evaluation import evaluate_chamfer_distance
+from stucco.env_getters.poke import PokeGetter
+from stucco.evaluation import evaluate_chamfer_distance, clustering_metrics, compute_contact_error
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
 from stucco import util
 
-from stucco.retrieval_controller import sample_model_points
-
-import pytorch_kinematics.transforms as tf
+from stucco.retrieval_controller import sample_model_points, TrackingMethod, OurSoftTrackingMethod, \
+    SklearnTrackingMethod, PHDFilterTrackingMethod
 
 # try:
 #     import rospy
@@ -93,29 +100,37 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
     vis.clear_visualizations()
 
 
-def do_icp(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost, icp_method):
+def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, device="cpu"):
+    return build_model(env.target_object_id, env.vis, env.obj_factory.name, seed, num_points, pause_at_end=pause_at_end,
+                       device=device)
+
+
+def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost, reg_method):
     # perform ICP and visualize the transformed points
     # compare not against current model points (which may be few), but against the maximum number of model points
-    if icp_method == icp.ICPMethod.ICP:
+    if reg_method == icp.ICPMethod.ICP:
         T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
                                          given_init_pose=best_tsf_guess, batch=B)
-    elif icp_method == icp.ICPMethod.ICP_SGD:
+    elif reg_method == icp.ICPMethod.ICP_SGD:
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
                                              given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
                                              use_matching_loss=True)
     # use only volumetric loss
-    elif icp_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
+    elif reg_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
                                              given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
                                              max_iterations=20, lr=0.01,
                                              learn_translation=True,
                                              use_matching_loss=False)
-    elif icp_method == icp.ICPMethod.VOLUMETRIC:
+    elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE]:
+        if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
+            volumetric_cost = copy.copy(volumetric_cost)
+            volumetric_cost.scale_known_freespace = 0
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
                                           given_init_pose=best_tsf_guess.inverse(),
                                           batch=B, max_iterations=20, lr=0.01)
     else:
-        raise RuntimeError(f"Unsupported ICP method {icp_method}")
+        raise RuntimeError(f"Unsupported ICP method {reg_method}")
     # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
     #                            icp_costs.ICPPoseCostMatrixInputWrapper(volumetric_cost),
     #                            given_init_pose=best_tsf_guess, batch=B, draw_mesh=exp.draw_mesh)
@@ -135,7 +150,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              icp_method=icp.ICPMethod.VOLUMETRIC,
              debug=False,
              model_name="mustard_normal"):
-    fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison.pkl')
+    obj_name = exp.obj_factory.name
+    fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison_{obj_name}.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
         if name not in cache or clean_cache:
@@ -217,8 +233,9 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
             best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
         # perform ICP and visualize the transformed points
         # compare not against current model points (which may be few), but against the maximum number of model points
-        T, distances = do_icp(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost,
-                              icp_method)
+        T, distances = do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
+                                       volumetric_cost,
+                                       icp_method)
 
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
                                                      viewing_delay)
@@ -375,8 +392,9 @@ def test_icp_freespace(exp,
         # compare not against current model points (which may be few), but against the maximum number of model points
         if ground_truth_initialization:
             best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
-        T, distances = do_icp(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost,
-                              icp_method)
+        T, distances = do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
+                                       volumetric_cost,
+                                       icp_method)
 
         # draw all ICP's sample meshes
         exp.policy._clear_cached_tf()
@@ -542,170 +560,6 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         axs.set_ylim(bottom=0)
     axs.legend()
     plt.show()
-
-
-def franke(X, Y):
-    term1 = .75 * torch.exp(-((9 * X - 2).pow(2) + (9 * Y - 2).pow(2)) / 4)
-    term2 = .75 * torch.exp(-((9 * X + 1).pow(2)) / 49 - (9 * Y + 1) / 10)
-    term3 = .5 * torch.exp(-((9 * X - 7).pow(2) + (9 * Y - 3).pow(2)) / 4)
-    term4 = .2 * torch.exp(-(9 * X - 4).pow(2) - (9 * Y - 7).pow(2))
-
-    f = term1 + term2 + term3 - term4
-    dfx = -2 * (9 * X - 2) * 9 / 4 * term1 - 2 * (9 * X + 1) * 9 / 49 * term2 + \
-          -2 * (9 * X - 7) * 9 / 4 * term3 + 2 * (9 * X - 4) * 9 * term4
-    dfy = -2 * (9 * Y - 2) * 9 / 4 * term1 - 9 / 10 * term2 + \
-          -2 * (9 * Y - 3) * 9 / 4 * term3 + 2 * (9 * Y - 7) * 9 * term4
-
-    return f, dfx, dfy
-
-
-from mesh_to_sdf import mesh_to_voxels
-import trimesh
-import skimage
-
-
-def create_sdf(path):
-    mesh = trimesh.load(path)
-    voxels = mesh_to_voxels(mesh, 64, pad=True)
-
-    vertices, faces, normals, _ = skimage.measure.marching_cubes(voxels, level=0)
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_normals=normals)
-    mesh.show()
-    return voxels
-
-
-def direct_fit_2d():
-    x = torch.tensor([
-        [0.05, 0.01],
-        [0.1, 0.02],
-        [0.12, 0.025],
-        [0.15, 0.05],
-        [0.15, 0.08],
-        [0.15, 0.10],
-    ])
-    f = torch.tensor([
-        0, 0, 0, 0,
-        0, 0
-    ])
-    df = torch.tensor([
-        [0, 1],
-        [-0.3, 0.8],
-        [-0.1, 0.9],
-        [-0.7, 0.2],
-        [-0.8, 0.],
-        [-0.8, 0.],
-    ])
-    train_x = x * 10
-    train_y = torch.cat((f.view(-1, 1), df), dim=1)
-
-    # official sample code
-    # xv, yv = torch.meshgrid([torch.linspace(0, 1, 10), torch.linspace(0, 1, 10)])
-    # train_x = torch.cat((
-    #     xv.contiguous().view(xv.numel(), 1),
-    #     yv.contiguous().view(yv.numel(), 1)),
-    #     dim=1
-    # )
-
-    # f, dfx, dfy = franke(train_x[:, 0], train_x[:, 1])
-    # train_y = torch.stack([f, dfx, dfy], -1).squeeze(1)
-
-    likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=3)  # Value + x-derivative + y-derivative
-    model = exploration.GPModelWithDerivatives(train_x, train_y, likelihood)
-
-    training_iter = 50
-
-    # Find optimal model hyperparameters
-    model.train()
-    likelihood.train()
-
-    # Use the adam optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.05)  # Includes GaussianLikelihood parameters
-
-    # "Loss" for GPs - the marginal log likelihood
-    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
-
-    for i in range(training_iter):
-        optimizer.zero_grad()
-        output = model(train_x)
-        loss = -mll(output, train_y)
-        loss.backward()
-        print("Iter %d/%d - Loss: %.3f   lengthscales: %.3f, %.3f   noise: %.3f" % (
-            i + 1, training_iter, loss.item(),
-            model.covar_module.base_kernel.lengthscale.squeeze()[0],
-            model.covar_module.base_kernel.lengthscale.squeeze()[1],
-            model.likelihood.noise.item()
-        ))
-        optimizer.step()
-    # Set into eval mode
-    model.eval()
-    likelihood.eval()
-
-    # Initialize plots
-    # fig, ax = plt.subplots(2, 3, figsize=(14, 10))
-    fig, ax = plt.subplots(1, 1, figsize=(14, 10))
-
-    # Test points
-    n1, n2 = 50, 50
-    xv, yv = torch.meshgrid([torch.linspace(-1, 3, n1), torch.linspace(-1, 3, n2)])
-    # f, dfx, dfy = franke(xv, yv)
-
-    # Make predictions
-    with torch.no_grad(), gpytorch.settings.fast_computations(log_prob=False, covar_root_decomposition=False):
-        test_x = torch.stack([xv.reshape(n1 * n2, 1), yv.reshape(n1 * n2, 1)], -1).squeeze(1)
-        predictions = likelihood(model(test_x))
-        mean = predictions.mean
-
-    def gp_var(cx):
-        pred = likelihood(model(cx))
-        return pred.variance
-
-    # query for next place to go based on gradient of variance
-    gp_var_jacobian = jacobian(gp_var, x[-1])
-    gp_var_grad = gp_var_jacobian[0]  # first dimension corresponds to SDF, other 2 are for the SDF gradient
-
-    # project gradient onto tangent plane
-
-    extent = (xv.min(), xv.max(), yv.min(), yv.max())
-    # ax[0, 0].imshow(f, extent=extent, cmap=cm.jet)
-    # ax[0, 0].set_title('True values')
-    # ax[0, 1].imshow(dfx, extent=extent, cmap=cm.jet)
-    # ax[0, 1].set_title('True x-derivatives')
-    # ax[0, 2].imshow(dfy, extent=extent, cmap=cm.jet)
-    # ax[0, 2].set_title('True y-derivatives')
-
-    # ax = ax[1,0]
-    imprint_norm = matplotlib.colors.Normalize(vmin=-5, vmax=5)
-    fig.colorbar(matplotlib.cm.ScalarMappable(norm=imprint_norm), ax=ax)
-    ax.imshow(mean[:, 0].detach().numpy().reshape(n1, n2).T, extent=extent, origin='lower', cmap=cm.jet)
-    ax.set_title('Predicted values')
-
-    # lower, upper = predictions.confidence_region()
-    # std = (upper - lower) / 2
-    # imprint_norm = matplotlib.colors.Normalize(vmin=0, vmax=torch.round(std.max()))
-    # fig.colorbar(matplotlib.cm.ScalarMappable(norm=imprint_norm), ax=ax)
-    # ax.imshow(std[:, 0].detach().numpy().reshape(n1, n2).T, extent=extent, origin='lower', cmap=cm.jet)
-    # ax.set_title('Uncertainty (standard deviation)')
-
-    ax.quiver(train_x[:, 0], train_x[:, 1], df[:, 0], df[:, 1], scale=10)
-
-    # highlight the object boundary
-    threshold = 0.01
-    boundary = torch.abs(mean[:, 0]) < threshold
-    boundary_x = test_x[boundary, :]
-    ax.scatter(boundary_x[:, 0], boundary_x[:, 1], marker='.', c='k')
-
-    # ax[1, 1].imshow(mean[:, 1].detach().numpy().reshape(n1, n2), extent=extent, cmap=cm.jet)
-    # ax[1, 1].set_title('Predicted x-derivatives')
-    # ax[1, 2].imshow(mean[:, 2].detach().numpy().reshape(n1, n2), extent=extent, cmap=cm.jet)
-    # ax[1, 2].set_title('Predicted y-derivatives')
-    plt.show()
-    print('done')
-
-
-def make_sphere_preconfig(z):
-    objId = make_sphere(z, [0., 0, z])
-    ranges = np.array([[-.2, .2], [-.2, .2], [-.1, .4]])
-    return objId, ranges
 
 
 class ShapeExplorationExperiment(abc.ABC):
@@ -1158,9 +1012,206 @@ def ignore_beyond_distance(threshold):
     return filter
 
 
-def experiment_ground_truth_initialization_for_global_minima_comparison():
+def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
+             register_num_points=500,
+             eval_num_points=200, ctrl_noise_max=0.005):
+    name = reg_method + name
+    # [name][seed] to access
+    # chamfer_err: T x B number of steps by batch chamfer error
+    fullname = os.path.join(cfg.DATA_DIR, f'poking.pkl')
+    if os.path.exists(fullname):
+        cache = torch.load(fullname)
+        if name not in cache or clean_cache:
+            cache[name] = {}
+        if seed not in cache[name] or clean_cache:
+            cache[name][seed] = {}
+    else:
+        cache = {name: {seed: {}}}
+
+    predetermined_control = {}
+
+    ctrl = [[1., 0., 0]] * 3
+    ctrl += [[-1., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 3
+    ctrl += [[-1., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 3
+    # ctrl += [[0.4, 0.4], [.5, -1]] * 6
+    # ctrl += [[-0.2, 1]] * 4
+    # ctrl += [[0.3, -0.3], [0.4, 1]] * 4
+    # ctrl += [[1., -1]] * 3
+    # ctrl += [[1., 0.6], [-0.7, 0.5]] * 4
+    # ctrl += [[0., 1]] * 5
+    # ctrl += [[1., 0]] * 4
+    # ctrl += [[0.4, -1.], [0.4, 0.5]] * 4
+    rand.seed(0)
+    # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
+    # ctrl = np.add(ctrl, noise)
+    predetermined_control[poke.Levels.MUSTARD] = ctrl
+
+    ctrl = method.create_controller(predetermined_control[env.level])
+
+    obs = env.reset()
+
+    model_name = env.target_model_name
+    # sample_in_order = env.level in [poke.Levels.COFFEE_CAN]
+    # get a fixed number of model points to evaluate against (this will be independent on points used to register)
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                   device=env.device)
+    device, dtype = model_points_eval.device, model_points_eval.dtype
+
+    # get a large number of model points to register to
+    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
+                                                                           name=model_name, seed=0, device=env.device)
+
+    pose = p.getBasePositionAndOrientation(env.target_object_id)
+    link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
+    model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
+    model_normals_world_frame_eval = link_to_current_tf_gt.transform_points(model_normals_eval)
+
+    info = None
+    simTime = 0
+
+    B = 30
+    device = env.device
+    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    best_T = None
+    guess_pose = None
+    chamfer_err = []
+
+    pt_to_config = poke.ArmPointToConfig(env)
+
+    contact_id = []
+
+    # placeholder for now
+    empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
+    volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
+                                               scale_known_freespace=20 if reg_method == 'volumetric-freespace' else 0,
+                                               vis=env.vis, debug=False)
+
+    rand.seed(seed)
+    while not ctrl.done():
+        best_distance = None
+        simTime += 1
+        env.draw_user_text("{}".format(simTime), xy=(0.5, 0.7, -1))
+
+        action = ctrl.command(obs, info)
+        method.visualize_contact_points(env)
+
+        if env.contact_detector.in_contact():
+            contact_id.append(info[InfoKeys.CONTACT_ID])
+        else:
+            contact_id.append(NO_CONTACT_ID)
+
+        # note that we update our registration regardless if we're in contact or not
+        all_configs = torch.tensor(np.array(ctrl.x_history), dtype=dtype, device=device).view(-1, env.nx)
+        dist_per_est_obj = []
+        transforms_per_object = []
+        rmse_per_object = []
+        best_segment_idx = None
+        for k, this_pts in enumerate(method):
+            if len(this_pts) < 4:
+                continue
+            # this_pts corresponds to tracked contact points that are segmented together
+            this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
+            volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
+                                                       torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
+
+            do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost, reg_method)
+
+            # TODO verify by printing this_pts about what it actually is
+            if reg_method in ["volumetric", "volumetric-freespace"]:
+                T, distances = icp.icp_volumetric(volumetric_cost, this_pts, given_init_pose=best_tsf_guess,
+                                                  batch=B, max_iterations=20, lr=0.01)
+            elif reg_method == "icp":
+                T, distances = icp.icp_pytorch3d(this_pts, model_points_register, given_init_pose=best_tsf_guess,
+                                                 batch=B)
+            elif reg_method == "icp-sgd":
+                T, distances = icp.icp_pytorch3d_sgd(this_pts, model_points_register,
+                                                     given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
+                                                     use_matching_loss=True)
+            else:
+                raise RuntimeError("Unrecognized registration method " + reg_method)
+
+            transforms_per_object.append(T)
+            T = T.inverse()
+            score = distances
+            best_tsf_index = np.argmin(score)
+
+            # pick object with lowest variance in its translation estimate
+            translations = T[:, :2, 2]
+            best_tsf_distances = (translations.var(dim=0).sum()).item()
+
+            dist_per_est_obj.append(best_tsf_distances)
+            rmse_per_object.append(distances)
+            if best_distance is None or best_tsf_distances < best_distance:
+                best_distance = best_tsf_distances
+                best_tsf_guess = T[best_tsf_index].inverse()
+                best_segment_idx = k
+
+        # has at least one contact segment
+        if best_segment_idx is not None:
+            method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
+            logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
+            best_T = best_tsf_guess.inverse()
+
+            # evaluate with chamfer distance
+            errors_per_batch = evaluate_chamfer_distance(transforms_per_object[best_segment_idx],
+                                                         model_points_world_frame_eval, env.vis, env.testObjId,
+                                                         rmse_per_object[best_segment_idx], 0)
+            # errors.append(np.mean(errors_per_batch))
+            chamfer_err.append(errors_per_batch)
+            logger.debug(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
+
+            # draw mesh at where our best guess is
+            # TODO check if we need to invert this best guess
+            guess_pose = util.matrix_to_pos_rot(best_T)
+            env.draw_mesh("base_object", guess_pose, (0.0, 1.0, 0., 0.5))
+            # TODO save current pose and contact point for playback
+
+        if torch.is_tensor(action):
+            action = action.cpu()
+
+        action = np.array(action).flatten()
+        obs, rew, done, info = env.step(action)
+
+        if len(chamfer_err) > 0:
+            cache[name][seed] = {'chamfer_err': np.stack(chamfer_err), }
+            torch.save(cache, fullname)
+
+    # evaluate FMI and contact error here
+    labels, moved_points = method.get_labelled_moved_points(np.ones(len(contact_id)) * NO_CONTACT_ID)
+    contact_id = np.array(contact_id)
+
+    in_label_contact = contact_id != NO_CONTACT_ID
+
+    m = clustering_metrics(contact_id[in_label_contact], labels[in_label_contact])
+    contact_error = compute_contact_error(None, moved_points, env=env, visualize=False)
+    cme = np.mean(np.abs(contact_error))
+
+    # grasp_at_pose(env, guess_pose)
+
+    return m, cme
+
+
+def main_poke(env, method_name, registration_method, seed=0, name=""):
+    methods_to_run = {
+        'ours': OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env), dim=3),
+        'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
+                                              inertia_ratio=0.2,
+                                              threshold=0.08),
+        'online-dbscan': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
+        'online-kmeans': SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
+                                               random_state=0),
+        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.00005, r_mag=0.00005, birth=0.001, detection=0.3)
+    }
+    env.draw_user_text(f"{method_name} seed {seed}", xy=[-0.1, 0.28, -0.5])
+    return run_poke(env, methods_to_run[method_name], registration_method, seed=seed, name=name)
+
+
+def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory):
     # -- Ground truth initialization experiment
-    experiment = ICPEVExperiment(device="cuda")
+    experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
     for seed in range(10):
         test_icp(experiment, seed=seed, register_num_points=500,
                  num_freespace=0,
@@ -1171,7 +1222,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison():
     experiment.close()
 
     for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
-        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_resolution)
+        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500,
                      num_freespace=0,
@@ -1181,7 +1232,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison():
                      viewing_delay=0)
         experiment.close()
     for sdf_resolution in [0.025]:
-        experiment = ICPEVExperiment(device="cuda", sdf_resolution=sdf_resolution)
+        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500,
                      num_freespace=100,
@@ -1193,91 +1244,156 @@ def experiment_ground_truth_initialization_for_global_minima_comparison():
                      ground_truth_initialization=True,
                      viewing_delay=0)
         experiment.close()
-    plot_icp_results(names_to_include=lambda name: name.startswith("gt init") and "0.025" in name)
-    plot_icp_results(names_to_include=lambda name: name.startswith("gt init") and "0.025" in name,
+    file = f"icp_comparison_{obj_factory.name}.pkl"
+    plot_icp_results(icp_res_file=file, names_to_include=lambda name: name.startswith("gt init") and "0.025" in name)
+    plot_icp_results(icp_res_file=file, names_to_include=lambda name: name.startswith("gt init") and "0.025" in name,
                      x_filter=lambda x: x < 40)
 
 
+parser = argparse.ArgumentParser(description='Object registration from contact')
+parser.add_argument('experiment',
+                    choices=['build', 'globalmin', 'poke'],
+                    help='which experiment to run')
+registration_map = {
+    "volumetric": icp.ICPMethod.VOLUMETRIC,
+    "volumetric-no-freespace": icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
+    "icp": icp.ICPMethod.ICP,
+    "icp-sgd": icp.ICPMethod.ICP_SGD,
+    "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT
+}
+parser.add_argument('registration',
+                    choices=registration_map.keys(),
+                    help='which registration method to run')
+parser.add_argument('--tracking',
+                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
+                    default='ours',
+                    help='which tracking method to run')
+parser.add_argument('--seed', metavar='N', type=int, nargs='+',
+                    default=[0],
+                    help='random seed(s) to run')
+parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+# run parameters
+task_map = {"mustard_normal": poke.Levels.MUSTARD, "coffee": poke.Levels.COFFEE_CAN, "cracker": poke.Levels.CRACKER}
+parser.add_argument('--task', default="mustard_normal", choices=task_map.keys(), help='what task to run')
+parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
+
+obj_factory_map = {
+    "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
+                                       vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
+                                       vis_frame_pos=[-0.014, -0.0125, 0.04]),
+    # TODO create the other object factories
+}
+
+args = parser.parse_args()
+
 if __name__ == "__main__":
+    level = task_map[args.task]
+    tracking_method_name = args.tracking
+    registration_method = registration_map[args.registration]
+    obj_factory = obj_factory_map[args.task]
+
     # -- Build object models (sample points from their surface)
-    # experiment = ICPEVExperiment()
-    # # for num_points in (5, 10, 20, 30, 40, 50, 100):
-    # for num_points in (300, 400, 500):
-    #     for seed in range(10):
-    #         build_model(experiment.objId, experiment.dd, "mustard_normal", seed=seed, num_points=num_points,
-    #                     pause_at_end=False)
+    if args.experiment == "build":
+        experiment = ICPEVExperiment(obj_factory=obj_factory)
+        # for num_points in (5, 10, 20, 30, 40, 50, 100):
+        for num_points in (300, 400, 500):
+            for seed in range(10):
+                build_model(experiment.objId, experiment.dd, args.task, seed=seed, num_points=num_points,
+                            pause_at_end=False)
 
-    # -- ICP experiment
-    # for gt_num in [500]:
-    #     experiment = ICPEVExperiment(device="cuda")
-    #     for seed in range(10):
-    #         test_icp(experiment, seed=seed, register_num_points=gt_num,
-    #                  # num_points_list=(30, 40, 50, 100),
-    #                  num_freespace=0,
-    #                  freespace_cost_scale=20,
-    #                  icp_method=icp.ICPMethod.ICP_SGD,
-    #                  name=f"pytorch3d sgd rerun", viewing_delay=0)
-    #     experiment.close()
+    elif args.experiment == "globalmin":
+        experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory)
 
-    experiment_ground_truth_initialization_for_global_minima_comparison()
+    elif args.experiment == "poke":
+        env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False)
+        fmis = []
+        cmes = []
+        # backup video logging in case ffmpeg and nvidia driver are not compatible
+        # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
+        #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
+        for seed in args.seed:
+            m, cme = main_poke(env, tracking_method_name, registration_method, seed=seed, name=args.name)
+            fmi = m[0]
+            fmis.append(fmi)
+            cmes.append(cme)
+            logger.info(f"{tracking_method_name} fmi {fmi} cme {cme}")
+            env.vis.clear_visualizations()
+            env.reset()
 
-    # -- Differing number of freespace experiment while varying number of known points
-    # for gt_num in [500]:
-    #     for surface_delta in [0.025, 0.05]:
-    #         for num_freespace in (0, 10, 20, 30, 40, 50, 100):
-    #             experiment = ICPEVExperiment(device="cuda")
-    #             for seed in range(10):
-    #                 test_icp(experiment, seed=seed, register_num_points=gt_num,
-    #                          # num_points_list=(50,),
-    #                          num_freespace=num_freespace,
-    #                          freespace_cost_scale=20,
-    #                          surface_delta=surface_delta,
-    #                          name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
-    #                          icp_method=icp.ICPMethod.VOLUMETRIC,
-    #                          viewing_delay=0)
-    #             experiment.close()
-    # plot_icp_results(names_to_include=lambda
-    #     name: "volumetric fixed sdf free pts 50" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
+        logger.info(
+            f"{tracking_method_name} mean fmi {np.mean(fmis)} median fmi {np.median(fmis)} std fmi {np.std(fmis)} {fmis}\n"
+            f"mean cme {np.mean(cmes)} median cme {np.median(cmes)} std cme {np.std(cmes)} {cmes}")
+        env.close()
+    else:
+        # -- ICP experiment
+        for gt_num in [500]:
+            experiment = ICPEVExperiment(device="cuda")
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=gt_num,
+                         # num_points_list=(30, 40, 50, 100),
+                         num_freespace=0,
+                         freespace_cost_scale=20,
+                         icp_method=icp.ICPMethod.ICP_SGD,
+                         name=f"pytorch3d sgd rerun", viewing_delay=0)
+            experiment.close()
 
-    # plot_icp_results(names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
+        # -- Differing number of freespace experiment while varying number of known points
+        # for gt_num in [500]:
+        #     for surface_delta in [0.025, 0.05]:
+        #         for num_freespace in (0, 10, 20, 30, 40, 50, 100):
+        #             experiment = ICPEVExperiment(device="cuda")
+        #             for seed in range(10):
+        #                 test_icp(experiment, seed=seed, register_num_points=gt_num,
+        #                          # num_points_list=(50,),
+        #                          num_freespace=num_freespace,
+        #                          freespace_cost_scale=20,
+        #                          surface_delta=surface_delta,
+        #                          name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
+        #                          icp_method=icp.ICPMethod.VOLUMETRIC,
+        #                          viewing_delay=0)
+        #             experiment.close()
+        # plot_icp_results(names_to_include=lambda
+        #     name: "volumetric fixed sdf free pts 50" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
 
-    # -- Freespace ICP experiment
-    # experiment = ICPEVExperiment(device="cuda")
-    # test_gradients(experiment)
+        # plot_icp_results(names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
 
-    # for freespace_cost_scale in [20]:
-    #     for gt_num in [500]:
-    #         for seed in range(10):
-    #             test_icp_freespace(experiment, seed=seed, num_points=5,
-    #                                # num_freespace_points_list=(0, 50, 100),
-    #                                register_num_points=gt_num,
-    #                                freespace_cost_scale=freespace_cost_scale,
-    #                                name=f"volumetric 5np {gt_num} mp scale {freespace_cost_scale}",
-    #                                viewing_delay=0)
-    # plot_icp_results(names_to_include=lambda name: "5np" in name and "volumetric" in name,
-    #                  icp_res_file='icp_freespace.pkl')
+        # -- Freespace ICP experiment
+        # experiment = ICPEVExperiment(device="cuda")
+        # test_gradients(experiment)
 
-    # -- exploration experiment
-    # exp_name = "tukey voxel 0.1"
-    # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
-    #                "evaluate_icpev_correlation": False, "debug_name": exp_name,
-    #                "distance_filter": ignore_beyond_distance(0.}
-    # experiment = ICPEVExperiment()
-    # test_icp_on_experiment_run(experiment, seed=2, upto_index=50,
-    #                            register_num_points=500,
-    #                            run_name=exp_name, viewing_delay=0.5)
-    # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
-    # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
-    # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
-    # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
-    # experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
-    #                              policy_args=policy_args)
-    # for seed in range(10):
-    #     experiment.run(run_name=exp_name, seed=seed)
-    # plot_exploration_results(logy=True, names_to_include=lambda
-    #     name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
-    # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
-    # experiment.run(run_name="gp_var")
+        # for freespace_cost_scale in [20]:
+        #     for gt_num in [500]:
+        #         for seed in range(10):
+        #             test_icp_freespace(experiment, seed=seed, num_points=5,
+        #                                # num_freespace_points_list=(0, 50, 100),
+        #                                register_num_points=gt_num,
+        #                                freespace_cost_scale=freespace_cost_scale,
+        #                                name=f"volumetric 5np {gt_num} mp scale {freespace_cost_scale}",
+        #                                viewing_delay=0)
+        # plot_icp_results(names_to_include=lambda name: "5np" in name and "volumetric" in name,
+        #                  icp_res_file='icp_freespace.pkl')
+
+        # -- exploration experiment
+        # exp_name = "tukey voxel 0.1"
+        # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
+        #                "evaluate_icpev_correlation": False, "debug_name": exp_name,
+        #                "distance_filter": ignore_beyond_distance(0.}
+        # experiment = ICPEVExperiment()
+        # test_icp_on_experiment_run(experiment, seed=2, upto_index=50,
+        #                            register_num_points=500,
+        #                            run_name=exp_name, viewing_delay=0.5)
+        # experiment = ICPEVExperiment(exploration.ICPEVExplorationPolicy, plot_point_type=PlotPointType.NONE,
+        #                              policy_args=policy_args)
+        # experiment = ICPEVExperiment(exploration.ICPEVSampleModelPointsPolicy, plot_point_type=PlotPointType.NONE,
+        #                              policy_args=policy_args)
+        # experiment = ICPEVExperiment(exploration.ICPEVSampleRandomPointsPolicy, plot_point_type=PlotPointType.NONE,
+        #                              policy_args=policy_args)
+        # experiment = GPVarianceExperiment(GPVarianceExploration(alpha=0.05), plot_point_type=PlotPointType.NONE)
+        # experiment = ICPEVExperiment(exploration.ICPEVVoxelizedPolicy, plot_point_type=PlotPointType.NONE,
+        #                              policy_args=policy_args)
+        # for seed in range(10):
+        #     experiment.run(run_name=exp_name, seed=seed)
+        # plot_exploration_results(logy=True, names_to_include=lambda
+        #     name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
+        # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
+        # experiment.run(run_name="gp_var")
