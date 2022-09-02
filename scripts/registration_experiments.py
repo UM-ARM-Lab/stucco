@@ -1250,9 +1250,31 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
                      x_filter=lambda x: x < 40)
 
 
+def experiment_vary_num_points_and_num_freespace(obj_factory):
+    # -- Differing number of freespace experiment while varying number of known points
+    for surface_delta in [0.025, 0.05]:
+        for num_freespace in (0, 10, 20, 30, 40, 50, 100):
+            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+            for seed in range(10):
+                test_icp(experiment, seed=seed, register_num_points=500,
+                         # num_points_list=(50,),
+                         num_freespace=num_freespace,
+                         freespace_cost_scale=20,
+                         surface_delta=surface_delta,
+                         name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
+                         icp_method=icp.ICPMethod.VOLUMETRIC,
+                         viewing_delay=0)
+            experiment.close()
+    file = f"icp_comparison_{obj_factory.name}.pkl"
+    # TODO adjust the plotter here
+    plot_icp_results(icp_res_file=file, names_to_include=lambda
+        name: "volumetric fixed sdf free pts 30" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
+
+
+
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
-                    choices=['build', 'globalmin', 'poke'],
+                    choices=['build', 'globalmin', 'random-sample', 'poke'],
                     help='which experiment to run')
 registration_map = {
     "volumetric": icp.ICPMethod.VOLUMETRIC,
@@ -1303,7 +1325,8 @@ if __name__ == "__main__":
 
     elif args.experiment == "globalmin":
         experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory)
-
+    elif args.experiment == "random-sample":
+        experiment_vary_num_points_and_num_freespace(obj_factory)
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False)
         fmis = []
@@ -1336,25 +1359,6 @@ if __name__ == "__main__":
                          icp_method=icp.ICPMethod.ICP_SGD,
                          name=f"pytorch3d sgd rerun", viewing_delay=0)
             experiment.close()
-
-        # -- Differing number of freespace experiment while varying number of known points
-        # for gt_num in [500]:
-        #     for surface_delta in [0.025, 0.05]:
-        #         for num_freespace in (0, 10, 20, 30, 40, 50, 100):
-        #             experiment = ICPEVExperiment(device="cuda")
-        #             for seed in range(10):
-        #                 test_icp(experiment, seed=seed, register_num_points=gt_num,
-        #                          # num_points_list=(50,),
-        #                          num_freespace=num_freespace,
-        #                          freespace_cost_scale=20,
-        #                          surface_delta=surface_delta,
-        #                          name=f"volumetric fixed sdf free pts {num_freespace} delta {surface_delta}",
-        #                          icp_method=icp.ICPMethod.VOLUMETRIC,
-        #                          viewing_delay=0)
-        #             experiment.close()
-        # plot_icp_results(names_to_include=lambda
-        #     name: "volumetric fixed sdf free pts 50" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
-
         # plot_icp_results(names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
 
         # -- Freespace ICP experiment
