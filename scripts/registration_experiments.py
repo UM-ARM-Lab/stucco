@@ -239,7 +239,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
                                                      viewing_delay)
-        errors.append(np.mean(errors_per_batch))
+        errors.append(errors_per_batch)
 
     for num, err in zip(num_points_list, errors):
         cache[name][seed][num] = err
@@ -355,7 +355,7 @@ def test_icp_freespace(exp,
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
                                                      distances,
                                                      viewing_delay)
-        errors.append(np.mean(errors_per_batch))
+        errors.append(errors_per_batch)
 
     for num, err in zip(num_freespace_points_list, errors):
         cache[name][seed][num] = err
@@ -474,24 +474,38 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         # convert to cm^2 (saved as mm^2, so divide by 10^2
         errors = np.stack(errors) / 100
 
+        # expect [seed, x, batch]
+        if len(errors.shape) < 3:
+            logger.warning("data for %s is less than 3 dimensional; probably outdated", name)
+
         if x_filter is not None:
             to_keep = x_filter(x)
             x = x[to_keep]
             errors = errors[:, to_keep]
 
         if leave_out_percentile > 0:
-            remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=0)
-            to_keep = errors < remove_threshold
-            temp = []
-            for i in range(to_keep.shape[1]):
-                temp.append(errors[to_keep[:, i], i])
-            errors = np.stack(temp, axis=1)
+            remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=-1)
+            to_keep = errors < remove_threshold[:, :, None]
+            # this is equivalent to the below; can uncomment to check
+            errors = errors[to_keep].reshape(errors.shape[0], errors.shape[1], -1)
+            # t1 = []
+            # for i in range(to_keep.shape[0]):
+            #     t2 = []
+            #     for j in range(to_keep.shape[1]):
+            #         t2.append(errors[i, j, to_keep[i, j]])
+            #     t1.append(np.stack(t2))
+            # errors = np.stack(t1)
 
-        mean = errors.mean(axis=0)
-        median = np.median(errors, axis=0)
-        low = np.percentile(errors, 20, axis=0)
-        high = np.percentile(errors, 80, axis=0)
-        std = errors.std(axis=0)
+        # transpose to get [x, seed, ...]
+        errors = errors.transpose(1, 0, 2)
+        # flatten the other dimensions for plotting
+        errors = errors.reshape(errors.shape[0], -1)
+
+        mean = errors.mean(axis=1)
+        median = np.median(errors, axis=1)
+        low = np.percentile(errors, 20, axis=1)
+        high = np.percentile(errors, 80, axis=1)
+        std = errors.std(axis=1)
 
         if plot_median:
             axs.plot(x, median, label=name)
@@ -521,6 +535,7 @@ class ShapeExplorationExperiment(abc.ABC):
                                                     vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
                                                     vis_frame_pos=[-0.014, -0.0125, 0.04]),
                  device="cpu",
+                 gui=True,
                  eval_period=10,
                  plot_per_eval_period=1,
                  plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS):
@@ -531,7 +546,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.plot_per_eval_period = plot_per_eval_period
         self.eval_period = eval_period
 
-        self.physics_client = p.connect(p.GUI)
+        self.physics_client = p.connect(p.GUI if gui else p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
         p.setGravity(0, 0, -10)
@@ -1147,10 +1162,10 @@ def main_poke(env, method_name, registration_method, seed=0, name=""):
     return run_poke(env, methods_to_run[method_name], registration_method, seed=seed, name=name)
 
 
-def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=False):
+def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=False, gui=True):
     # -- Ground truth initialization experiment
     if not plot_only:
-        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+        experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500,
                      num_freespace=0,
@@ -1161,7 +1176,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
         experiment.close()
 
         for sdf_resolution in [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]:
-            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
+            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution, gui=gui)
             for seed in range(10):
                 test_icp(experiment, seed=seed, register_num_points=500,
                          num_freespace=0,
@@ -1171,7 +1186,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
                          viewing_delay=0)
             experiment.close()
         for sdf_resolution in [0.025]:
-            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution)
+            experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, sdf_resolution=sdf_resolution, gui=gui)
             for seed in range(10):
                 test_icp(experiment, seed=seed, register_num_points=500,
                          num_freespace=100,
@@ -1189,12 +1204,12 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
                      x_filter=lambda x: x < 40)
 
 
-def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False):
+def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False, gui=True):
     # -- Differing number of freespace experiment while varying number of known points
     if not plot_only:
         for surface_delta in [0.025, 0.05]:
             for num_freespace in (0, 10, 20, 30, 40, 50, 100):
-                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
                 for seed in range(10):
                     test_icp(experiment, seed=seed, register_num_points=500,
                              # num_points_list=(50,),
@@ -1213,13 +1228,13 @@ def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False):
         name: name == "volumetric fixed sdf free pts 0 delta 0.025" or "rerun" in name)
 
 
-def experiment_vary_num_freespace(obj_factory, plot_only=False):
+def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
     # -- Freespace ICP experiment
     if not plot_only:
         # test_gradients(experiment)
         for surface_delta in [0.01, 0.025, 0.05]:
             for freespace_cost_scale in [1, 5, 20]:
-                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
                 for num_points in [5]:
                     for seed in range(10):
                         test_icp_freespace(experiment, seed=seed, num_points=num_points,
@@ -1232,7 +1247,7 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False):
                 experiment.close()
         for surface_delta in [0.01, 0.025, 0.05]:
             for freespace_cost_scale in [1, 5, 20]:
-                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory)
+                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
                 for num_points in [5]:
                     for seed in range(10):
                         test_icp_freespace(experiment, seed=seed, num_points=num_points,
@@ -1303,11 +1318,12 @@ if __name__ == "__main__":
                             pause_at_end=False)
 
     elif args.experiment == "globalmin":
-        experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=args.plot_only)
+        experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=args.plot_only,
+                                                                            gui=not args.no_gui)
     elif args.experiment == "random-sample":
-        experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=args.plot_only)
+        experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=args.plot_only, gui=not args.no_gui)
     elif args.experiment == "freespace":
-        experiment_vary_num_freespace(obj_factory, plot_only=args.plot_only)
+        experiment_vary_num_freespace(obj_factory, plot_only=args.plot_only, gui=not args.no_gui)
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False)
         fmis = []
