@@ -260,7 +260,8 @@ def test_icp_freespace(exp,
                        ground_truth_initialization=False,
                        icp_method=icp.ICPMethod.VOLUMETRIC,
                        model_name="mustard_normal"):
-    fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace.pkl')
+    obj_name = exp.obj_factory.name
+    fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace_{obj_name}.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
         if name not in cache or clean_cache:
@@ -1036,7 +1037,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     # placeholder for now
     empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
     volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
-                                               scale_known_freespace=20 if reg_method == 'volumetric-freespace' else 0,
+                                               scale_known_freespace=20,
                                                vis=env.vis, debug=False)
 
     rand.seed(seed)
@@ -1067,21 +1068,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
                                                        torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
 
-            do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost, reg_method)
-
-            # TODO verify by printing this_pts about what it actually is
-            if reg_method in ["volumetric", "volumetric-freespace"]:
-                T, distances = icp.icp_volumetric(volumetric_cost, this_pts, given_init_pose=best_tsf_guess,
-                                                  batch=B, max_iterations=20, lr=0.01)
-            elif reg_method == "icp":
-                T, distances = icp.icp_pytorch3d(this_pts, model_points_register, given_init_pose=best_tsf_guess,
-                                                 batch=B)
-            elif reg_method == "icp-sgd":
-                T, distances = icp.icp_pytorch3d_sgd(this_pts, model_points_register,
-                                                     given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
-                                                     use_matching_loss=True)
-            else:
-                raise RuntimeError("Unrecognized registration method " + reg_method)
+            T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
+                                           reg_method)
 
             transforms_per_object.append(T)
             T = T.inverse()
@@ -1256,9 +1244,9 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False):
                                            name=f"volumetric {num_points}np all sides delta {surface_delta} scale {freespace_cost_scale}",
                                            viewing_delay=0)
                 experiment.close()
-    # file = f"icp_freespace_{obj_factory.name}.pkl"
-    # plot_icp_results(icp_res_file=file,
-    #                  names_to_include=lambda name: "5np" in name and "volumetric" in name)
+    file = f"icp_freespace_{obj_factory.name}.pkl"
+    plot_icp_results(icp_res_file=file,
+                     names_to_include=lambda name: "volumetric 5np delta 0.01" in name)
 
 
 parser = argparse.ArgumentParser(description='Object registration from contact')
