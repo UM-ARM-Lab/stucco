@@ -166,6 +166,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
     vis = exp.dd
     freespace_ranges = exp.ranges
 
+    vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
+
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
                                                                    device=exp.device)
@@ -254,7 +256,7 @@ def test_icp_freespace(exp,
                        register_num_points=500, eval_num_points=200, num_points=10,
                        # number of known contact points
                        num_freespace_points_list=(0, 10, 20, 30, 40, 50, 100),
-                       freespace_on_one_side=True,
+                       freespace_x_filter_threshold=0.,  # 0 allows only positive, -10 allows any
                        surface_delta=0.025,
                        freespace_cost_scale=1,
                        ground_truth_initialization=False,
@@ -275,6 +277,8 @@ def test_icp_freespace(exp,
     vis_obj_id = exp.visId
     vis = exp.dd
     freespace_ranges = exp.ranges
+
+    vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
@@ -322,10 +326,7 @@ def test_icp_freespace(exp,
 
         # sample points in freespace and plot them
         # sample only on one side
-        if freespace_on_one_side:
-            used_model_points = model_points_eval[:, 0] > 0
-        else:
-            used_model_points = model_points_eval[:, 0] > -10
+        used_model_points = model_points_eval[:, 0] > freespace_x_filter_threshold
         # extrude model points that are on the surface of the object along their normal vector
         free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
                                         model_normals_world_frame_eval[used_model_points][
@@ -441,7 +442,7 @@ def marginalize_over_registration_num(name):
 
 
 def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None, x_filter=None,
-                     leave_out_percentile=20, icp_res_file='icp_comparison.pkl'):
+                     reduce_batch=None, leave_out_percentile=30, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
 
@@ -477,6 +478,7 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         # expect [seed, x, batch]
         if len(errors.shape) < 3:
             logger.warning("data for %s is less than 3 dimensional; probably outdated", name)
+            continue
 
         if x_filter is not None:
             to_keep = x_filter(x)
@@ -498,6 +500,8 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
 
         # transpose to get [x, seed, ...]
         errors = errors.transpose(1, 0, 2)
+        if reduce_batch is not None:
+            errors = reduce_batch(errors, axis=-1)
         # flatten the other dimensions for plotting
         errors = errors.reshape(errors.shape[0], -1)
 
@@ -1207,7 +1211,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
 def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False, gui=True):
     # -- Differing number of freespace experiment while varying number of known points
     if not plot_only:
-        for surface_delta in [0.025, 0.05]:
+        for surface_delta in [0.01, 0.025, 0.05]:
             for num_freespace in (0, 10, 20, 30, 40, 50, 100):
                 experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
                 for seed in range(10):
@@ -1223,8 +1227,8 @@ def experiment_vary_num_points_and_num_freespace(obj_factory, plot_only=False, g
     file = f"icp_comparison_{obj_factory.name}.pkl"
     # TODO adjust the plotter here
     plot_icp_results(icp_res_file=file, names_to_include=lambda
-        name: "volumetric fixed sdf free pts 30" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
-    plot_icp_results(icp_res_file=file, names_to_include=lambda
+        name: "volumetric fixed sdf free pts 100" in name or name == "volumetric fixed sdf free pts 0 delta 0.025")
+    plot_icp_results(icp_res_file=file, reduce_batch=np.median, names_to_include=lambda
         name: name == "volumetric fixed sdf free pts 0 delta 0.025" or "rerun" in name)
 
 
@@ -1232,36 +1236,55 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
     # -- Freespace ICP experiment
     if not plot_only:
         # test_gradients(experiment)
-        for surface_delta in [0.01, 0.025, 0.05]:
-            for freespace_cost_scale in [1, 5, 20]:
-                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
-                for num_points in [5]:
-                    for seed in range(10):
-                        test_icp_freespace(experiment, seed=seed, num_points=num_points,
-                                           # num_freespace_points_list=(0, 50, 100),
-                                           register_num_points=500,
-                                           surface_delta=surface_delta,
-                                           freespace_cost_scale=freespace_cost_scale,
-                                           name=f"volumetric {num_points}np delta {surface_delta} scale {freespace_cost_scale}",
-                                           viewing_delay=0)
-                experiment.close()
-        for surface_delta in [0.01, 0.025, 0.05]:
-            for freespace_cost_scale in [1, 5, 20]:
-                experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
-                for num_points in [5]:
-                    for seed in range(10):
-                        test_icp_freespace(experiment, seed=seed, num_points=num_points,
-                                           # num_freespace_points_list=(0, 50, 100),
-                                           register_num_points=500,
-                                           surface_delta=surface_delta,
-                                           freespace_cost_scale=freespace_cost_scale,
-                                           freespace_on_one_side=False,
-                                           name=f"volumetric {num_points}np all sides delta {surface_delta} scale {freespace_cost_scale}",
-                                           viewing_delay=0)
-                experiment.close()
+        # for surface_delta in [0.01, 0.025, 0.05]:
+        #     for freespace_cost_scale in [1, 5, 20]:
+        #         experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
+        #         for num_points in [5]:
+        #             for seed in range(10):
+        #                 test_icp_freespace(experiment, seed=seed, num_points=num_points,
+        #                                    # num_freespace_points_list=(0, 50, 100),
+        #                                    register_num_points=500,
+        #                                    surface_delta=surface_delta,
+        #                                    freespace_cost_scale=freespace_cost_scale,
+        #                                    name=f"volumetric {num_points}np delta {surface_delta} scale {freespace_cost_scale}",
+        #                                    viewing_delay=0)
+        #         experiment.close()
+        some_side_x_threshold_map = {"mustard_normal": -0.04}
+        # for surface_delta in [0.01, 0.025, 0.05]:
+        for thres in [0.0, ]:
+            for surface_delta in [0.01, ]:
+                for freespace_cost_scale in [20]:
+                    experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
+                    # thres = some_side_x_threshold_map[obj_factory.name],
+                    for num_points in [5]:
+                        for seed in range(10):
+                            test_icp_freespace(experiment, seed=seed, num_points=num_points,
+                                               register_num_points=500,
+                                               surface_delta=surface_delta,
+                                               freespace_x_filter_threshold=thres,
+                                               freespace_cost_scale=freespace_cost_scale,
+                                               name=f"volumetric {num_points}np {thres} threshold delta {surface_delta} scale {freespace_cost_scale}",
+                                               viewing_delay=0)
+                    experiment.close()
+        # for surface_delta in [0.01, 0.025, 0.05]:
+        #     for freespace_cost_scale in [1, 5, 20]:
+        #         experiment = ICPEVExperiment(device="cuda", obj_factory=obj_factory, gui=gui)
+        #         for num_points in [5]:
+        #             for seed in range(10):
+        #                 test_icp_freespace(experiment, seed=seed, num_points=num_points,
+        #                                    # num_freespace_points_list=(0, 50, 100),
+        #                                    register_num_points=500,
+        #                                    surface_delta=surface_delta,
+        #                                    freespace_cost_scale=freespace_cost_scale,
+        #                                    freespace_x_filter_threshold=-10,
+        #                                    name=f"volumetric {num_points}np all sides delta {surface_delta} scale {freespace_cost_scale}",
+        #                                    viewing_delay=0)
+        #         experiment.close()
     file = f"icp_freespace_{obj_factory.name}.pkl"
-    plot_icp_results(icp_res_file=file,
-                     names_to_include=lambda name: "volumetric 5np delta 0.01" in name)
+    plot_icp_results(icp_res_file=file, reduce_batch=np.mean,
+                     names_to_include=lambda
+                         name: "volumetric 5np" in name and "scale 20" in name and "delta 0.01" in name and (
+                             " 0.0 " in name or "-0.1 " in name or "-0.05 " in name or "-0.03 " in name))
 
 
 parser = argparse.ArgumentParser(description='Object registration from contact')
@@ -1275,8 +1298,9 @@ registration_map = {
     "icp-sgd": icp.ICPMethod.ICP_SGD,
     "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT
 }
-parser.add_argument('registration',
+parser.add_argument('--registration',
                     choices=registration_map.keys(),
+                    default='volumetric',
                     help='which registration method to run')
 parser.add_argument('--tracking',
                     choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
@@ -1346,16 +1370,20 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         # -- ICP experiment
-        for gt_num in [500]:
-            experiment = ICPEVExperiment(device="cuda")
-            for seed in range(10):
-                test_icp(experiment, seed=seed, register_num_points=gt_num,
-                         # num_points_list=(30, 40, 50, 100),
-                         num_freespace=0,
-                         freespace_cost_scale=20,
-                         icp_method=icp.ICPMethod.ICP_SGD,
-                         name=f"pytorch3d sgd rerun", viewing_delay=0)
-            experiment.close()
+        experiment = ICPEVExperiment(device="cuda")
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500,
+                     num_freespace=0,
+                     icp_method=icp.ICPMethod.ICP_SGD,
+                     name=f"pytorch3d sgd rerun", viewing_delay=0)
+        experiment.close()
+        experiment = ICPEVExperiment(device="cuda")
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500,
+                     num_freespace=0,
+                     icp_method=icp.ICPMethod.ICP,
+                     name=f"pytorch3d rerun", viewing_delay=0)
+        experiment.close()
         # plot_icp_results(names_to_include=lambda name: "rerun" in name or name == "volumetric free pts 0")
 
         # -- exploration experiment
