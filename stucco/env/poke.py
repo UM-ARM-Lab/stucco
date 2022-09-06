@@ -548,6 +548,9 @@ class PokeEnv(PybulletEnv):
         pose = (new_ee_pos, new_ee_orientation)
         if self.contact_detector.observe_residual(np.r_[reaction_force, reaction_torque], pose):
             dx = np.subtract(new_ee_pos, self.last_ee_pos)
+            # for step size resolution issues, explicitly say there is no dx during collision
+            if self.immovable_target:
+                dx = np.zeros_like(dx)
             self.contact_detector.observe_dx(dx)
             info[InfoKeys.DEE_IN_CONTACT] = dx
         self.last_ee_pos = new_ee_pos
@@ -635,9 +638,6 @@ class PokeEnv(PybulletEnv):
         self._draw_state()
 
         cost, done = self.evaluate_cost(self.state, action)
-        if cost is not None:
-            self._dd.draw_text('cost', '{0:.3f}'.format(cost), 0)
-
         # summarize information per sim step into information for entire control step
         info = self._aggregate_info()
 
