@@ -74,6 +74,7 @@ class DebugVisualization(enum.IntEnum):
     GOAL = 6
     INIT = 7
     FREE_VOXELS = 8
+    STATE_TRANSITION = 9
 
 
 class ReactionForceStrategy(enum.IntEnum):
@@ -223,6 +224,7 @@ class PokeEnv(PybulletEnv):
 
         self._debug_visualizations = {
             DebugVisualization.STATE: False,
+            DebugVisualization.STATE_TRANSITION: False,
             DebugVisualization.ACTION: False,
             DebugVisualization.REACTION_MINI_STEP: False,
             DebugVisualization.REACTION_IN_STATE: False,
@@ -632,7 +634,8 @@ class PokeEnv(PybulletEnv):
         # track trajectory
         prev_block = self.get_ee_pos(old_state)
         new_block = self.get_ee_pos(self.state)
-        self._dd.draw_transition(prev_block, new_block)
+        if self._debug_visualizations[DebugVisualization.STATE_TRANSITION]:
+            self._dd.draw_transition(prev_block, new_block)
 
         # render current pose
         self._draw_state()
@@ -789,16 +792,11 @@ class PokeEnv(PybulletEnv):
         return self.obj_factory.draw_mesh(self.vis, *args, **kwargs)
 
     def _create_sdfs(self):
-        interior_threshold = -0.01
-
         rob_pos, rob_rot = p.getBasePositionAndOrientation(self.robot_id)
         target_pos, target_rot = self.target_pose
 
         p.resetBasePositionAndOrientation(self.target_object_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
-
-        def interior_filter(voxel_sdf):
-            return voxel_sdf < interior_threshold
 
         # SDF for the object
         obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self._dd)
@@ -806,7 +804,7 @@ class PokeEnv(PybulletEnv):
                                                 obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
             # display the voxels created for this sdf
-            interior_pts = self.target_sdf.get_filtered_points(interior_filter)
+            interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0)
             for i, pt in enumerate(interior_pts):
                 self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
             input("interior SDF points for target object (press enter to confirm)")
@@ -817,7 +815,7 @@ class PokeEnv(PybulletEnv):
         robot_frame_sdf = exploration.PyBulletNaiveSDF(self.robot_id, vis=self._dd)
         self.robot_sdf = exploration.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
                                                robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
-        self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(interior_filter)
+        self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0)
 
         if self.clean_cache:
             for i, pt in enumerate(self.robot_interior_points_orig):
