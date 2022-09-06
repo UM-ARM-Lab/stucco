@@ -985,7 +985,7 @@ def ignore_beyond_distance(threshold):
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500,
              eval_num_points=200, ctrl_noise_max=0.005):
-    name = reg_method + name
+    name = f"{reg_method.name}{name}"
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
     fullname = os.path.join(cfg.DATA_DIR, f'poking.pkl')
@@ -1151,19 +1151,22 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     return m, cme
 
 
-def main_poke(env, method_name, registration_method, seed=0, name=""):
-    methods_to_run = {
-        'ours': OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env), dim=3),
-        'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
-                                              inertia_ratio=0.2,
-                                              threshold=0.08),
-        'online-dbscan': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1),
-        'online-kmeans': SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
-                                               random_state=0),
-        'gmphd': PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.00005, r_mag=0.00005, birth=0.001, detection=0.3)
-    }
-    env.draw_user_text(f"{method_name} seed {seed}", xy=[-0.1, 0.28, -0.5])
-    return run_poke(env, methods_to_run[method_name], registration_method, seed=seed, name=name)
+def create_tracking_method(env, method_name) -> TrackingMethod:
+    if method_name == "ours":
+        return OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env), dim=3)
+    elif method_name == 'online-birch':
+        return SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
+                                     inertia_ratio=0.2,
+                                     threshold=0.08)
+    elif method_name == 'online-dbscan':
+        return SklearnTrackingMethod(env, OnlineAgglomorativeClustering, DBSCAN, eps=0.05, min_samples=1)
+    elif method_name == 'online-kmeans':
+        return SklearnTrackingMethod(env, OnlineSklearnFixedClusters, KMeans, inertia_ratio=0.2, n_clusters=1,
+                                     random_state=0)
+    elif method_name == 'gmphd':
+        return PHDFilterTrackingMethod(env, fp_fn_bias=4, q_mag=0.00005, r_mag=0.00005, birth=0.001, detection=0.3)
+    else:
+        raise RuntimeError(f"Unsupported tracking method {method_name}")
 
 
 def experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=False, gui=True):
@@ -1356,7 +1359,9 @@ if __name__ == "__main__":
         # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
         #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
         for seed in args.seed:
-            m, cme = main_poke(env, tracking_method_name, registration_method, seed=seed, name=args.name)
+            env.draw_user_text(f"{registration_method.name} seed {seed}", xy=[-0.3, 1., -0.5])
+            m, cme = run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
+                              name=args.name)
             fmi = m[0]
             fmis.append(fmi)
             cmes.append(cme)

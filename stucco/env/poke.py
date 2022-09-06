@@ -715,7 +715,7 @@ class PokeEnv(PybulletEnv):
         # add plane to push on (slightly below the base of the robot)
         self.planeId = p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
 
-        self.set_camera_position([0.3, 0.1, 0.1], -20, -50)
+        self.set_camera_position([0.3, 0.1, 0.1], -40, -50)
 
         self._setup_gripper()
         self._setup_objects()
