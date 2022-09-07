@@ -22,7 +22,7 @@ from stucco.env.pybullet_sim import PybulletSim
 from stucco import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
-from stucco.detection import ContactDetector
+from stucco.detection import ContactDetector, ContactSensor
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.exploration import PybulletObjectFactory
 from stucco import exploration
@@ -82,6 +82,33 @@ class ReactionForceStrategy(enum.IntEnum):
     MAX_OVER_MINI_STEPS = 1
     AVG_OVER_MINI_STEPS = 2
     MEDIAN_OVER_MINI_STEPS = 3
+
+
+class PybulletOracleContactSensor(ContactSensor):
+    def __init__(self, robot_id, target_id, **kwargs):
+        super(PybulletOracleContactSensor, self).__init__(**kwargs)
+        self.robot_id = robot_id
+        self.target_id = target_id
+        self._cached_contact = None
+
+    def observe_residual(self, residual):
+        c = p.getContactPoints(self.robot_id, self.target_id())
+        if len(c):
+            self.in_contact = True
+            self._cached_contact = c
+        else:
+            self.in_contact = False
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+        if self._cached_contact is None:
+            return None
+        # assume only 1 contact
+        pt = self._cached_contact[0][ContactInfo.POS_B]
+        # caller expects it in link frame while we have it in global frame
+        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(torch.tensor(pose[1])),
+                                            dtype=self.dtype, device=self.device)
+        return link_to_current_tf.inverse().transform_points(
+            torch.tensor(pt, dtype=self.dtype, device=self.device).view(1, -1)).view(-1)
 
 
 class PokeEnv(PybulletEnv):
@@ -153,7 +180,7 @@ class PokeEnv(PybulletEnv):
 
     def __init__(self, goal=(0.25, 0.0, 0.2, 0.), init=(0., 0., 0.2),
                  environment_level=0, sim_step_wait=None, mini_steps=15, wait_sim_steps_per_mini_step=20,
-                 debug_visualizations=None, dist_for_done=0.04, camera_dist=0.6,
+                 debug_visualizations=None, dist_for_done=0.04, camera_dist=0.75,
                  contact_residual_threshold=1.,
                  contact_residual_precision=None,
                  reaction_force_strategy=ReactionForceStrategy.MEDIAN_OVER_MINI_STEPS,
@@ -209,7 +236,7 @@ class PokeEnv(PybulletEnv):
         self.free_voxels: util.VoxelGrid = None
 
         self.target_model_name = None
-        self.target_object_id = None
+        self._target_object_id = None
         # immovable and uninteractable copy of the target object used just for collision checking in object frame
         self.testObjId = None
         self.target_pose = None
@@ -242,11 +269,16 @@ class PokeEnv(PybulletEnv):
 
         self.set_task_config(goal, init)
         self._setup_experiment()
-        self._contact_detector = self.create_contact_detector(contact_residual_threshold, contact_residual_precision)
+        self._crt = contact_residual_threshold
+        self._crp = contact_residual_precision
+        self._contact_detector = self.create_contact_detector(self._crt, self._crp)
         # start at rest
         for _ in range(1000):
             p.stepSimulation()
         self.state = self._obs()
+
+    def target_object_id(self) -> int:
+        return self._target_object_id
 
     @property
     def contact_detector(self) -> ContactDetector:
@@ -256,11 +288,12 @@ class PokeEnv(PybulletEnv):
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 1, 50, 50, 50])
         contact_detector = ContactDetector(residual_precision)
-        contact_detector.register_contact_sensor(
-            PybulletResidualPlanarContactSensor("floating_gripper", residual_threshold,
-                                                robot_id=self.robot_id,
-                                                canonical_orientation=self.endEffectorOrientation,
-                                                default_joint_config=[0, 0]))
+        contact_detector.register_contact_sensor(PybulletOracleContactSensor(self.robot_id, self.target_object_id))
+        # contact_detector.register_contact_sensor(
+        #     PybulletResidualPlanarContactSensor("floating_gripper", residual_threshold,
+        #                                         robot_id=self.robot_id,
+        #                                         canonical_orientation=self.endEffectorOrientation,
+        #                                         default_joint_config=[0, 0]))
         return contact_detector
 
     # --- initialization and task configuration
@@ -766,13 +799,13 @@ class PokeEnv(PybulletEnv):
 
         # reset target and robot to their object frame to create the SDF
         # self.target_pose = target_pos, target_rot
-        self.target_object_id, self.ranges = self.obj_factory.make_collision_obj(self.z)
+        self._target_object_id, self.ranges = self.obj_factory.make_collision_obj(self.z)
         # initialize object at intended target, then we get to see what its achievable pose is
-        p.resetBasePositionAndOrientation(self.target_object_id, target_pos, target_rot)
+        p.resetBasePositionAndOrientation(self._target_object_id, target_pos, target_rot)
         for _ in range(1000):
             p.stepSimulation()
-        p.changeDynamics(self.target_object_id, -1, mass=0 if immovable else mass)
-        self.target_pose = p.getBasePositionAndOrientation(self.target_object_id)
+        p.changeDynamics(self._target_object_id, -1, mass=0 if immovable else mass)
+        self.target_pose = p.getBasePositionAndOrientation(self._target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
 
         # test target object that stays in object frame to allow ground truth object frame (naive) SDF lookup
@@ -781,7 +814,7 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.testObjId, -1, mass=0)
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
-        p.setCollisionFilterPair(self.target_object_id, self.testObjId, -1, -1, 0)
+        p.setCollisionFilterPair(self._target_object_id, self.testObjId, -1, -1, 0)
         p.setCollisionFilterPair(self.robot_id, self.testObjId, -1, -1, 0)
         p.setCollisionFilterPair(self.robot_id, self.testObjId, 0, -1, 0)
         p.setCollisionFilterPair(self.robot_id, self.testObjId, 1, -1, 0)
@@ -795,7 +828,7 @@ class PokeEnv(PybulletEnv):
         rob_pos, rob_rot = p.getBasePositionAndOrientation(self.robot_id)
         target_pos, target_rot = self.target_pose
 
-        p.resetBasePositionAndOrientation(self.target_object_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
+        p.resetBasePositionAndOrientation(self._target_object_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
 
         # SDF for the object
@@ -804,7 +837,7 @@ class PokeEnv(PybulletEnv):
                                                 obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
             # display the voxels created for this sdf
-            interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0)
+            interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.0)
             for i, pt in enumerate(interior_pts):
                 self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
             input("interior SDF points for target object (press enter to confirm)")
@@ -815,7 +848,7 @@ class PokeEnv(PybulletEnv):
         robot_frame_sdf = exploration.PyBulletNaiveSDF(self.robot_id, vis=self._dd)
         self.robot_sdf = exploration.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
                                                robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
-        self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0)
+        self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
         if self.clean_cache:
             for i, pt in enumerate(self.robot_interior_points_orig):
@@ -838,14 +871,14 @@ class PokeEnv(PybulletEnv):
         floor_range[1, 1] = self.target_pose[0][1] + floor_offset
 
         floor_range[2, 0] = -self.freespace_voxel_resolution * 3
-        floor_range[2, 1] = -self.freespace_voxel_resolution
+        floor_range[2, 1] = -self.freespace_voxel_resolution * 2
         floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
                                                                          dtype=self.dtype, device=self.device)
         self.free_voxels[floor_pts] = 1
 
         # restore robot pose
         p.resetBasePositionAndOrientation(self.robot_id, rob_pos, rob_rot)
-        p.resetBasePositionAndOrientation(self.target_object_id, target_pos, target_rot)
+        p.resetBasePositionAndOrientation(self._target_object_id, target_pos, target_rot)
 
     def _setup_objects(self):
         self.immovable = []
@@ -866,7 +899,7 @@ class PokeEnv(PybulletEnv):
 
         self.create_target_obj(target_pos, target_rot, flags, immovable=self.immovable_target)
         p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.8)
-        self.movable.append(self.target_object_id)
+        self.movable.append(self._target_object_id)
 
         for objId in self.immovable:
             p.changeVisualShape(objId, -1, rgbaColor=[0.2, 0.2, 0.2, 0.8])
