@@ -1221,6 +1221,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                     'freespace_violations': np.stack(freespace_violations),
                     'num_freespace_voxels': np.stack(num_freespace_voxels)}
             data['freespace_violation_percent'] = data['freespace_violations'] / data['num_freespace_voxels'][:, None]
+            cache[name][seed] = data
             torch.save(cache, fullname)
 
     # evaluate FMI and contact error here
