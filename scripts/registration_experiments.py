@@ -1162,14 +1162,22 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             rmse_per_object.append(distances)
             if best_distance is None or best_tsf_distances < best_distance:
                 best_distance = best_tsf_distances
-                best_tsf_guess = T[best_tsf_index].inverse()
+                best_tsf_guess = T[best_tsf_index]
                 best_segment_idx = k
 
         # has at least one contact segment
         if best_segment_idx is not None:
             method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
             logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
-            best_T = best_tsf_guess.inverse()
+            best_T = best_tsf_guess
+
+            # create distribution of initializations centered at our previous best guess translation
+            # with random orientations
+            # ensure one of them (first of the batch) has the exact transform
+            best_tsf_guess = best_tsf_guess.inverse()
+            temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
+            temp[0] = best_tsf_guess
+            best_tsf_guess = temp
 
             T = transforms_per_object[best_segment_idx]
             draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
@@ -1182,7 +1190,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
             # draw mesh at where our best guess is
             guess_pose = util.matrix_to_pos_rot(best_T)
-            env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5))
+            id = pose_obj_map.get(-1)
+            id = env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5), object_id=id)
+            pose_obj_map[-1] = id
             # TODO save current pose and contact point for playback
 
         if torch.is_tensor(action):

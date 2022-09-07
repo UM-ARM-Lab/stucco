@@ -694,7 +694,7 @@ class GPVarianceExploration(ShapeExplorationPolicy):
         return dx
 
 
-def random_upright_transforms(B, dtype, device):
+def random_upright_transforms(B, dtype, device, translation=None):
     # initialize guesses with a prior; since we're trying to retrieve an object, it's reasonable to have the prior
     # that the object only varies in yaw (and is upright)
     axis_angle = torch.zeros((B, 3), dtype=dtype, device=device)
@@ -702,6 +702,8 @@ def random_upright_transforms(B, dtype, device):
     R = tf.axis_angle_to_matrix(axis_angle)
     init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
     init_pose[:, :3, :3] = R
+    if translation is not None:
+        init_pose[:, :3, 3] = translation
     return init_pose
 
 
