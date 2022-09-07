@@ -451,7 +451,8 @@ def marginalize_over_registration_num(name):
 
 
 def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None, x_filter=None,
-                     reduce_batch=None, leave_out_percentile=30, icp_res_file='icp_comparison.pkl'):
+                     data_key=None, reduce_batch=None, leave_out_percentile=30, icp_res_file='icp_comparison.pkl',
+                     x_axis_label="num test points"):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
 
@@ -469,7 +470,14 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         for seed in cache[name]:
             data = cache[name][seed]
             # short by num points
-            a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
+            if data_key is not None:
+                data = data[data_key]
+            # if our data is not a dictionary, it should be indexed
+            try:
+                a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
+            except AttributeError:
+                a = range(1, len(data)+1, 1)
+                b = data
 
             if to_plot_name not in to_plot:
                 to_plot[to_plot_name] = a, []
@@ -533,7 +541,7 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
         print()
 
     axs.set_ylabel('unidirectional chamfer dist (UCD [cm^2])')
-    axs.set_xlabel('num test points')
+    axs.set_xlabel(x_axis_label)
     if not logy:
         axs.set_ylim(bottom=0)
     axs.legend()
@@ -1486,6 +1494,8 @@ if __name__ == "__main__":
 
         env.close()
     elif args.experiment == "debug":
+        plot_icp_results(icp_res_file="poking.pkl", data_key='chamfer_err', reduce_batch=None, x_axis_label='steps')
+
         pass
         # -- exploration experiment
         # exp_name = "tukey voxel 0.1"
