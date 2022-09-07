@@ -517,7 +517,7 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, **kwargs)
 
     res = iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                                              **kwargs)
-    T = torch.eye(4).repeat(batch, 1, 1)
+    T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R
     T[:, :3, 3] = res.RTs.T
     distances = res.rmse
