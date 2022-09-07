@@ -110,24 +110,24 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     # compare not against current model points (which may be few), but against the maximum number of model points
     if reg_method == icp.ICPMethod.ICP:
         T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
-                                         given_init_pose=best_tsf_guess, batch=B)
+                                         given_init_pose=best_tsf_guess.inverse(), batch=B)
     elif reg_method == icp.ICPMethod.ICP_REVERSE:
         T, distances = icp.icp_pytorch3d(model_points_register, model_points_world_frame,
-                                         given_init_pose=best_tsf_guess.inverse(), batch=B)
+                                         given_init_pose=best_tsf_guess, batch=B)
         T = T.inverse()
     elif reg_method == icp.ICPMethod.ICP_SGD:
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
+                                             given_init_pose=best_tsf_guess.inverse(), batch=B, learn_translation=True,
                                              use_matching_loss=True)
     elif reg_method == icp.ICPMethod.ICP_SGD_REVERSE:
         T, distances = icp.icp_pytorch3d_sgd(model_points_register, model_points_world_frame,
-                                             given_init_pose=best_tsf_guess.inverse(), batch=B, learn_translation=True,
+                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
                                              use_matching_loss=True)
         T = T.inverse()
     # use only volumetric loss
     elif reg_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess, batch=B, pose_cost=volumetric_cost,
+                                             given_init_pose=best_tsf_guess.inverse(), batch=B, pose_cost=volumetric_cost,
                                              max_iterations=20, lr=0.01,
                                              learn_translation=True,
                                              use_matching_loss=False)
@@ -352,7 +352,7 @@ def test_icp_freespace(exp,
         # reverse engineer the transform
         # compare not against current model points (which may be few), but against the maximum number of model points
         if ground_truth_initialization:
-            best_tsf_guess = link_to_current_tf_gt.inverse().get_matrix().repeat(B, 1, 1)
+            best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
         T, distances = do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
                                        volumetric_cost,
                                        icp_method)
@@ -1070,6 +1070,7 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory)
 
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500,
+             ground_truth_initialization=False,
              eval_num_points=200, ctrl_noise_max=0.005):
     name = f"{reg_method.name}{name}"
     # [name][seed] to access
@@ -1099,7 +1100,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
                                                                            name=model_name, seed=0, device=env.device)
 
-    pose = p.getBasePositionAndOrientation(env.target_object_id)
+    pose = p.getBasePositionAndOrientation(env.target_object_id())
     link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
         tensor_utils.ensure_tensor(device, dtype, pose[1])), dtype=dtype, device=device)
     model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
@@ -1154,6 +1155,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
                                                        torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
 
+            if ground_truth_initialization:
+                best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
+
             T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
                                            reg_method)
 
@@ -1182,10 +1186,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             # create distribution of initializations centered at our previous best guess translation
             # with random orientations
             # ensure one of them (first of the batch) has the exact transform
-            best_tsf_guess = best_tsf_guess.inverse()
             temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
             temp[0] = best_tsf_guess
             best_tsf_guess = temp
+            # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
 
             T = transforms_per_object[best_segment_idx]
             draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
@@ -1487,14 +1491,15 @@ if __name__ == "__main__":
         # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
         #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
         for seed in args.seed:
-            env.draw_user_text(f"{registration_method.name} seed {seed}", xy=[-0.3, 1., -0.5])
+            env.draw_user_text(f"{registration_method.name}{args.name} seed {seed}", xy=[-0.3, 1., -0.5])
             run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
-                     name=args.name)
+                     name=args.name, ground_truth_initialization=False)
             env.vis.clear_visualizations()
 
         env.close()
     elif args.experiment == "debug":
-        plot_icp_results(icp_res_file="poking.pkl", data_key='chamfer_err', reduce_batch=None, x_axis_label='steps')
+        plot_icp_results(icp_res_file="poking.pkl", names_to_include=lambda name: "gt" not in name and "temp" not in name,
+                         data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
 
         pass
         # -- exploration experiment
