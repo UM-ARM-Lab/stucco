@@ -1070,7 +1070,7 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory)
 
 
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
-             register_num_points=500,
+             register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False,
              eval_num_points=200, ctrl_noise_max=0.005):
     name = f"{reg_method.name}{name}"
@@ -1146,7 +1146,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         rmse_per_object = []
         best_segment_idx = None
         for k, this_pts in enumerate(method):
-            if len(this_pts) < 4:
+            if len(this_pts) < start_at_num_pts:
                 continue
             # this_pts corresponds to tracked contact points that are segmented together
             this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
