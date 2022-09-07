@@ -991,6 +991,75 @@ def ignore_beyond_distance(threshold):
     return filter
 
 
+def predetermined_controls():
+    predetermined_control = {}
+
+    ctrl = []
+    # go up along one surface of the object
+    for i in range(4):
+        ctrl += [[1., 0., 0]] * 3
+        ctrl += [[-1., 0., 1]] * 2
+    # poke cap of mustard bottle, have to go in more
+    ctrl += [[1., 0., 0]] * 4
+    ctrl += [[-1., 0., 1]] * 2
+    # poke past the top of the mustard bottle
+    ctrl += [[1., 0., 0.1]] * 6
+    # move to the side then poke while going down
+    ctrl += [[-1., -0.5, 0]] * 4
+    ctrl += [[-1., 0., 0]] * 2
+    for i in range(7):
+        ctrl += [[1., 0., 0]] * 3
+        ctrl += [[-1., 0., 0]] * 2
+        ctrl += [[0., 0., -1]] * 2
+
+    # move more to the side and poke up again
+    ctrl += [[0., -1., 0]] * 2
+    for i in range(7):
+        ctrl += [[1., 0., 0]] * 3
+        ctrl += [[-1., 0., 0]] * 2
+        ctrl += [[0., 0., 1]] * 2
+
+    ctrl += [[0., -0.9, 0]] * 4
+    ctrl += [[1., 0., 0]] * 2
+    for i in range(8):
+        ctrl += [[1., 0., 0]] * 4
+        ctrl += [[-1., 0., 0]] * 4
+        ctrl += [[0., 0., -1]] * 2
+
+    ctrl += [[-1., 0., 0]] * 4
+    ctrl += [[0., 1., 0]] * 10
+    for i in range(5):
+        ctrl += [[1., 0., 0]] * 3
+        ctrl += [[-1., 0., 0]] * 2
+        ctrl += [[0., 0., 1]] * 2
+
+    ctrl += [[0., 0.9, 0]] * 6
+    ctrl += [[1., 0., 0]] * 3
+    for i in range(5):
+        ctrl += [[1., 0., 0]] * 4
+        ctrl += [[-1., 0., 0]] * 4
+        ctrl += [[0., 0., -1]] * 2
+
+    rand.seed(0)
+    # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
+    # ctrl = np.add(ctrl, noise)
+    predetermined_control[poke.Levels.MUSTARD] = ctrl
+    return predetermined_control
+
+
+def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory):
+    m = link_to_world_tf_matrix
+    for b in range(len(m)):
+        pos, rot = util.matrix_to_pos_rot(m[b])
+        object_id = obj_id_map.get(b, None)
+        object_id = dd.draw_mesh("icp_distribution", obj_factory.get_mesh_resource_filename(),
+                                 (pos, rot), scale=obj_factory.scale, object_id=object_id,
+                                 rgba=(0, 0.8, 0.2, 0.2),
+                                 vis_frame_pos=obj_factory.vis_frame_pos,
+                                 vis_frame_rot=obj_factory.vis_frame_rot)
+        obj_id_map[b] = object_id
+
+
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500,
              eval_num_points=200, ctrl_noise_max=0.005):
@@ -1007,27 +1076,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     else:
         cache = {name: {seed: {}}}
 
-    predetermined_control = {}
-
-    ctrl = [[1., 0., 0]] * 3
-    ctrl += [[-1., 0., 1]] * 2
-    ctrl += [[1., 0., 0]] * 3
-    ctrl += [[-1., 0., 1]] * 2
-    ctrl += [[1., 0., 0]] * 3
-    # ctrl += [[0.4, 0.4], [.5, -1]] * 6
-    # ctrl += [[-0.2, 1]] * 4
-    # ctrl += [[0.3, -0.3], [0.4, 1]] * 4
-    # ctrl += [[1., -1]] * 3
-    # ctrl += [[1., 0.6], [-0.7, 0.5]] * 4
-    # ctrl += [[0., 1]] * 5
-    # ctrl += [[1., 0]] * 4
-    # ctrl += [[0.4, -1.], [0.4, 0.5]] * 4
-    rand.seed(0)
-    # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
-    # ctrl = np.add(ctrl, noise)
-    predetermined_control[poke.Levels.MUSTARD] = ctrl
-
-    ctrl = method.create_controller(predetermined_control[env.level])
+    ctrl = method.create_controller(predetermined_controls()[env.level])
 
     obs = env.reset()
 
@@ -1057,6 +1106,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     best_T = None
     guess_pose = None
     chamfer_err = []
+    pose_obj_map = {}
 
     pt_to_config = poke.ArmPointToConfig(env)
 
@@ -1102,10 +1152,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             transforms_per_object.append(T)
             T = T.inverse()
             score = distances
-            best_tsf_index = np.argmin(score)
+            best_tsf_index = np.argmin(score.detach().cpu())
 
             # pick object with lowest variance in its translation estimate
-            translations = T[:, :2, 2]
+            translations = T[:, :3, 3]
             best_tsf_distances = (translations.var(dim=0).sum()).item()
 
             dist_per_est_obj.append(best_tsf_distances)
@@ -1121,18 +1171,18 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
             best_T = best_tsf_guess.inverse()
 
+            T = transforms_per_object[best_segment_idx]
+            draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
+
             # evaluate with chamfer distance
-            errors_per_batch = evaluate_chamfer_distance(transforms_per_object[best_segment_idx],
-                                                         model_points_world_frame_eval, env.vis, env.testObjId,
+            errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
                                                          rmse_per_object[best_segment_idx], 0)
-            # errors.append(np.mean(errors_per_batch))
             chamfer_err.append(errors_per_batch)
-            logger.debug(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
+            logger.info(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
 
             # draw mesh at where our best guess is
-            # TODO check if we need to invert this best guess
             guess_pose = util.matrix_to_pos_rot(best_T)
-            env.draw_mesh("base_object", guess_pose, (0.0, 1.0, 0., 0.5))
+            env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5))
             # TODO save current pose and contact point for playback
 
         if torch.is_tensor(action):
@@ -1146,18 +1196,18 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             torch.save(cache, fullname)
 
     # evaluate FMI and contact error here
-    labels, moved_points = method.get_labelled_moved_points(np.ones(len(contact_id)) * NO_CONTACT_ID)
-    contact_id = np.array(contact_id)
-
-    in_label_contact = contact_id != NO_CONTACT_ID
-
-    m = clustering_metrics(contact_id[in_label_contact], labels[in_label_contact])
-    contact_error = compute_contact_error(None, moved_points, env=env, visualize=False)
-    cme = np.mean(np.abs(contact_error))
-
-    # grasp_at_pose(env, guess_pose)
-
-    return m, cme
+    # labels, moved_points = method.get_labelled_moved_points(np.ones(len(contact_id)) * NO_CONTACT_ID)
+    # contact_id = np.array(contact_id)
+    #
+    # in_label_contact = contact_id != NO_CONTACT_ID
+    #
+    # m = clustering_metrics(contact_id[in_label_contact], labels[in_label_contact])
+    # contact_error = compute_contact_error(None, moved_points, env=env, visualize=False)
+    # cme = np.mean(np.abs(contact_error))
+    #
+    # # grasp_at_pose(env, guess_pose)
+    #
+    # return m, cme
 
 
 def create_tracking_method(env, method_name) -> TrackingMethod:
@@ -1346,7 +1396,8 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
 
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
-                    choices=['build', 'globalmin', 'random-sample', 'freespace', 'poke', 'debug', 'baseline'],
+                    choices=['build', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
+                             'poke-visualize-sdf', 'debug'],
                     help='which experiment to run')
 registration_map = {
     "volumetric": icp.ICPMethod.VOLUMETRIC,
@@ -1409,27 +1460,20 @@ if __name__ == "__main__":
         experiment_vary_num_freespace(obj_factory, plot_only=args.plot_only, gui=not args.no_gui)
     elif args.experiment == "baseline":
         experiment_compare_basic_baseline(obj_factory, plot_only=args.plot_only, gui=not args.no_gui)
+    elif args.experiment == "poke-visualize-sdf":
+        env = PokeGetter.env(level=level, mode=p.GUI, clean_cache=True)
+        env.close()
     elif args.experiment == "poke":
-        env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False)
-        fmis = []
-        cmes = []
+        env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False, device="cuda")
         # backup video logging in case ffmpeg and nvidia driver are not compatible
         # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
         #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
         for seed in args.seed:
             env.draw_user_text(f"{registration_method.name} seed {seed}", xy=[-0.3, 1., -0.5])
-            m, cme = run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
-                              name=args.name)
-            fmi = m[0]
-            fmis.append(fmi)
-            cmes.append(cme)
-            logger.info(f"{tracking_method_name} fmi {fmi} cme {cme}")
+            run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
+                     name=args.name)
             env.vis.clear_visualizations()
-            env.reset()
 
-        logger.info(
-            f"{tracking_method_name} mean fmi {np.mean(fmis)} median fmi {np.median(fmis)} std fmi {np.std(fmis)} {fmis}\n"
-            f"mean cme {np.mean(cmes)} median cme {np.median(cmes)} std cme {np.std(cmes)} {cmes}")
         env.close()
     elif args.experiment == "debug":
         pass

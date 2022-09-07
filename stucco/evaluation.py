@@ -104,7 +104,7 @@ def load_runs_results():
 
 def compute_contact_error(before_moving_pts, moved_pts,
                           # have either env or the env class and object poses
-                          env_cls: Type[arm.ArmEnv]=None, level=None, obj_poses=None,
+                          env_cls: Type[arm.ArmEnv] = None, level=None, obj_poses=None,
                           env=None,
                           visualize=False, contact_points_instead_of_contact_config=True):
     contact_error = []
@@ -178,7 +178,8 @@ def object_robot_penetration_score(pt_to_config, config, object_transform, model
     return -d
 
 
-def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances, viewing_delay):
+def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances, viewing_delay,
+                              print_err=False):
     # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
     # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
     # evaluation model points on the ground truth object surface, and the surface points of the object transformed
@@ -200,12 +201,15 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
             closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
             chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
 
-        vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
-                       label=f"chamfer dist (mm^2): {chamfer_distance[b].abs().mean().item():.1f}")
+        if print_err:
+            vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
+                           label=f"chamfer dist (mm^2): {chamfer_distance[b].abs().mean().item():.1f}")
         # if distances is not None:
         #     vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
         time.sleep(viewing_delay)
 
         errors_per_transform = chamfer_distance.mean(dim=-1)
         errors_per_batch.append(errors_per_transform.mean())
+    # return to link frame
+    p.resetBasePositionAndOrientation(vis_obj_id, [0, 0, 0], [0, 0, 0, 1])
     return errors_per_batch
