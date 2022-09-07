@@ -127,7 +127,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     # use only volumetric loss
     elif reg_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
         T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess.inverse(), batch=B, pose_cost=volumetric_cost,
+                                             given_init_pose=best_tsf_guess.inverse(), batch=B,
+                                             pose_cost=volumetric_cost,
                                              max_iterations=20, lr=0.01,
                                              learn_translation=True,
                                              use_matching_loss=False)
@@ -476,7 +477,7 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
             try:
                 a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
             except AttributeError:
-                a = range(1, len(data)+1, 1)
+                a = range(1, len(data) + 1, 1)
                 b = data
 
             if to_plot_name not in to_plot:
@@ -1112,12 +1113,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     B = 30
     device = env.device
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
-    best_T = None
-    guess_pose = None
     chamfer_err = []
+    freespace_violations = []
+    num_freespace_voxels = []
     pose_obj_map = {}
-
-    pt_to_config = poke.ArmPointToConfig(env)
 
     contact_id = []
 
@@ -1142,7 +1141,6 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             contact_id.append(NO_CONTACT_ID)
 
         # note that we update our registration regardless if we're in contact or not
-        all_configs = torch.tensor(np.array(ctrl.x_history), dtype=dtype, device=device).view(-1, env.nx)
         dist_per_est_obj = []
         transforms_per_object = []
         rmse_per_object = []
@@ -1197,7 +1195,12 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             # evaluate with chamfer distance
             errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
                                                          rmse_per_object[best_segment_idx], 0)
+
+            occupied = env.free_voxels[volumetric_cost._pts_interior]
+
             chamfer_err.append(errors_per_batch)
+            num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
+            freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
             logger.info(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
 
             # draw mesh at where our best guess is
@@ -1214,7 +1217,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         obs, rew, done, info = env.step(action)
 
         if len(chamfer_err) > 0:
-            cache[name][seed] = {'chamfer_err': np.stack(chamfer_err), }
+            data = {'chamfer_err': np.stack(chamfer_err),
+                    'freespace_violations': np.stack(freespace_violations),
+                    'num_freespace_voxels': np.stack(num_freespace_voxels)}
+            data['freespace_violation_percent'] = data['freespace_violations'] / data['num_freespace_voxels'][:, None]
             torch.save(cache, fullname)
 
     # evaluate FMI and contact error here
@@ -1498,7 +1504,8 @@ if __name__ == "__main__":
 
         env.close()
     elif args.experiment == "debug":
-        plot_icp_results(icp_res_file="poking.pkl", names_to_include=lambda name: "gt" not in name and "temp" not in name,
+        plot_icp_results(icp_res_file="poking.pkl",
+                         names_to_include=lambda name: "gt" not in name and "temp" not in name,
                          data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
 
         pass
