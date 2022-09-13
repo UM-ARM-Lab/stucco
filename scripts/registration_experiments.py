@@ -1196,7 +1196,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
                                                          rmse_per_object[best_segment_idx], 0)
 
-            occupied = env.free_voxels[volumetric_cost._pts_interior]
+            link_to_current_tf = tf.Transform3d(matrix=T)
+            interior_pts = link_to_current_tf.transform_points(volumetric_cost.model_interior_points_orig)
+            occupied = env.free_voxels[interior_pts]
 
             chamfer_err.append(errors_per_batch)
             num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
