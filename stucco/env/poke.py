@@ -43,6 +43,9 @@ class Levels(enum.IntEnum):
     MUSTARD = 0
     CRACKER = 1
     COFFEE_CAN = 2
+    BANANA = 3
+    DRILL = 4
+    HAMMER = 5
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
@@ -1050,5 +1053,6 @@ class YCBObjectFactory(PybulletObjectFactory):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
     def draw_mesh(self, dd, name, pose, rgba, object_id=None):
+        frame_pos = np.array(self.vis_frame_pos) * self.scale
         return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
-                            object_id=object_id, vis_frame_pos=self.vis_frame_pos, vis_frame_rot=self.vis_frame_rot)
+                            object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)

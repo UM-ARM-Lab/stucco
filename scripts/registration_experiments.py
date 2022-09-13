@@ -709,7 +709,8 @@ class ShapeExplorationExperiment(abc.ABC):
 
 
 class ICPEVExperiment(ShapeExplorationExperiment):
-    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.025, **kwargs):
+    def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.025, clean_cache=False,
+                 **kwargs):
         if policy_args is None:
             policy_args = {}
         super(ICPEVExperiment, self).__init__(**kwargs)
@@ -727,7 +728,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         # fix the z dimension since there shouldn't be that much variance across it
         range_per_dim[2] = [-range_per_dim[2, 1] * 0.4, range_per_dim[2, 1] * 0.6]
         self.sdf = stucco.exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                                obj_frame_sdf, device=self.device)
+                                                obj_frame_sdf, device=self.device, clean_cache=clean_cache)
         self.set_policy(
             policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
@@ -1452,7 +1453,7 @@ parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
-task_map = {"mustard_normal": poke.Levels.MUSTARD, "coffee": poke.Levels.COFFEE_CAN, "cracker": poke.Levels.CRACKER}
+task_map = {"mustard_normal": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA}
 parser.add_argument('--task', default="mustard_normal", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
@@ -1461,7 +1462,10 @@ parser.add_argument('--plot_only', action='store_true',
 obj_factory_map = {
     "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
                                        vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                       vis_frame_pos=[-0.014, -0.0125, 0.04]),
+                                       vis_frame_pos=[-0.005, -0.005, 0.015]),
+    "banana": YCBObjectFactory("banana", "YcbBanana",
+                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                               vis_frame_pos=[-.01, 0.0, -.01]),
     # TODO create the other object factories
 }
 
@@ -1475,7 +1479,7 @@ if __name__ == "__main__":
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
-        experiment = ICPEVExperiment(obj_factory=obj_factory)
+        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (300, 400, 500):
             for seed in range(10):
