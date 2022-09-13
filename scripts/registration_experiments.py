@@ -75,7 +75,8 @@ restricted_pts = {
 }
 
 reject_model_pts = {
-    'mustard_normal': lambda pt, normal: abs(normal[2]) > 0.99 and abs(pt[2]) < 0.01
+    'mustard_normal': lambda pt, normal: abs(normal[2]) > 0.99 and abs(pt[2]) < 0.01,
+    'banana': lambda pt, normal: abs(normal[0]) > 0.99
 }
 
 
@@ -88,8 +89,8 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
                                              random_sample_sigma=0.2,
                                              name=model_name, vis=None,
                                              device=device,
-                                             other_rejection_criteria=reject_model_pts[model_name],
-                                             restricted_points=restricted_pts[model_name])
+                                             other_rejection_criteria=reject_model_pts.get(model_name, None),
+                                             restricted_points=restricted_pts.get(model_name, []))
     for i, pt in enumerate(points):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
         vis.draw_2d_line(f"mn.{i}", pt, -normals[i], color=(0, 0, 0), size=2., scale=0.03)
@@ -727,6 +728,13 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         range_per_dim *= 2
         # fix the z dimension since there shouldn't be that much variance across it
         range_per_dim[2] = [-range_per_dim[2, 1] * 0.4, range_per_dim[2, 1] * 0.6]
+        if clean_cache:
+            # draw the bounding box of the object frame SDF
+            # get extreme points
+            extreme_pts = torch.cartesian_prod(*torch.tensor(range_per_dim))
+            for i, pt in enumerate(extreme_pts):
+                self.dd.draw_point(f"bb.{i}", pt, color=(0, 1, 0), length=0.1)
+
         self.sdf = stucco.exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
                                                 obj_frame_sdf, device=self.device, clean_cache=clean_cache)
         self.set_policy(
@@ -1463,7 +1471,7 @@ obj_factory_map = {
     "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
                                        vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
                                        vis_frame_pos=[-0.005, -0.005, 0.015]),
-    "banana": YCBObjectFactory("banana", "YcbBanana",
+    "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                vis_frame_pos=[-.01, 0.0, -.01]),
     # TODO create the other object factories
@@ -1479,10 +1487,10 @@ if __name__ == "__main__":
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
-        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True)
+        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=False)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (300, 400, 500):
-            for seed in range(10):
+            for seed in range(2,10):
                 build_model(experiment.objId, experiment.dd, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
 
