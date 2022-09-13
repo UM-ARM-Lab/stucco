@@ -481,7 +481,7 @@ def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
 
     res = iterative_closest_point(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
                                   allow_reflection=True)
-    T = torch.eye(4).repeat(batch, 1, 1)
+    T = torch.eye(4, device=A.device).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R.transpose(-1, -2)
     T[:, :3, 3] = res.RTs.T
     distances = res.rmse
@@ -501,7 +501,7 @@ def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
 
     res = iterative_closest_point_sgd(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
                                       allow_reflection=True, **kwargs)
-    T = torch.eye(4).repeat(batch, 1, 1)
+    T = torch.eye(4, device=A.device).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R
     T[:, :3, 3] = res.RTs.T
     distances = res.rmse
