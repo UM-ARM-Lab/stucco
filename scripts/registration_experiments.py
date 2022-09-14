@@ -156,13 +156,13 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              num_freespace=0,
              freespace_on_one_side=True,
              surface_delta=0.025,
-             freespace_cost_scale=1,
+             freespace_cost_scale=20,
              ground_truth_initialization=False,
              icp_method=icp.ICPMethod.VOLUMETRIC,
-             debug=False,
-             model_name="mustard_normal"):
+             debug=False):
     obj_name = exp.obj_factory.name
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison_{obj_name}.pkl')
+    name = f"{icp_method.name}{name}"
     if os.path.exists(fullname):
         cache = torch.load(fullname)
         if name not in cache or clean_cache:
@@ -180,13 +180,13 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
     vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=obj_name, seed=0,
                                                                    device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0, device=exp.device)
+                                                                           name=obj_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -197,7 +197,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed,
+        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=obj_name, seed=seed,
                                                              device=exp.device)
 
         pose = p.getBasePositionAndOrientation(target_obj_id)
@@ -271,8 +271,7 @@ def test_icp_freespace(exp,
                        surface_delta=0.025,
                        freespace_cost_scale=1,
                        ground_truth_initialization=False,
-                       icp_method=icp.ICPMethod.VOLUMETRIC,
-                       model_name="mustard_normal"):
+                       icp_method=icp.ICPMethod.VOLUMETRIC):
     obj_name = exp.obj_factory.name
     fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace_{obj_name}.pkl')
     if os.path.exists(fullname):
@@ -292,13 +291,13 @@ def test_icp_freespace(exp,
     vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
+    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=obj_name, seed=0,
                                                                    device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0, device=exp.device)
+                                                                           name=obj_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -306,7 +305,7 @@ def test_icp_freespace(exp,
     B = 30
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=model_name, seed=seed,
+    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=obj_name, seed=seed,
                                                          device=exp.device)
 
     pose = p.getBasePositionAndOrientation(target_obj_id)
@@ -505,10 +504,16 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
             errors = errors[:, to_keep]
 
         if leave_out_percentile > 0:
-            remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=-1)
-            to_keep = errors < remove_threshold[:, :, None]
+            # is sorted, so can just leave out the last few parts of the last dimension
+            to_keep_ratio = (100 - leave_out_percentile) / 100
+            to_keep = round(errors.shape[-1] * to_keep_ratio)
+            errors = errors[:,:,:to_keep]
+
+            # remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=-1)
+            # to_keep = errors < remove_threshold[:, :, None]
             # this is equivalent to the below; can uncomment to check
-            errors = errors[to_keep].reshape(errors.shape[0], errors.shape[1], -1)
+            # errors = errors[to_keep].reshape(errors.shape[0], errors.shape[1], -1)
+
             # t1 = []
             # for i in range(to_keep.shape[0]):
             #     t2 = []
@@ -1404,33 +1409,45 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
     if not plot_only:
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+                     icp_method=icp.ICPMethod.VOLUMETRIC,
+                     name=f"comparison 100 free pts", viewing_delay=0)
+        experiment.close()
+        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+                     icp_method=icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
+                     name=f"comparison", viewing_delay=0)
+        experiment.close()
+        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_SGD,
-                     name=f"pytorch3d sgd rerun", viewing_delay=0)
+                     name=f"comparison", viewing_delay=0)
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP,
-                     name=f"pytorch3d rerun", viewing_delay=0)
+                     name=f"comparison", viewing_delay=0)
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_REVERSE,
-                     name=f"pytorch3d reverse rerun", viewing_delay=0)
+                     name=f"comparison", viewing_delay=0)
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_SGD_REVERSE,
-                     name=f"pytorch3d sgd reverse rerun", viewing_delay=0)
+                     name=f"comparison", viewing_delay=0)
         experiment.close()
     plot_icp_results(icp_res_file=file, reduce_batch=np.mean,
-                     names_to_include=lambda name: "rerun" in name or (
+                     names_to_include=lambda name: "comparison" in name or (
                              "volumetric" in name and "free pts 0 delta 0.025" in name))
     plot_icp_results(icp_res_file=file, reduce_batch=np.mean, x_filter=lambda x: x < 40,
-                     names_to_include=lambda name: "rerun" in name or (
+                     names_to_include=lambda name: "comparison" in name or (
                              "volumetric" in name and "free pts 0 delta 0.025" in name))
 
 
@@ -1487,10 +1504,10 @@ if __name__ == "__main__":
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
-        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=False)
+        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
-        for num_points in (300, 400, 500):
-            for seed in range(2,10):
+        for num_points in (5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500):
+            for seed in range(10):
                 build_model(experiment.objId, experiment.dd, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
 
