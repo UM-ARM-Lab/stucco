@@ -790,12 +790,7 @@ class PokeEnv(PybulletEnv):
             # TODO set up target model name for each level
             # TODO consider scale for some of the levels
             self.target_model_name = "mustard_normal"
-            self.obj_factory = YCBObjectFactory(self.target_model_name, "YcbMustardBottle",
-                                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                                vis_frame_pos=[-0.014, -0.0125, 0.04], flags=flags,
-                                                ranges=np.array([[-.15, .15], [-.15, .15], [-0.15, .4]]),
-                                                useFixedBase=False)
-
+            self.obj_factory = obj_factory_map[self.target_model_name]
             self.z = 0.1
         else:
             pass
@@ -1056,3 +1051,13 @@ class YCBObjectFactory(PybulletObjectFactory):
         frame_pos = np.array(self.vis_frame_pos) * self.scale
         return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
                             object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)
+
+obj_factory_map = {
+    "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
+                                       vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
+                                       vis_frame_pos=[-0.005, -0.005, 0.015]),
+    "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
+                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                               vis_frame_pos=[-.01, 0.0, -.01]),
+    # TODO create the other object factories
+}

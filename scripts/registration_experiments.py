@@ -32,7 +32,7 @@ from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklear
 from stucco.defines import NO_CONTACT_ID
 from stucco.env import poke
 from stucco.env.env import InfoKeys
-from stucco.env.poke import YCBObjectFactory
+from stucco.env.poke import obj_factory_map
 from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
@@ -559,9 +559,7 @@ class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, obj_factory=YCBObjectFactory("mustard_normal", "YcbMustardBottle",
-                                                    vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                                    vis_frame_pos=[-0.014, -0.0125, 0.04]),
+    def __init__(self, obj_factory=obj_factory_map["mustard_normal"],
                  device="cpu",
                  gui=True,
                  eval_period=10,
@@ -1051,17 +1049,21 @@ def predetermined_controls():
 
     ctrl += [[-1., 0., 0]] * 4
     ctrl += [[0., 1., 0]] * 10
-    for i in range(5):
-        ctrl += [[1., 0., 0]] * 3
-        ctrl += [[-1., 0., 0]] * 2
-        ctrl += [[0., 0., 1]] * 2
+    # for i in range(5):
+    #     ctrl += [[1., 0., 0]] * 3
+    #     ctrl += [[-1., 0., 0]] * 2
+    #     ctrl += [[0., 0., 1]] * 2
+
+    # ctrl += [[0., 0.9, 0]] * 6
+    # ctrl += [[1., 0., 0]] * 3
+    # for i in range(5):
+    #     ctrl += [[1., 0., 0]] * 4
+    #     ctrl += [[-1., 0., 0]] * 4
+    #     ctrl += [[0., 0., -1]] * 2
 
     ctrl += [[0., 0.9, 0]] * 6
-    ctrl += [[1., 0., 0]] * 3
-    for i in range(5):
-        ctrl += [[1., 0., 0]] * 4
-        ctrl += [[-1., 0., 0]] * 4
-        ctrl += [[0., 0., -1]] * 2
+    ctrl += [[1., 0., 0]] * 5
+    ctrl += [[0., 0., 1]] * 13
 
     rand.seed(0)
     # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
@@ -1154,77 +1156,78 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         else:
             contact_id.append(NO_CONTACT_ID)
 
-        # note that we update our registration regardless if we're in contact or not
-        dist_per_est_obj = []
-        transforms_per_object = []
-        rmse_per_object = []
-        best_segment_idx = None
-        for k, this_pts in enumerate(method):
-            if len(this_pts) < start_at_num_pts:
-                continue
-            # this_pts corresponds to tracked contact points that are segmented together
-            this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
-            volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
-                                                       torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
+        if reg_method != icp.ICPMethod.NONE:
+            # note that we update our registration regardless if we're in contact or not
+            dist_per_est_obj = []
+            transforms_per_object = []
+            rmse_per_object = []
+            best_segment_idx = None
+            for k, this_pts in enumerate(method):
+                if len(this_pts) < start_at_num_pts:
+                    continue
+                # this_pts corresponds to tracked contact points that are segmented together
+                this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
+                volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
+                                                           torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
 
-            if ground_truth_initialization:
-                best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
+                if ground_truth_initialization:
+                    best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
 
-            T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
-                                           reg_method)
+                T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
+                                               reg_method)
 
-            transforms_per_object.append(T)
-            T = T.inverse()
-            score = distances
-            best_tsf_index = np.argmin(score.detach().cpu())
+                transforms_per_object.append(T)
+                T = T.inverse()
+                score = distances
+                best_tsf_index = np.argmin(score.detach().cpu())
 
-            # pick object with lowest variance in its translation estimate
-            translations = T[:, :3, 3]
-            best_tsf_distances = (translations.var(dim=0).sum()).item()
+                # pick object with lowest variance in its translation estimate
+                translations = T[:, :3, 3]
+                best_tsf_distances = (translations.var(dim=0).sum()).item()
 
-            dist_per_est_obj.append(best_tsf_distances)
-            rmse_per_object.append(distances)
-            if best_distance is None or best_tsf_distances < best_distance:
-                best_distance = best_tsf_distances
-                best_tsf_guess = T[best_tsf_index]
-                best_segment_idx = k
+                dist_per_est_obj.append(best_tsf_distances)
+                rmse_per_object.append(distances)
+                if best_distance is None or best_tsf_distances < best_distance:
+                    best_distance = best_tsf_distances
+                    best_tsf_guess = T[best_tsf_index]
+                    best_segment_idx = k
 
-        # has at least one contact segment
-        if best_segment_idx is not None:
-            method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
-            logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
-            best_T = best_tsf_guess
+            # has at least one contact segment
+            if best_segment_idx is not None:
+                method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
+                logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
+                best_T = best_tsf_guess
 
-            # create distribution of initializations centered at our previous best guess translation
-            # with random orientations
-            # ensure one of them (first of the batch) has the exact transform
-            temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
-            temp[0] = best_tsf_guess
-            best_tsf_guess = temp
-            # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
+                # create distribution of initializations centered at our previous best guess translation
+                # with random orientations
+                # ensure one of them (first of the batch) has the exact transform
+                temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
+                temp[0] = best_tsf_guess
+                best_tsf_guess = temp
+                # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
 
-            T = transforms_per_object[best_segment_idx]
-            draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
+                T = transforms_per_object[best_segment_idx]
+                draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
 
-            # evaluate with chamfer distance
-            errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
-                                                         rmse_per_object[best_segment_idx], 0)
+                # evaluate with chamfer distance
+                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
+                                                             rmse_per_object[best_segment_idx], 0)
 
-            link_to_current_tf = tf.Transform3d(matrix=T)
-            interior_pts = link_to_current_tf.transform_points(volumetric_cost.model_interior_points_orig)
-            occupied = env.free_voxels[interior_pts]
+                link_to_current_tf = tf.Transform3d(matrix=T)
+                interior_pts = link_to_current_tf.transform_points(volumetric_cost.model_interior_points_orig)
+                occupied = env.free_voxels[interior_pts]
 
-            chamfer_err.append(errors_per_batch)
-            num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
-            freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
-            logger.info(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
+                chamfer_err.append(errors_per_batch)
+                num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
+                freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
+                logger.info(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
 
-            # draw mesh at where our best guess is
-            guess_pose = util.matrix_to_pos_rot(best_T)
-            id = pose_obj_map.get(-1)
-            id = env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5), object_id=id)
-            pose_obj_map[-1] = id
-            # TODO save current pose and contact point for playback
+                # draw mesh at where our best guess is
+                guess_pose = util.matrix_to_pos_rot(best_T)
+                id = pose_obj_map.get(-1)
+                id = env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5), object_id=id)
+                pose_obj_map[-1] = id
+                # TODO save current pose and contact point for playback
 
         if torch.is_tensor(action):
             action = action.cpu()
@@ -1463,7 +1466,8 @@ registration_map = {
     "icp-reverse": icp.ICPMethod.ICP_REVERSE,
     "icp-sgd": icp.ICPMethod.ICP_SGD,
     "icp-sgd-reverse": icp.ICPMethod.ICP_SGD_REVERSE,
-    "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT
+    "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT,
+    "none": icp.ICPMethod.NONE
 }
 parser.add_argument('--registration',
                     choices=registration_map.keys(),
@@ -1484,15 +1488,6 @@ parser.add_argument('--name', default="", help='additional name for the experime
 parser.add_argument('--plot_only', action='store_true',
                     help='plot only (previous) results without running any experiments')
 
-obj_factory_map = {
-    "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
-                                       vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                       vis_frame_pos=[-0.005, -0.005, 0.015]),
-    "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
-                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
-                               vis_frame_pos=[-.01, 0.0, -.01]),
-    # TODO create the other object factories
-}
 
 args = parser.parse_args()
 
@@ -1537,7 +1532,7 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         plot_icp_results(icp_res_file="poking.pkl",
-                         names_to_include=lambda name: "gt" not in name and "temp" not in name,
+                         names_to_include=lambda name: "gt" not in name and "temp" not in name and name != "VOLUMETRIC",
                          data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
 
         pass

@@ -11,3 +11,4 @@ class ICPMethod(enum.Enum):
     ICP_SGD_VOLUMETRIC_NO_ALIGNMENT = 4
     ICP_REVERSE = 5
     ICP_SGD_REVERSE = 6
+    NONE = 7
