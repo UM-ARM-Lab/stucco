@@ -1021,32 +1021,39 @@ def predetermined_controls():
         ctrl += [[1., 0., 0]] * 3
         ctrl += [[-1., 0., 1]] * 2
     # poke cap of mustard bottle, have to go in more
-    ctrl += [[1., 0., 0]] * 4
-    ctrl += [[-1., 0., 1]] * 2
+    # ctrl += [[1., 0., 0]] * 4
+    ctrl += [[0., 0., 1]] * 2
     # poke past the top of the mustard bottle
-    ctrl += [[1., 0., 0.1]] * 6
+    ctrl += [[1., 0., 0.1]] * 8
+    ctrl += [[-1., 0., 0.]] * 2
     # move to the side then poke while going down
-    ctrl += [[-1., -0.5, 0]] * 4
+    ctrl += [[-1., -0.9, 0]] * 3
     ctrl += [[-1., 0., 0]] * 2
-    for i in range(7):
+    ctrl += [[0., 0., -1]] * 6
+    for i in range(4):
         ctrl += [[1., 0., 0]] * 3
         ctrl += [[-1., 0., 0]] * 2
         ctrl += [[0., 0., -1]] * 2
 
     # move more to the side and poke up again
-    ctrl += [[0., -1., 0]] * 2
-    for i in range(7):
-        ctrl += [[1., 0., 0]] * 3
-        ctrl += [[-1., 0., 0]] * 2
-        ctrl += [[0., 0., 1]] * 2
+    # ctrl += [[0., -1., 0]] * 2
+    # for i in range(7):
+    #     ctrl += [[1., 0., 0]] * 3
+    #     ctrl += [[-1., 0., 0]] * 2
+    #     ctrl += [[0., 0., 1]] * 2
 
-    ctrl += [[0., -0.9, 0]] * 4
-    ctrl += [[1., 0., 0]] * 2
-    for i in range(8):
-        ctrl += [[1., 0., 0]] * 4
-        ctrl += [[-1., 0., 0]] * 4
-        ctrl += [[0., 0., -1]] * 2
+    # ctrl += [[0., -0.95, 0]] * 4
+    # ctrl += [[1., 0., 0]] * 2
+    # for i in range(8):
+    #     ctrl += [[1., 0., 0]] * 4
+    #     ctrl += [[-1., 0., 0]] * 4
 
+    # go directly down and sweep out
+    ctrl += [[0., -1, 0]] * 5
+    ctrl += [[1., 0., 0]] * 6
+    ctrl += [[0., 0., 1]] * 10
+
+    # go back to the left side
     ctrl += [[-1., 0., 0]] * 4
     ctrl += [[0., 1., 0]] * 10
     # for i in range(5):
@@ -1063,7 +1070,7 @@ def predetermined_controls():
 
     ctrl += [[0., 0.9, 0]] * 6
     ctrl += [[1., 0., 0]] * 5
-    ctrl += [[0., 0., 1]] * 13
+    ctrl += [[0., 0., -1]] * 13
 
     rand.seed(0)
     # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
@@ -1089,7 +1096,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False,
              eval_num_points=200, ctrl_noise_max=0.005):
-    name = f"{reg_method.name}{name}"
+    name = f"{reg_method.name} {name}"
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
     fullname = os.path.join(cfg.DATA_DIR, f'poking.pkl')
@@ -1531,8 +1538,11 @@ if __name__ == "__main__":
 
         env.close()
     elif args.experiment == "debug":
+        # plot_icp_results(icp_res_file="poking.pkl",
+        #                  names_to_include=lambda name: "gt" not in name and "temp" not in name and name != "VOLUMETRIC",
+        #                  data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
         plot_icp_results(icp_res_file="poking.pkl",
-                         names_to_include=lambda name: "gt" not in name and "temp" not in name and name != "VOLUMETRIC",
+                         names_to_include=lambda name: "h2" in name and "temp" not in name,
                          data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
 
         pass
