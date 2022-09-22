@@ -6,8 +6,9 @@ import os
 import gpytorch
 import numpy as np
 import pybullet as p
-import pytorch_kinematics
 import torch
+import open3d as o3d
+
 import logging
 from arm_pytorch_utilities import tensor_utils, rand, linalg
 from arm_pytorch_utilities.grad import jacobian
@@ -89,13 +90,21 @@ def sample_dx_on_tangent_plane(n, alpha, num_samples=100):
     return dx_samples
 
 
-class PybulletObjectFactory(abc.ABC):
-    def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1), **kwargs):
+class ObjectFactory(abc.ABC):
+    def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1),
+                 **kwargs):
         self.name = name
         self.scale = scale
+        # frame from model's base frame to the simulation's use of the model
         self.vis_frame_pos = vis_frame_pos
         self.vis_frame_rot = vis_frame_rot
         self.other_load_kwargs = kwargs
+
+        # use external mesh library to compute closest point for non-convex meshes
+        self._mesh = None
+        self._mesht = None
+        self._raycasting_scene = None
+        self._face_normals = None
 
     @abc.abstractmethod
     def make_collision_obj(self, z, rgba=None):
@@ -105,8 +114,63 @@ class PybulletObjectFactory(abc.ABC):
     def get_mesh_resource_filename(self):
         """Return the path to the mesh resource file (.obj, .stl, ...)"""
 
+    def get_mesh_high_poly_resource_filename(self):
+        """Return the path to the high poly mesh resource file"""
+        return self.get_mesh_resource_filename()
 
-# TODO score with freespace penetration
+    def draw_mesh(self, dd, name, pose, rgba, object_id=None):
+        frame_pos = np.array(self.vis_frame_pos) * self.scale
+        return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
+                            object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)
+
+    @tensor_utils.handle_batch_input
+    def object_frame_closest_point(self, points_in_object_frame, invert_normal_for_inside_query=False):
+        """Return the closest surface point in object frame, the signed distance to it, and the surface normal for
+        query points in object frame. Assumes the input is in the simulator object frame and will return outputs
+        also in the simulator object frame. Note that the simulator object frame and the mesh object frame may be
+        different"""
+        if self._mesh is None:
+            # scale mesh the approrpiate amount
+            self._mesh = o3d.io.read_triangle_mesh(self.get_mesh_high_poly_resource_filename()).scale(self.scale,
+                                                                                                      [0, 0, 0])
+            # convert from mesh object frame to simulator object frame
+            x, y, z, w = self.vis_frame_rot
+            self._mesh = self._mesh.rotate(o3d.geometry.get_rotation_matrix_from_quaternion((w, x, y, z)),
+                                           center=[0, 0, 0])
+            self._mesh = self._mesh.translate(np.array(self.vis_frame_pos) * self.scale)
+
+            self._mesht = o3d.t.geometry.TriangleMesh.from_legacy(self._mesh)
+            self._raycasting_scene = o3d.t.geometry.RaycastingScene()
+            _ = self._raycasting_scene.add_triangles(self._mesht)
+            self._mesh.compute_triangle_normals()
+            self._face_normals = np.asarray(self._mesh.triangle_normals)
+
+        if torch.is_tensor(points_in_object_frame):
+            dtype = points_in_object_frame.dtype
+            device = points_in_object_frame.device
+            points_in_object_frame = points_in_object_frame.detach().numpy()
+        else:
+            dtype = torch.float
+            device = "cpu"
+        points_in_object_frame = points_in_object_frame.astype(np.float32)
+
+        closest = self._raycasting_scene.compute_closest_points(points_in_object_frame)
+        closest_points = closest['points']
+        face_ids = closest['primitive_ids']
+        pts = closest_points.numpy()
+        normals = self._face_normals[face_ids.numpy()]
+
+        distance = np.linalg.norm(points_in_object_frame - pts, axis=-1)
+        rays = np.concatenate([points_in_object_frame, np.ones_like(points_in_object_frame)], axis=-1)
+        intersection_counts = self._raycasting_scene.count_intersections(rays).numpy()
+        is_inside = intersection_counts % 2 == 1
+        distance[is_inside] *= -1
+        if invert_normal_for_inside_query:
+            normals[is_inside] *= -1
+
+        return tensor_utils.ensure_tensor(device, dtype, pts, distance, normals)
+
+
 class ICPPoseScore:
     """Score an ICP result on domain-specific plausibility; lower score is better.
     This function is designed for objects that manipulator robots will usually interact with"""
@@ -205,7 +269,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                  upright_bias=0.3,
                  verify_icp_error=False, evaluate_icpev_correlation=False,
                  distance_filter=None,
-                 debug_obj_factory: PybulletObjectFactory = None, **kwargs):
+                 debug_obj_factory: ObjectFactory = None, **kwargs):
         """Test object ID is something we can test the distances to"""
         super(ICPEVExplorationPolicy, self).__init__(**kwargs)
 
@@ -436,11 +500,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         for b in range(self.B):
             pos, rot = util.matrix_to_pos_rot(m[b])
             object_id = self.debug_obj_ids.get(b, None)
-            object_id = self.dd.draw_mesh("icp_distribution", self.debug_obj_factory.get_mesh_resource_filename(),
-                                          (pos, rot), scale=self.debug_obj_factory.scale, object_id=object_id,
-                                          rgba=(0, 0.8, 0.2, 0.2),
-                                          vis_frame_pos=self.debug_obj_factory.vis_frame_pos,
-                                          vis_frame_rot=self.debug_obj_factory.vis_frame_rot)
+            object_id = self.debug_obj_factory.draw_mesh(self.dd, "icp_distribution", (pos, rot), object_id=object_id,
+                                                         rgba=(0, 0.8, 0.2, 0.2))
             self.debug_obj_ids[b] = object_id
 
         if new_points_world_frame is not None:
@@ -803,15 +864,37 @@ class PyBulletNaiveSDF(util.ObjectFrameSDF):
         sdf_grad = -torch.tensor(sdf_grad, dtype=dtype, device=device)
         return sdf, sdf_grad
 
-    def get_voxel_view(self, voxels: util.VoxelGrid = None) -> torch_view.TorchMultidimView:
-        if voxels is None:
-            voxels = util.VoxelGrid(0.01, [[-1, 1], [-1, 1], [-0.6, 1]])
 
-        pts = voxels.get_voxel_center_points()
-        sdf_val, sdf_grad = self.__call__(pts.unsqueeze(0))
-        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
+class MeshSDF(util.ObjectFrameSDF):
+    def __init__(self, obj_factory: ObjectFactory, plot_point_type=PlotPointType.NONE, vis=None):
+        self.obj_factory = obj_factory
+        self.plot_point_type = plot_point_type
+        self.vis = vis
 
-        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim, invalid_value=self.__call__)
+    def __call__(self, points_in_object_frame):
+        if len(points_in_object_frame.shape) == 2:
+            points_in_object_frame = points_in_object_frame.unsqueeze(0)
+        B, N, d = points_in_object_frame.shape
+
+        # compute SDF value for new sampled points
+        pts, sdf, sdf_grad = self.obj_factory.object_frame_closest_point(points_in_object_frame,
+                                                                         invert_normal_for_inside_query=True)
+        # want the gradient from low to high value (pointing out of surface), so need negative
+        sdf_grad *= -1
+
+        # points are transformed to link frame, thus it needs to compare against the object in link frame
+        # objId is not in link frame and shouldn't be moved
+        if self.vis is not None and self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
+            for b in range(B):
+                for i in range(N):
+                    self.vis.draw_point("test_point", points_in_object_frame[b, i], color=(1, 0, 0), length=0.005)
+                    self.vis.draw_2d_line(f"test_normal", points_in_object_frame[b, i],
+                                          sdf_grad[b, i].detach().cpu(), color=(0, 0, 0),
+                                          size=2., scale=0.03)
+                    self.vis.draw_point("test_point_surf", pts[b, i].detach().cpu(), color=(0, 1, 0),
+                                        length=0.005,
+                                        label=f'{sdf[b, i].item():.5f}')
+        return sdf, sdf_grad
 
 
 class CachedSDF(util.ObjectFrameSDF):

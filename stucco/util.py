@@ -104,7 +104,6 @@ class ObjectFrameSDF(abc.ABC):
             towards higher SDF values (away from surface when outside the object and towards the surface when inside)
         """
 
-    @abc.abstractmethod
     def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
         """
         Get a voxel view of a part of the SDF
@@ -112,6 +111,14 @@ class ObjectFrameSDF(abc.ABC):
         implementation dependent
         :return:
         """
+        if voxels is None:
+            voxels = VoxelGrid(0.01, [[-1, 1], [-1, 1], [-0.6, 1]])
+
+        pts = voxels.get_voxel_center_points()
+        sdf_val, sdf_grad = self.__call__(pts.unsqueeze(0))
+        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
+
+        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim, invalid_value=self.__call__)
 
     def get_filtered_points(self, unary_filter, voxels: VoxelGrid = None) -> torch.tensor:
         """

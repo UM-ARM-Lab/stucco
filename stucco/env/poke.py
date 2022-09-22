@@ -24,7 +24,7 @@ from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector, ContactSensor
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
-from stucco.exploration import PybulletObjectFactory
+from stucco.exploration import ObjectFactory
 from stucco import exploration
 from stucco import util
 
@@ -776,6 +776,7 @@ class PokeEnv(PybulletEnv):
         # use a floating gripper
         self.gripperId = p.loadURDF(os.path.join(cfg.URDF_DIR, "panda_gripper.urdf"), self.init,
                                     self.endEffectorOrientation)
+
         p.changeDynamics(self.gripperId, PandaJustGripperID.FINGER_A, lateralFriction=2)
         p.changeDynamics(self.gripperId, PandaJustGripperID.FINGER_B, lateralFriction=2)
 
@@ -830,7 +831,7 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
 
         # SDF for the object
-        obj_frame_sdf = exploration.PyBulletNaiveSDF(self.testObjId, vis=self._dd)
+        obj_frame_sdf = exploration.MeshSDF(self.obj_factory, vis=self._dd)
         self.target_sdf = exploration.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
                                                 obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
@@ -1029,7 +1030,7 @@ class ArmPointToConfig(PlanarPointToConfig):
             super(ArmPointToConfig, self).__init__(*data)
 
 
-class YCBObjectFactory(PybulletObjectFactory):
+class YCBObjectFactory(ObjectFactory):
     def __init__(self, name, ycb_name, ranges=np.array([[-.15, .15], [-.15, .15], [-0.15, .4]]), **kwargs):
         super(YCBObjectFactory, self).__init__(name, **kwargs)
         self.ycb_name = ycb_name
@@ -1047,10 +1048,8 @@ class YCBObjectFactory(PybulletObjectFactory):
     def get_mesh_resource_filename(self):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
-    def draw_mesh(self, dd, name, pose, rgba, object_id=None):
-        frame_pos = np.array(self.vis_frame_pos) * self.scale
-        return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
-                            object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)
+    def get_mesh_high_poly_resource_filename(self):
+        return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
 obj_factory_map = {
     "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",

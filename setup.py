@@ -14,6 +14,6 @@ setup(
         'pytest', 'pybullet', 'pynput', 'trimesh', 'pymeshlab', 'mesh-to-sdf'
         'window_recorder @ git+ssh://git@github.com/LemonPi/window_recorder.git'
     ], install_requires=[
-        'matplotlib', 'numpy', 'scipy', 'scikit-learn', 'torch', 'gpytorch',
+        'matplotlib', 'numpy', 'scipy', 'scikit-learn', 'torch', 'gpytorch', 'open3d'
     ]
 )

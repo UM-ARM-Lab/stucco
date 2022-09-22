@@ -344,6 +344,43 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
     return points.to(device=device), normals.to(device=device), bb.to(device=device)
 
 
+def sample_mesh_points(obj_factory: exploration.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
+                       clean_cache=False, device="cpu"):
+    fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
+    if os.path.exists(fullname):
+        cache = torch.load(fullname)
+        if name not in cache:
+            cache[name] = {}
+        if seed not in cache[name]:
+            cache[name][seed] = {}
+        if not clean_cache and num_points in cache[name][seed]:
+            res = cache[name][seed][num_points]
+            return (v.to(device=device) for v in res)
+    else:
+        cache = {name: {seed: {}}}
+
+    if obj_factory is None:
+        raise RuntimeError(f"Expect model points to be cached for {name} {seed} {num_points}")
+
+    mesh = obj_factory._mesh
+
+    with rand.SavedRNG():
+        rand.seed(seed)
+
+        # assume mesh is in object frame
+        pcd = mesh.sample_points_poisson_disk(number_of_points=num_points, init_factor=init_factor, seed=seed)
+        points = np.asarray(pcd.points)
+        _, _, normals = obj_factory.object_frame_closest_point(points)
+
+    points = torch.tensor(points)
+    normals = torch.tensor(normals)
+
+    cache[name][seed][num_points] = points, normals, None
+    torch.save(cache, fullname)
+
+    return points.to(device=device), normals.to(device=device), None
+
+
 def pose_error(target_pose, guess_pose):
     # mirrored, so being off by 180 degrees is fine
     yaw_error = min(abs(angular_diff(target_pose[-1], guess_pose[-1])),

@@ -43,7 +43,7 @@ from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplo
 from stucco.icp import costs as icp_costs
 from stucco import util
 
-from stucco.retrieval_controller import sample_model_points, TrackingMethod, OurSoftTrackingMethod, \
+from stucco.retrieval_controller import sample_mesh_points, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
 
 # try:
@@ -80,20 +80,15 @@ reject_model_pts = {
 }
 
 
-def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=False, device="cpu"):
-    points, normals, _ = sample_model_points(target_obj_id, reject_too_close=0.006,
-                                             num_points=num_points,
-                                             force_z=None,
-                                             mid_z=0.05,
-                                             seed=seed, clean_cache=True,
-                                             random_sample_sigma=0.2,
-                                             name=model_name, vis=None,
-                                             device=device,
-                                             other_rejection_criteria=reject_model_pts.get(model_name, None),
-                                             restricted_points=restricted_pts.get(model_name, []))
+def build_model(obj_factory: exploration.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
+                device="cpu"):
+    points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
+                                            seed=seed, clean_cache=True,
+                                            name=model_name,
+                                            device=device)
     for i, pt in enumerate(points):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -normals[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.draw_2d_line(f"mn.{i}", pt, normals[i], color=(0, 0, 0), size=2., scale=0.03)
 
     print(f"finished building {model_name} {seed} {num_points}")
     if pause_at_end:
@@ -102,7 +97,7 @@ def build_model(target_obj_id, vis, model_name, seed, num_points, pause_at_end=F
 
 
 def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, device="cpu"):
-    return build_model(env.target_object_id, env.vis, env.obj_factory.name, seed, num_points, pause_at_end=pause_at_end,
+    return build_model(env.obj_factory, env.vis, env.obj_factory.name, seed, num_points, pause_at_end=pause_at_end,
                        device=device)
 
 
@@ -180,13 +175,13 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
     vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=obj_name, seed=0,
-                                                                   device=exp.device)
+    model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=obj_name, seed=0,
+                                                                  device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=obj_name, seed=0, device=exp.device)
+    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+                                                                          name=obj_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -197,8 +192,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
     for num_points in num_points_list:
         # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-        model_points, model_normals, _ = sample_model_points(num_points=num_points, name=obj_name, seed=seed,
-                                                             device=exp.device)
+        model_points, model_normals, _ = sample_mesh_points(num_points=num_points, name=obj_name, seed=seed,
+                                                            device=exp.device)
 
         pose = p.getBasePositionAndOrientation(target_obj_id)
         link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -291,13 +286,13 @@ def test_icp_freespace(exp,
     vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=obj_name, seed=0,
-                                                                   device=exp.device)
+    model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=obj_name, seed=0,
+                                                                  device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=obj_name, seed=0, device=exp.device)
+    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+                                                                          name=obj_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -305,8 +300,8 @@ def test_icp_freespace(exp,
     B = 30
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
-    model_points, model_normals, _ = sample_model_points(num_points=num_points, name=obj_name, seed=seed,
-                                                         device=exp.device)
+    model_points, model_normals, _ = sample_mesh_points(num_points=num_points, name=obj_name, seed=seed,
+                                                        device=exp.device)
 
     pose = p.getBasePositionAndOrientation(target_obj_id)
     link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -393,13 +388,13 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
         p.stepSimulation()
 
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
-                                                                   device=exp.device)
+    model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                  device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0, device=exp.device)
+    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+                                                                          name=model_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
@@ -507,7 +502,7 @@ def plot_icp_results(names_to_include=None, logy=True, plot_median=True, margina
             # is sorted, so can just leave out the last few parts of the last dimension
             to_keep_ratio = (100 - leave_out_percentile) / 100
             to_keep = round(errors.shape[-1] * to_keep_ratio)
-            errors = errors[:,:,:to_keep]
+            errors = errors[:, :, :to_keep]
 
             # remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=-1)
             # to_keep = errors < remove_threshold[:, :, None]
@@ -627,13 +622,10 @@ class ShapeExplorationExperiment(abc.ABC):
             p.stepSimulation()
 
         # these are in object frame (aligned with [0,0,0], [0,0,0,1]
-        model_points, model_normals, _ = sample_model_points(target_obj_id, num_points=500, force_z=None,
-                                                             mid_z=0.05,
-                                                             seed=0, clean_cache=build_model,
-                                                             random_sample_sigma=0.2,
-                                                             name=model_name, vis=vis,
-                                                             device=self.device,
-                                                             restricted_points=restricted_pts[model_name])
+        model_points, model_normals, _ = sample_mesh_points(self.obj_factory, num_points=500,
+                                                            seed=0, clean_cache=build_model,
+                                                            name=model_name,
+                                                            device=self.device)
         pose = p.getBasePositionAndOrientation(target_obj_id)
 
         self.policy.save_model_points(model_points, model_normals, pose)
@@ -726,7 +718,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
-        obj_frame_sdf = stucco.exploration.PyBulletNaiveSDF(self.testObjId, vis=self.dd)
+        obj_frame_sdf = stucco.exploration.MeshSDF(self.obj_factory, vis=self.dd)
         # inflate the range_per_dim to allow for pose estimates around a single point
         range_per_dim *= 2
         # fix the z dimension since there shouldn't be that much variance across it
@@ -1116,13 +1108,13 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     model_name = env.target_model_name
     # sample_in_order = env.level in [poke.Levels.COFFEE_CAN]
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-    model_points_eval, model_normals_eval, _ = sample_model_points(num_points=eval_num_points, name=model_name, seed=0,
-                                                                   device=env.device)
+    model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                  device=env.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_model_points(num_points=register_num_points,
-                                                                           name=model_name, seed=0, device=env.device)
+    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+                                                                          name=model_name, seed=0, device=env.device)
 
     pose = p.getBasePositionAndOrientation(env.target_object_id())
     link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -1495,7 +1487,6 @@ parser.add_argument('--name', default="", help='additional name for the experime
 parser.add_argument('--plot_only', action='store_true',
                     help='plot only (previous) results without running any experiments')
 
-
 args = parser.parse_args()
 
 if __name__ == "__main__":
@@ -1510,7 +1501,7 @@ if __name__ == "__main__":
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in range(10):
-                build_model(experiment.objId, experiment.dd, args.task, seed=seed, num_points=num_points,
+                build_model(obj_factory, experiment.dd, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
 
     elif args.experiment == "globalmin":
