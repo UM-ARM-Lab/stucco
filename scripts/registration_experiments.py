@@ -67,18 +67,6 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 
 logger = logging.getLogger(__name__)
 
-restricted_pts = {
-    'mustard_normal': [(0.01897749298212774, -0.008559855822130511, 0.001455972652355926), (0.0314, -0.0126, 0.2169),
-                       (-0.0348, -0.0616, -0.0007), (0.0450, 0.0021, 0.2208), (-0.0177, -0.0202, 0.2220),
-                       (-0.0413, 0.0119, -0.0006), (0.0126, 0.0265, 0.0018), (-0.0090, 0.0158, 0.2203),
-                       (-0.0114, -0.0462, -0.0009), (0.0103, -0.0085, 0.2200), (0.0096, -0.0249, 0.2201)]
-}
-
-reject_model_pts = {
-    'mustard_normal': lambda pt, normal: abs(normal[2]) > 0.99 and abs(pt[2]) < 0.01,
-    'banana': lambda pt, normal: abs(normal[0]) > 0.99
-}
-
 
 def build_model(obj_factory: exploration.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu"):
@@ -373,7 +361,7 @@ def test_icp_freespace(exp,
 def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
                                register_num_points=500, eval_num_points=200,
                                normal_scale=0.05, upto_index=-1, upright_bias=0.1,
-                               model_name="mustard_normal", run_name=""):
+                               model_name="mustard", run_name=""):
     name = f"{model_name} {run_name}".strip()
     fullname = os.path.join(cfg.DATA_DIR, f'exploration_res.pkl')
     cache = torch.load(fullname)
@@ -554,7 +542,7 @@ class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, obj_factory=obj_factory_map["mustard_normal"],
+    def __init__(self, obj_factory=obj_factory_map["mustard"],
                  device="cpu",
                  gui=True,
                  eval_period=10,
@@ -612,7 +600,7 @@ class ShapeExplorationExperiment(abc.ABC):
         """Evaluate errors and append to given lists"""
 
     def run(self, seed=0, timesteps=202, build_model=False, clean_cache=False,
-            model_name="mustard_normal", run_name=""):
+            model_name="mustard", run_name=""):
         target_obj_id = self.objId
         vis = self.dd
         name = f"{model_name} {run_name}".strip()
@@ -1368,7 +1356,7 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
                                            name=f"volumetric {num_points}np delta {surface_delta} scale {freespace_cost_scale}",
                                            viewing_delay=0)
                 experiment.close()
-        some_side_x_threshold_map = {"mustard_normal": -0.04}
+        some_side_x_threshold_map = {"mustard": -0.04}
         # for surface_delta in [0.01, 0.025, 0.05]:
         for thres in [0.0, ]:
             for surface_delta in [0.01, ]:
@@ -1502,8 +1490,8 @@ parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
-task_map = {"mustard_normal": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA}
-parser.add_argument('--task', default="mustard_normal", choices=task_map.keys(), help='what task to run')
+task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA}
+parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
                     help='plot only (previous) results without running any experiments')

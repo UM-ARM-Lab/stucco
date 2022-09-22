@@ -789,8 +789,7 @@ class PokeEnv(PybulletEnv):
     def create_target_obj(self, target_pos, target_rot, flags, immovable=False, mass=2):
         if self.level in [Levels.MUSTARD]:
             # TODO set up target model name for each level
-            # TODO consider scale for some of the levels
-            self.target_model_name = "mustard_normal"
+            self.target_model_name = "mustard"
             self.obj_factory = obj_factory_map[self.target_model_name]
             self.z = 0.1
         else:
@@ -1052,7 +1051,7 @@ class YCBObjectFactory(ObjectFactory):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
 obj_factory_map = {
-    "mustard_normal": YCBObjectFactory("mustard_normal", "YcbMustardBottle",
+    "mustard": YCBObjectFactory("mustard", "YcbMustardBottle",
                                        vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
                                        vis_frame_pos=[-0.005, -0.005, 0.015]),
     "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
