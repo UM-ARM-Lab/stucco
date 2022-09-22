@@ -934,14 +934,14 @@ class CachedSDF(util.ObjectFrameSDF):
             if gt_sdf is None:
                 raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
 
-            coords, pts = util.get_coordinates_and_points_in_grid(resolution, range_per_dim)
-            sdf_val, sdf_grad = gt_sdf(pts.unsqueeze(0))
+            coords, pts = util.get_coordinates_and_points_in_grid(self.resolution, self.ranges)
+            sdf_val, sdf_grad = gt_sdf(pts)
             cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
             cached_underlying_sdf_grad = sdf_grad.squeeze(0)
             # cached_underlying_sdf_grad = sdf_grad.reshape(cached_underlying_sdf.shape + (3,))
             # confirm the values work
             if self.debug_check_sdf:
-                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, range_per_dim,
+                debug_view = torch_view.TorchMultidimView(cached_underlying_sdf, self.ranges,
                                                           invalid_value=self._fallback_sdf_value_func)
                 query = debug_view[pts]
                 assert torch.allclose(sdf_val, query)

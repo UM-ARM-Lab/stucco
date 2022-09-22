@@ -1453,9 +1453,30 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
                              "volumetric" in name and "free pts 0 delta 0.025" in name))
 
 
+def plot_sdf(experiment: ICPEVExperiment, filter_pts=None):
+    vis = experiment.dd
+    coords, pts = util.get_coordinates_and_points_in_grid(experiment.sdf.resolution, experiment.sdf.ranges)
+    if filter_pts is not None:
+        pts = filter_pts(pts)
+    sdf_val, sdf_grad = experiment.sdf(pts)
+
+    # color code them
+    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min(), vmax=sdf_val.max())
+    color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
+    rgb = color_map.to_rgba(sdf_val.reshape(-1))
+    rgb = rgb[:, :-1]
+
+    for i in range(len(pts)):
+        vis.draw_point(f"sdf_pt.{i}", pts[i],
+                       color=rgb[i], length=0.003)
+        vis.draw_2d_line(f"sdf_n.{i}", pts[i], sdf_grad[i],
+                         color=rgb[i], size=1., scale=0.01)
+    input("finished")
+
+
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
-                    choices=['build', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
+                    choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
                              'poke-visualize-sdf', 'debug'],
                     help='which experiment to run')
 registration_map = {
@@ -1503,6 +1524,19 @@ if __name__ == "__main__":
             for seed in range(10):
                 build_model(obj_factory, experiment.dd, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
+    elif args.experiment == "plot-sdf":
+        experiment = ICPEVExperiment(obj_factory=obj_factory)
+
+
+        def filter(pts):
+            c1 = (pts[:, 0] > -0.15) & (pts[:, 0] < 0.15)
+            c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
+            c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.4)
+            c = c1 & c2 & c3
+            return pts[c][::2]
+
+
+        plot_sdf(experiment, filter_pts=filter)
 
     elif args.experiment == "globalmin":
         experiment_ground_truth_initialization_for_global_minima_comparison(obj_factory, plot_only=args.plot_only,
