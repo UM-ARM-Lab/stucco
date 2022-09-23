@@ -9,6 +9,7 @@ from arm_pytorch_utilities.math_utils import angular_diff
 from arm_pytorch_utilities.controller import Controller
 from pynput import keyboard
 
+import stucco.sdf
 from stucco import detection, tracking
 from stucco import exploration
 from stucco.defines import NO_CONTACT_ID
@@ -344,7 +345,7 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
     return points.to(device=device), normals.to(device=device), bb.to(device=device)
 
 
-def sample_mesh_points(obj_factory: exploration.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
+def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
                        clean_cache=False, device="cpu"):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):

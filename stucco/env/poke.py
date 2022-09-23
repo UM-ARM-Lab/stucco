@@ -13,6 +13,8 @@ import matplotlib.colors as colors
 import matplotlib.cm as cmx
 
 from arm_pytorch_utilities import tensor_utils
+
+import stucco.sdf
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
     ContactInfo, make_cylinder, closest_point_on_surface
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
@@ -23,9 +25,7 @@ from stucco import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector, ContactSensor
-from stucco.detection_impl import PybulletResidualPlanarContactSensor
-from stucco.exploration import ObjectFactory
-from stucco import exploration
+from stucco.sdf import ObjectFactory
 from stucco import util
 
 import pytorch_kinematics.transforms as tf
@@ -830,9 +830,9 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
 
         # SDF for the object
-        obj_frame_sdf = exploration.MeshSDF(self.obj_factory, vis=self._dd)
-        self.target_sdf = exploration.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
-                                                obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
+        self.target_sdf = stucco.sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
+                                               obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
             # display the voxels created for this sdf
             interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.0)
@@ -843,9 +843,9 @@ class PokeEnv(PybulletEnv):
         # SDF for the robot (used for filling up freespace voxels)
         # should be fine to use the actual robot ID for the ground truth SDF since we won't be querying outside of the
         # SDF range (and thus need to actually use the GT lookup)
-        robot_frame_sdf = exploration.PyBulletNaiveSDF(self.robot_id, vis=self._dd)
-        self.robot_sdf = exploration.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
-                                               robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id, vis=self._dd)
+        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
+                                              robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
         if self.clean_cache:
@@ -1050,10 +1050,11 @@ class YCBObjectFactory(ObjectFactory):
     def get_mesh_high_poly_resource_filename(self):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
+
 obj_factory_map = {
     "mustard": YCBObjectFactory("mustard", "YcbMustardBottle",
-                                       vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                       vis_frame_pos=[-0.005, -0.005, 0.015]),
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
+                                vis_frame_pos=[-0.005, -0.005, 0.015]),
     "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                vis_frame_pos=[-.01, 0.0, -.01]),

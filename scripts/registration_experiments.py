@@ -13,6 +13,7 @@ from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
 import stucco.exploration
+import stucco.sdf
 import stucco.util
 import torch
 import pybullet as p
@@ -68,7 +69,7 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
-def build_model(obj_factory: exploration.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
+def build_model(obj_factory: stucco.sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu"):
     points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
                                             seed=seed, clean_cache=True,
@@ -706,7 +707,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
         p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
 
-        obj_frame_sdf = stucco.exploration.MeshSDF(self.obj_factory, vis=self.dd)
+        obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
         # inflate the range_per_dim to allow for pose estimates around a single point
         range_per_dim *= 2
         # fix the z dimension since there shouldn't be that much variance across it
@@ -718,8 +719,8 @@ class ICPEVExperiment(ShapeExplorationExperiment):
             for i, pt in enumerate(extreme_pts):
                 self.dd.draw_point(f"bb.{i}", pt, color=(0, 1, 0), length=0.1)
 
-        self.sdf = stucco.exploration.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                                obj_frame_sdf, device=self.device, clean_cache=clean_cache)
+        self.sdf = stucco.sdf.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
+                                        obj_frame_sdf, device=self.device, clean_cache=clean_cache)
         self.set_policy(
             policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 
