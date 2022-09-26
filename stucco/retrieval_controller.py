@@ -346,7 +346,7 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
 
 
 def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
-                       clean_cache=False, dtype=torch.float, device="cpu"):
+                       clean_cache=False, dtype=torch.float, min_init_sample_points = 200, device="cpu"):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -368,9 +368,18 @@ def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=
     with rand.SavedRNG():
         rand.seed(seed)
 
+        # because the point sampling is not dispersed, we do the dispersion ourselves
+        # we accomplish this by sampling more points than we need then randomly selecting a subset
+        sample_num_points = max(min_init_sample_points, 2*num_points)
+
         # assume mesh is in object frame
-        pcd = mesh.sample_points_poisson_disk(number_of_points=num_points, init_factor=init_factor, seed=seed)
+        # pcd = mesh.sample_points_poisson_disk(number_of_points=num_points, init_factor=init_factor, seed=seed)
+        pcd = mesh.sample_points_uniformly(number_of_points=sample_num_points, seed=seed)
         points = np.asarray(pcd.points)
+
+        # subsample
+        points = np.random.permutation(points)[:num_points]
+
         _, _, normals = obj_factory.object_frame_closest_point(points)
 
     points = torch.tensor(points)
