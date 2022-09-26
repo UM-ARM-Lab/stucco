@@ -346,7 +346,7 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
 
 
 def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
-                       clean_cache=False, device="cpu"):
+                       clean_cache=False, dtype=torch.float, device="cpu"):
     fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
@@ -356,7 +356,7 @@ def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=
             cache[name][seed] = {}
         if not clean_cache and num_points in cache[name][seed]:
             res = cache[name][seed][num_points]
-            return (v.to(device=device) for v in res)
+            return (v.to(device=device, dtype=dtype) if v is not None else None for v in res)
     else:
         cache = {name: {seed: {}}}
 
@@ -379,7 +379,7 @@ def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=
     cache[name][seed][num_points] = points, normals, None
     torch.save(cache, fullname)
 
-    return points.to(device=device), normals.to(device=device), None
+    return points.to(device=device, dtype=dtype), normals.to(device=device, dtype=dtype), None
 
 
 def pose_error(target_pose, guess_pose):

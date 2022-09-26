@@ -72,7 +72,7 @@ class ObjectFactory(abc.ABC):
         if torch.is_tensor(points_in_object_frame):
             dtype = points_in_object_frame.dtype
             device = points_in_object_frame.device
-            points_in_object_frame = points_in_object_frame.detach().numpy()
+            points_in_object_frame = points_in_object_frame.detach().cpu().numpy()
         else:
             dtype = torch.float
             device = "cpu"
