@@ -138,7 +138,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
              register_num_points=500, eval_num_points=200, num_points_list=(2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100),
              num_freespace=0,
-             freespace_on_one_side=True,
+             freespace_x_filter_threshold=0.,  # 0 allows only positive, -10 allows any
              surface_delta=0.025,
              freespace_cost_scale=20,
              ground_truth_initialization=False,
@@ -208,10 +208,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
 
         # sample points in freespace and plot them
         # sample only on one side
-        if freespace_on_one_side:
-            used_model_points = model_points_eval[:, 0] > 0
-        else:
-            used_model_points = model_points_eval[:, 0] > -10
+        used_model_points = model_points_eval[:, 0] > freespace_x_filter_threshold
         # extrude model points that are on the surface of the object along their normal vector
         free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] + \
                                         model_normals_world_frame_eval[used_model_points][
@@ -1303,7 +1300,7 @@ def experiment_ground_truth_initialization_for_global_minima_comparison(obj_fact
                 test_icp(experiment, seed=seed, register_num_points=500,
                          num_freespace=100,
                          surface_delta=0.01,
-                         freespace_on_one_side=False,
+                         freespace_x_filter_threshold=-10,
                          freespace_cost_scale=20,
                          name=f"gt init volumetric freespace sdf res {sdf_resolution}",
                          icp_method=icp.ICPMethod.VOLUMETRIC,
@@ -1401,7 +1398,13 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
-                     icp_method=icp.ICPMethod.VOLUMETRIC,
+                     icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=-10,
+                     name=f"comparison 100 free pts all around", viewing_delay=0)
+        experiment.close()
+        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+                     icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=0.,
                      name=f"comparison 100 free pts", viewing_delay=0)
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
