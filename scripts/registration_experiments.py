@@ -136,7 +136,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 
 
 def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
-             register_num_points=500, eval_num_points=200, num_points_list=(5, 10, 20, 30, 40, 50, 100),
+             register_num_points=500, eval_num_points=200, num_points_list=(2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100),
              num_freespace=0,
              freespace_on_one_side=True,
              surface_delta=0.025,
@@ -1509,7 +1509,7 @@ if __name__ == "__main__":
     if args.experiment == "build":
         experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
-        for num_points in (5, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500):
+        for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in range(10):
                 build_model(obj_factory, experiment.dd, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
