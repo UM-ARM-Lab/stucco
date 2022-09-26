@@ -195,7 +195,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         i = 0
         for i, pt in enumerate(model_points_world_frame):
             vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-            vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+            vis.draw_2d_line(f"mn.{i}", pt, model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
         vis.clear_visualization_after("mpt", i + 1)
         vis.clear_visualization_after("mn", i + 1)
 
@@ -213,7 +213,7 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
         else:
             used_model_points = model_points_eval[:, 0] > -10
         # extrude model points that are on the surface of the object along their normal vector
-        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
+        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] + \
                                         model_normals_world_frame_eval[used_model_points][
                                         :num_freespace] * surface_delta
         free_voxels[free_space_world_frame_points] = 1
@@ -303,7 +303,7 @@ def test_icp_freespace(exp,
     i = 0
     for i, pt in enumerate(model_points_world_frame):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.draw_2d_line(f"mn.{i}", pt, model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
     vis.clear_visualization_after("mpt", i + 1)
     vis.clear_visualization_after("mn", i + 1)
 
@@ -322,7 +322,7 @@ def test_icp_freespace(exp,
         # sample only on one side
         used_model_points = model_points_eval[:, 0] > freespace_x_filter_threshold
         # extrude model points that are on the surface of the object along their normal vector
-        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] - \
+        free_space_world_frame_points = model_points_world_frame_eval[used_model_points][:num_freespace] + \
                                         model_normals_world_frame_eval[used_model_points][
                                         :num_freespace] * surface_delta
         free_voxels[free_space_world_frame_points] = 1
@@ -406,7 +406,7 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     i = 0
     for i, pt in enumerate(model_points_world_frame):
         vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, -model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
+        vis.draw_2d_line(f"mn.{i}", pt, model_normals_world_frame[i], color=(0, 0, 0), size=2., scale=0.03)
     vis.clear_visualization_after("mpt", i + 1)
     vis.clear_visualization_after("mn", i + 1)
 
