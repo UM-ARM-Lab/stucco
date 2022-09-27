@@ -135,8 +135,9 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     return T, distances
 
 
-def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
-             register_num_points=500, eval_num_points=200, num_points_list=(2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100),
+def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
+             register_num_points=500, eval_num_points=200,
+             num_points_list=(2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100),
              num_freespace=0,
              freespace_x_filter_threshold=0.,  # 0 allows only positive, -10 allows any
              surface_delta=0.025,
@@ -231,8 +232,8 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.3,
                                        volumetric_cost,
                                        icp_method)
 
-        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
-                                                     viewing_delay)
+        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis if exp.has_gui else None,
+                                                     vis_obj_id, distances, viewing_delay)
         errors.append(errors_per_batch)
 
     for num, err in zip(num_points_list, errors):
@@ -553,6 +554,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.plot_per_eval_period = plot_per_eval_period
         self.eval_period = eval_period
 
+        self.has_gui = gui
         self.physics_client = p.connect(p.GUI if gui else p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
@@ -1399,43 +1401,43 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
                      icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=-10,
-                     name=f"comparison 100 free pts all around", viewing_delay=0)
+                     name=f"comparison 100 free pts all around")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
                      icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=0.,
-                     name=f"comparison 100 free pts", viewing_delay=0)
+                     name=f"comparison 100 free pts")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
-                     name=f"comparison", viewing_delay=0)
+                     name=f"comparison")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_SGD,
-                     name=f"comparison", viewing_delay=0)
+                     name=f"comparison")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP,
-                     name=f"comparison", viewing_delay=0)
+                     name=f"comparison")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_REVERSE,
-                     name=f"comparison", viewing_delay=0)
+                     name=f"comparison")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
                      icp_method=icp.ICPMethod.ICP_SGD_REVERSE,
-                     name=f"comparison", viewing_delay=0)
+                     name=f"comparison")
         experiment.close()
     plot_icp_results(icp_res_file=file, reduce_batch=np.mean,
                      names_to_include=lambda name: "comparison" in name or (

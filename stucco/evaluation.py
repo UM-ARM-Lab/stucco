@@ -201,12 +201,13 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
             closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
             chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
 
-        if print_err:
+        if print_err and vis is not None:
             vis.draw_point("err", (0, 0, 0.1), (1, 0, 0),
                            label=f"chamfer dist (mm^2): {chamfer_distance[b].abs().mean().item():.1f}")
         # if distances is not None:
         #     vis.draw_point("dist", (0, 0, 0.2), (1, 0, 0), label=f"dist: {distances[b].mean().item():.5f}")
-        time.sleep(viewing_delay)
+        if vis is not None:
+            time.sleep(viewing_delay)
 
         errors_per_transform = chamfer_distance.mean(dim=-1)
         errors_per_batch.append(errors_per_transform.mean())
