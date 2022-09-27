@@ -571,7 +571,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
                                               "{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
 
-        self.z = 0.1
+        self.z = 0.
         self.objId, self.ranges = self.obj_factory.make_collision_obj(self.z)
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
@@ -1496,7 +1496,8 @@ parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
-task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA}
+task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA, "drill": poke.Levels.DRILL,
+            "hammer": poke.Levels.HAMMER}
 parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
@@ -1512,7 +1513,7 @@ if __name__ == "__main__":
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
-        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True)
+        experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True, gui=not args.no_gui)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in range(10):

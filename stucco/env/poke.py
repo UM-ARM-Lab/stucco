@@ -1058,5 +1058,12 @@ obj_factory_map = {
     "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                vis_frame_pos=[-.01, 0.0, -.01]),
+    "drill": YCBObjectFactory("drill", "YcbPowerDrill", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
+                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
+                               vis_frame_pos=[-0.002, -0.011, -.06]),
+    # TODO seems to be a problem with the hammer experiment
+    "hammer": YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.075, .075]]),
+                              vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                              vis_frame_pos=[-0.02, 0.01, -0.01]),
     # TODO create the other object factories
 }
