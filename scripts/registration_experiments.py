@@ -2,6 +2,7 @@ import abc
 import typing
 import re
 import copy
+import pandas as pd
 
 import argparse
 import matplotlib
@@ -154,15 +155,10 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
              debug=False):
     obj_name = exp.obj_factory.name
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison_{obj_name}.pkl')
-    name = f"{icp_method.name}{name}"
-    if os.path.exists(fullname):
-        cache = torch.load(fullname)
-        if name not in cache or clean_cache:
-            cache[name] = {}
-        if seed not in cache[name] or clean_cache:
-            cache[name][seed] = {}
+    if os.path.exists(fullname) and not clean_cache:
+        cache = pd.read_pickle(fullname)
     else:
-        cache = {name: {seed: {}}}
+        cache = pd.DataFrame()
 
     target_obj_id = exp.objId
     vis_obj_id = exp.visId
@@ -244,8 +240,10 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
         errors.append(errors_per_batch)
 
     for num, err in zip(num_points_list, errors):
-        cache[name][seed][num] = err
-    torch.save(cache, fullname)
+        df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
+                           "chamfer_err": np.array(err)})
+        cache = pd.concat([cache, df])
+    cache.to_pkl(fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
 
@@ -263,14 +261,10 @@ def test_icp_freespace(exp,
                        icp_method=icp.ICPMethod.VOLUMETRIC):
     obj_name = exp.obj_factory.name
     fullname = os.path.join(cfg.DATA_DIR, f'icp_freespace_{obj_name}.pkl')
-    if os.path.exists(fullname):
-        cache = torch.load(fullname)
-        if name not in cache or clean_cache:
-            cache[name] = {}
-        if seed not in cache[name] or clean_cache:
-            cache[name][seed] = {}
+    if os.path.exists(fullname) and not clean_cache:
+        cache = pd.read_pickle(fullname)
     else:
-        cache = {name: {seed: {}}}
+        cache = pd.DataFrame()
 
     target_obj_id = exp.objId
     vis_obj_id = exp.visId
@@ -358,8 +352,10 @@ def test_icp_freespace(exp,
         errors.append(errors_per_batch)
 
     for num, err in zip(num_freespace_points_list, errors):
-        cache[name][seed][num] = err
-    torch.save(cache, fullname)
+        df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
+                           "chamfer_err": np.array(err)})
+        cache = pd.concat([cache, df])
+    cache.to_pkl(fullname)
     for i in range(len(num_freespace_points_list)):
         print(f"num {num_freespace_points_list[i]} err {errors[i]}")
 
@@ -443,6 +439,7 @@ def marginalize_over_registration_num(name):
 def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None, x_filter=None,
                      data_key=None, reduce_batch=None, leave_out_percentile=30, icp_res_file='icp_comparison.pkl',
                      x_axis_label="num test points"):
+    # TODO adjust to load DataFrame
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     cache = torch.load(fullname)
 
@@ -1093,18 +1090,13 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False,
              eval_num_points=200, ctrl_noise_max=0.005):
-    name = f"{reg_method.name} {name}"
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
     fullname = os.path.join(cfg.DATA_DIR, f'poking.pkl')
     if os.path.exists(fullname):
         cache = torch.load(fullname)
-        if name not in cache or clean_cache:
-            cache[name] = {}
-        if seed not in cache[name] or clean_cache:
-            cache[name][seed] = {}
     else:
-        cache = {name: {seed: {}}}
+        cache = pd.DataFrame()
 
     ctrl = method.create_controller(predetermined_controls()[env.level])
 
@@ -1240,12 +1232,19 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         obs, rew, done, info = env.step(action)
 
         if len(chamfer_err) > 0:
-            data = {'chamfer_err': np.stack(chamfer_err),
-                    'freespace_violations': np.stack(freespace_violations),
-                    'num_freespace_voxels': np.stack(num_freespace_voxels)}
-            data['freespace_violation_percent'] = data['freespace_violations'] / data['num_freespace_voxels'][:, None]
-            cache[name][seed] = data
-            torch.save(cache, fullname)
+            _c = np.array(chamfer_err[-1])
+            _f = np.array(freespace_violations[-1])
+            _n = num_freespace_voxels[-1]
+            _r = _f / _n
+            batch = np.arange(B)
+
+            df = pd.DataFrame(
+                {"method": reg_method.name, "level": env.level.name, "name": name, "seed": seed, "step": simTime,
+                 "batch": batch, "chamfer_err": _c, 'freespace_violations': _f,
+                 'num_freespace_voxels': _n,
+                 "freespace_violation_percent": _r})
+            cache = pd.concat([cache, df])
+            cache.to_pkl(fullname)
 
     if reg_method == icp.ICPMethod.NONE:
         input("waiting for trajectory evaluation")
@@ -1403,37 +1402,37 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
 def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
     file = f"icp_comparison_{obj_factory.name}.pkl"
     if not plot_only:
-        experiment = ICPEVExperiment(obj_factory=obj_factory, gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0, num_points_list=(30,),
-                     icp_method=icp.ICPMethod.MEDIAL_CONSTRAINT,
-                     name=f"medial constraint")
-        experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0, num_points_list=(30,),
+        #              icp_method=icp.ICPMethod.MEDIAL_CONSTRAINT,
+        #              name=f"medial constraint")
+        # experiment.close()
 
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
-                     icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=-10,
-                     name=f"comparison 100 free pts all around")
-        experiment.close()
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
-                     icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=0.,
-                     name=f"comparison 100 free pts")
-        experiment.close()
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
-                     name=f"comparison")
-        experiment.close()
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.ICP_SGD,
-                     name=f"comparison")
-        experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+        #              icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=-10,
+        #              name=f"comparison 100 free pts all around")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+        #              icp_method=icp.ICPMethod.VOLUMETRIC, freespace_x_filter_threshold=0.,
+        #              name=f"comparison 100 free pts")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
+        #              name=f"comparison")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.ICP_SGD,
+        #              name=f"comparison")
+        # experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
@@ -1571,7 +1570,7 @@ if __name__ == "__main__":
         for seed in args.seed:
             env.draw_user_text(f"{registration_method.name}{args.name} seed {seed}", xy=[-0.3, 1., -0.5])
             run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
-                     name=f"{level.name} {args.name}", ground_truth_initialization=False)
+                     name=args.name, ground_truth_initialization=False)
             env.vis.clear_visualizations()
 
         env.close()
