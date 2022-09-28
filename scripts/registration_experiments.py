@@ -43,6 +43,7 @@ from stucco.evaluation import evaluate_chamfer_distance, clustering_metrics, com
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
 from stucco import util
+from stucco.sdf import ObjectFactory
 
 from stucco.retrieval_controller import sample_mesh_points, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
@@ -1076,20 +1077,15 @@ def predetermined_controls():
     ctrl += [[-1, 0., 0]] * 2
     predetermined_control[poke.Levels.DRILL] = ctrl
 
-
     return predetermined_control
 
 
-def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory):
+def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
         pos, rot = util.matrix_to_pos_rot(m[b])
         object_id = obj_id_map.get(b, None)
-        object_id = dd.draw_mesh("icp_distribution", obj_factory.get_mesh_resource_filename(),
-                                 (pos, rot), scale=obj_factory.scale, object_id=object_id,
-                                 rgba=(0, 0.8, 0.2, 0.2),
-                                 vis_frame_pos=obj_factory.vis_frame_pos,
-                                 vis_frame_rot=obj_factory.vis_frame_rot)
+        object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
         obj_id_map[b] = object_id
 
 
@@ -1253,19 +1249,6 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
     if reg_method == icp.ICPMethod.NONE:
         input("waiting for trajectory evaluation")
-    # evaluate FMI and contact error here
-    # labels, moved_points = method.get_labelled_moved_points(np.ones(len(contact_id)) * NO_CONTACT_ID)
-    # contact_id = np.array(contact_id)
-    #
-    # in_label_contact = contact_id != NO_CONTACT_ID
-    #
-    # m = clustering_metrics(contact_id[in_label_contact], labels[in_label_contact])
-    # contact_error = compute_contact_error(None, moved_points, env=env, visualize=False)
-    # cme = np.mean(np.abs(contact_error))
-    #
-    # # grasp_at_pose(env, guess_pose)
-    #
-    # return m, cme
 
 
 def create_tracking_method(env, method_name) -> TrackingMethod:
@@ -1530,8 +1513,8 @@ parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
 task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA, "drill": poke.Levels.DRILL,
             "hammer": poke.Levels.HAMMER}
-level_to_obj_map = {poke.Levels.MUSTARD: "mustard", poke.Levels.BANANA: "banana",  poke.Levels.DRILL: "drill",
-                    poke.Levels.HAMMER: "hammer",}
+level_to_obj_map = {poke.Levels.MUSTARD: "mustard", poke.Levels.BANANA: "banana", poke.Levels.DRILL: "drill",
+                    poke.Levels.HAMMER: "hammer", }
 parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
