@@ -815,11 +815,9 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
         p.changeDynamics(self.testObjId, -1, mass=0)
         p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
-        p.setCollisionFilterPair(self._target_object_id, self.testObjId, -1, -1, 0)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, -1, -1, 0)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, 0, -1, 0)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, 1, -1, 0)
         self.movable.append(self.testObjId)
+
+        self.set_collision_filter_target_and_test_obj(False)
 
         self._create_sdfs()
 
@@ -907,9 +905,18 @@ class PokeEnv(PybulletEnv):
             p.changeVisualShape(objId, -1, rgbaColor=[0.2, 0.2, 0.2, 0.8])
         self.objects = self.immovable + self.movable
 
+    def set_collision_filter_target_and_test_obj(self, enable):
+        p.setCollisionFilterPair(self._target_object_id, self.testObjId, -1, -1, enable)
+        p.setCollisionFilterPair(self.robot_id, self.testObjId, -1, -1, enable)
+        p.setCollisionFilterPair(self.robot_id, self.testObjId, 0, -1, enable)
+        p.setCollisionFilterPair(self.robot_id, self.testObjId, 1, -1, enable)
+
     def reset(self):
         for _ in range(1000):
             p.stepSimulation()
+
+        # re-enable collision to avoid stale pairs
+        self.set_collision_filter_target_and_test_obj(True)
 
         self.open_gripper()
         if self.gripperConstraint:
