@@ -90,7 +90,8 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
                        device=device)
 
 
-def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B, volumetric_cost, reg_method):
+def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
+                    volumetric_cost: icp_costs.VolumetricCost, reg_method: icp.ICPMethod):
     # perform ICP and visualize the transformed points
     # compare not against current model points (which may be few), but against the maximum number of model points
     if reg_method == icp.ICPMethod.ICP:
@@ -124,6 +125,11 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
                                           given_init_pose=best_tsf_guess.inverse(),
                                           batch=B, max_iterations=20, lr=0.01)
+    elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
+        T, distances = icp.icp_medial_constraints(volumetric_cost.sdf, volumetric_cost.free_voxels,
+                                                  model_points_world_frame,
+                                                  given_init_pose=best_tsf_guess.inverse(),
+                                                  batch=B, max_iterations=20)
     else:
         raise RuntimeError(f"Unsupported ICP method {reg_method}")
     # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
@@ -571,7 +577,7 @@ class ShapeExplorationExperiment(abc.ABC):
         self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
                                               "{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S')))
 
-        self.z = 0.
+        self.z = 0.1
         self.objId, self.ranges = self.obj_factory.make_collision_obj(self.z)
 
         # draw base object (in pybullet will already be there since we loaded the collision shape)
@@ -1397,6 +1403,13 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
 def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
     file = f"icp_comparison_{obj_factory.name}.pkl"
     if not plot_only:
+        experiment = ICPEVExperiment(obj_factory=obj_factory, gui=gui)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0, num_points_list=(30,),
+                     icp_method=icp.ICPMethod.MEDIAL_CONSTRAINT,
+                     name=f"medial constraint")
+        experiment.close()
+
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
@@ -1481,6 +1494,8 @@ registration_map = {
     "icp-sgd": icp.ICPMethod.ICP_SGD,
     "icp-sgd-reverse": icp.ICPMethod.ICP_SGD_REVERSE,
     "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT,
+
+    "medial": icp.ICPMethod.MEDIAL_CONSTRAINT,
     "none": icp.ICPMethod.NONE
 }
 parser.add_argument('--registration',

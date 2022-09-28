@@ -8,6 +8,7 @@ from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
 from stucco.icp.sgd import iterative_closest_point_sgd
 from stucco.icp.volumetric import iterative_closest_point_volumetric
+from stucco.icp.medial_constraints import iterative_closest_point_medial_constraint
 from stucco import util
 
 
@@ -517,6 +518,23 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, **kwargs)
 
     res = iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                                              **kwargs)
+    T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
+    T[:, :3, :3] = res.RTs.R
+    T[:, :3, 3] = res.RTs.T
+    distances = res.rmse
+    return T, distances
+
+
+def icp_medial_constraints(obj_sdf: util.ObjectFrameSDF, freespace_voxels, A, given_init_pose=None, batch=30, **kwargs):
+    given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
+                                                            given_init_pose=given_init_pose)
+    given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
+                                          given_init_pose[:, :3, 3],
+                                          torch.ones(batch, device=A.device, dtype=A.dtype))
+
+    res = iterative_closest_point_medial_constraint(obj_sdf, freespace_voxels, A.repeat(batch, 1, 1),
+                                                    init_transform=given_init_pose,
+                                                    **kwargs)
     T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R
     T[:, :3, 3] = res.RTs.T
