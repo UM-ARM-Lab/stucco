@@ -1588,7 +1588,7 @@ if __name__ == "__main__":
         for seed in args.seed:
             env.draw_user_text(f"{registration_method.name}{args.name} seed {seed}", xy=[-0.3, 1., -0.5])
             run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
-                     name=args.name, ground_truth_initialization=False)
+                     name=f"{level.name} {args.name}", ground_truth_initialization=False)
             env.vis.clear_visualizations()
 
         env.close()
