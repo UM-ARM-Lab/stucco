@@ -49,10 +49,20 @@ class ObjectFactory(abc.ABC):
 
     @tensor_utils.handle_batch_input
     def object_frame_closest_point(self, points_in_object_frame, invert_normal_for_inside_query=False):
-        """Return the closest surface point in object frame, the signed distance to it, and the surface normal for
+        """
+        Return the closest surface point in object frame, the signed distance to it, and the surface normal for
         query points in object frame. Assumes the input is in the simulator object frame and will return outputs
         also in the simulator object frame. Note that the simulator object frame and the mesh object frame may be
-        different"""
+        different
+
+        :param points_in_object_frame: N x 3 points in the object frame
+        (can have arbitrary batch dimensions in front of N)
+        :param invert_normal_for_inside_query: By default the normal returned is for the closest triangle regardless
+        of where the query point is with respect to the mesh. With this on, invert the surface normal (so point towards
+        the surface) for query points inside the object
+        :return: tuple(N x 3, N, N x 3) the closest points on the surface, their corresponding signed distance to the
+        query point, and the surface normal at the closest point
+        """
         if self._mesh is None:
             # scale mesh the approrpiate amount
             self._mesh = o3d.io.read_triangle_mesh(self.get_mesh_high_poly_resource_filename()).scale(self.scale,
