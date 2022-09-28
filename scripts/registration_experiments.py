@@ -1041,33 +1041,39 @@ def predetermined_controls():
 
     ctrl = []
     # go up along one surface of the object
-    for i in range(4):
+    for i in range(3):
         ctrl += [[1., 0., 0]] * 3
         ctrl += [[-1., 0., 1]] * 2
 
+    ctrl += [[1., 0., 0]] * 2
+    ctrl += [[-1., 0., 0]] * 1
     ctrl += [[0., 0., 1]] * 2
-    ctrl += [[1., 0., 0]] * 9
+    ctrl += [[0., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 6
 
     ctrl += [[0., 1., 0]] * 7
-    ctrl += [[0., 0., -1]] * 4
+
+    ctrl += [[1., 0., -0.5]] * 4
+    ctrl += [[-1., 0., -0.5]] * 4
 
     # poke the side inwards once
     ctrl += [[0., -1., 0]] * 2
     ctrl += [[0., 1., 0]] * 1
 
-    # try poking while going down
+    # # try poking while going down
     for _ in range(2):
-        ctrl += [[1., 0., -1]] * 2
-        ctrl += [[-1, 0., -1]] * 2
+        ctrl += [[1., 0., -0.5]] * 4
+        ctrl += [[-1, 0., -0.5]] * 4
 
     ctrl += [[-1., 0., 0]] * 5
     ctrl += [[0., -.97, 0]] * 13
+    #
+    ctrl += [[1., 0., 0]] * 3
+    for _ in range(3):
+        ctrl += [[1., 0., 0.5]] * 4
+        ctrl += [[-1, 0., 0.5]] * 4
 
-    ctrl += [[1., 0., 0]] * 5
-    for _ in range(2):
-        ctrl += [[1., 0., 1]] * 2
-        ctrl += [[-1, 0., 1]] * 2
-
+    ctrl += [[-1, 0., 0]] * 2
     predetermined_control[poke.Levels.DRILL] = ctrl
 
 

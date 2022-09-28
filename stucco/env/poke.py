@@ -7,6 +7,7 @@ import torch
 import os
 import random
 import scipy.stats
+import copy
 
 import numpy as np
 import matplotlib.colors as colors
@@ -244,6 +245,7 @@ class PokeEnv(PybulletEnv):
         self.testObjId = None
         self.target_pose = None
         self.ranges = None
+        self.freespace_ranges = None
         self.dtype = dtype
         self.device = device
         self.sdf_resolution = sdf_resolution
@@ -819,6 +821,10 @@ class PokeEnv(PybulletEnv):
 
         self.set_collision_filter_target_and_test_obj(False)
 
+        # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
+        self.freespace_ranges = copy.deepcopy(self.ranges)
+        self.freespace_ranges[0] -= self.freespace_ranges[0][0] + 0.1 # keep some
+        self.freespace_ranges[2] -= self.freespace_ranges[2][0] + 0.1 # keep some
         self._create_sdfs()
 
     def draw_mesh(self, *args, **kwargs):
@@ -857,7 +863,7 @@ class PokeEnv(PybulletEnv):
             input("interior SDF points for robot (press enter to confirm)")
             self.vis.clear_visualization_after("mipt", 0)
 
-        self.free_voxels = util.VoxelGrid(self.freespace_voxel_resolution, self.ranges, device=self.device)
+        self.free_voxels = util.VoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges, device=self.device)
 
         # register floor as freespace
 
