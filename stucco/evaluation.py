@@ -198,6 +198,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
 
         # transform our visual object to the pose
         for i in range(eval_num_points):
+            # TODO this is incorrect for nonconvex meshes
             closest = closest_point_on_surface(vis_obj_id, model_points_world_frame_eval[i])
             chamfer_distance[b, i] = (1000 * closest[ContactInfo.DISTANCE]) ** 2  # convert m^2 to mm^2
 
@@ -209,7 +210,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
         if vis is not None:
             time.sleep(viewing_delay)
 
-        errors_per_transform = chamfer_distance.mean(dim=-1)
+        errors_per_transform = chamfer_distance[b]
         errors_per_batch.append(errors_per_transform.mean())
     # return to link frame
     p.resetBasePositionAndOrientation(vis_obj_id, [0, 0, 0], [0, 0, 0, 1])
