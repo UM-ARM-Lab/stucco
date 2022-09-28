@@ -1524,6 +1524,8 @@ parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
 task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA, "drill": poke.Levels.DRILL,
             "hammer": poke.Levels.HAMMER}
+level_to_obj_map = {poke.Levels.MUSTARD: "mustard", poke.Levels.BANANA: "banana",  poke.Levels.DRILL: "drill",
+                    poke.Levels.HAMMER: "hammer",}
 parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
@@ -1535,7 +1537,8 @@ if __name__ == "__main__":
     level = task_map[args.task]
     tracking_method_name = args.tracking
     registration_method = registration_map[args.registration]
-    obj_factory = obj_factory_map[args.task]
+    obj_name = level_to_obj_map[level]
+    obj_factory = obj_factory_map[obj_name]
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
