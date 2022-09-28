@@ -372,6 +372,7 @@ class DebugDrawer(Visualizer):
         uid = self._debug_ids[name]
         if torch.is_tensor(start):
             start = start.detach().cpu()
+        if torch.is_tensor(diff):
             diff = diff.detach().cpu()
 
         self._debug_ids[name] = p.addUserDebugLine(start, np.add(start, [diff[0] * scale, diff[1] * scale,

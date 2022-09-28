@@ -1021,19 +1021,6 @@ def predetermined_controls():
         ctrl += [[-1., 0., 0]] * 2
         ctrl += [[0., 0., -1]] * 2
 
-    # move more to the side and poke up again
-    # ctrl += [[0., -1., 0]] * 2
-    # for i in range(7):
-    #     ctrl += [[1., 0., 0]] * 3
-    #     ctrl += [[-1., 0., 0]] * 2
-    #     ctrl += [[0., 0., 1]] * 2
-
-    # ctrl += [[0., -0.95, 0]] * 4
-    # ctrl += [[1., 0., 0]] * 2
-    # for i in range(8):
-    #     ctrl += [[1., 0., 0]] * 4
-    #     ctrl += [[-1., 0., 0]] * 4
-
     # go directly down and sweep out
     ctrl += [[0., -1, 0]] * 5
     ctrl += [[1., 0., 0]] * 6
@@ -1042,17 +1029,6 @@ def predetermined_controls():
     # go back to the left side
     ctrl += [[-1., 0., 0]] * 4
     ctrl += [[0., 1., 0]] * 10
-    # for i in range(5):
-    #     ctrl += [[1., 0., 0]] * 3
-    #     ctrl += [[-1., 0., 0]] * 2
-    #     ctrl += [[0., 0., 1]] * 2
-
-    # ctrl += [[0., 0.9, 0]] * 6
-    # ctrl += [[1., 0., 0]] * 3
-    # for i in range(5):
-    #     ctrl += [[1., 0., 0]] * 4
-    #     ctrl += [[-1., 0., 0]] * 4
-    #     ctrl += [[0., 0., -1]] * 2
 
     ctrl += [[0., 0.9, 0]] * 6
     ctrl += [[1., 0., 0]] * 5
@@ -1062,6 +1038,39 @@ def predetermined_controls():
     # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
     # ctrl = np.add(ctrl, noise)
     predetermined_control[poke.Levels.MUSTARD] = ctrl
+
+    ctrl = []
+    # go up along one surface of the object
+    for i in range(4):
+        ctrl += [[1., 0., 0]] * 3
+        ctrl += [[-1., 0., 1]] * 2
+
+    ctrl += [[0., 0., 1]] * 2
+    ctrl += [[1., 0., 0]] * 9
+
+    ctrl += [[0., 1., 0]] * 7
+    ctrl += [[0., 0., -1]] * 4
+
+    # poke the side inwards once
+    ctrl += [[0., -1., 0]] * 2
+    ctrl += [[0., 1., 0]] * 1
+
+    # try poking while going down
+    for _ in range(2):
+        ctrl += [[1., 0., -1]] * 2
+        ctrl += [[-1, 0., -1]] * 2
+
+    ctrl += [[-1., 0., 0]] * 5
+    ctrl += [[0., -.97, 0]] * 13
+
+    ctrl += [[1., 0., 0]] * 5
+    for _ in range(2):
+        ctrl += [[1., 0., 1]] * 2
+        ctrl += [[-1, 0., 1]] * 2
+
+    predetermined_control[poke.Levels.DRILL] = ctrl
+
+
     return predetermined_control
 
 
@@ -1236,6 +1245,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             cache[name][seed] = data
             torch.save(cache, fullname)
 
+    if reg_method == icp.ICPMethod.NONE:
+        input("waiting for trajectory evaluation")
     # evaluate FMI and contact error here
     # labels, moved_points = method.get_labelled_moved_points(np.ones(len(contact_id)) * NO_CONTACT_ID)
     # contact_id = np.array(contact_id)

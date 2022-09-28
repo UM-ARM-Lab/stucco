@@ -37,6 +37,9 @@ class PokeGetter(EnvGetter):
     @classmethod
     def env(cls, level=0, log_video=True, **kwargs):
         level = poke.Levels(level)
-        env = poke.PokeEnv(environment_level=level, log_video=log_video, **kwargs)
+        goal = (0.25, 0.0, 0.2, 0.)
+        if level in [poke.Levels.MUSTARD, poke.Levels.DRILL]:
+            goal = (0.25, 0.0, 0.2, 0.)
+        env = poke.PokeEnv(environment_level=level, goal=goal, log_video=log_video, **kwargs)
         cls.env_dir = '{}/floating'.format(poke.DIR)
         return env

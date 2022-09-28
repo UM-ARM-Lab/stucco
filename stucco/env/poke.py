@@ -790,11 +790,14 @@ class PokeEnv(PybulletEnv):
         if self.level in [Levels.MUSTARD]:
             # TODO set up target model name for each level
             self.target_model_name = "mustard"
-            self.obj_factory = obj_factory_map[self.target_model_name]
+            self.z = 0.1
+        elif self.level in [Levels.DRILL]:
+            self.target_model_name = "drill"
             self.z = 0.1
         else:
             pass
 
+        self.obj_factory = obj_factory_map[self.target_model_name]
         # reset target and robot to their object frame to create the SDF
         # self.target_pose = target_pos, target_rot
         self._target_object_id, self.ranges = self.obj_factory.make_collision_obj(self.z)
@@ -816,6 +819,7 @@ class PokeEnv(PybulletEnv):
         p.setCollisionFilterPair(self.robot_id, self.testObjId, -1, -1, 0)
         p.setCollisionFilterPair(self.robot_id, self.testObjId, 0, -1, 0)
         p.setCollisionFilterPair(self.robot_id, self.testObjId, 1, -1, 0)
+        self.movable.append(self.testObjId)
 
         self._create_sdfs()
 
@@ -843,7 +847,7 @@ class PokeEnv(PybulletEnv):
         # SDF for the robot (used for filling up freespace voxels)
         # should be fine to use the actual robot ID for the ground truth SDF since we won't be querying outside of the
         # SDF range (and thus need to actually use the GT lookup)
-        robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id, vis=self._dd)
+        robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id)
         self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
                                               robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
