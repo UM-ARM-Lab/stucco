@@ -241,8 +241,6 @@ class PokeEnv(PybulletEnv):
 
         self.target_model_name = None
         self._target_object_id = None
-        # immovable and uninteractable copy of the target object used just for collision checking in object frame
-        self.testObjId = None
         self.target_pose = None
         self.ranges = None
         self.freespace_ranges = None
@@ -811,20 +809,10 @@ class PokeEnv(PybulletEnv):
         self.target_pose = p.getBasePositionAndOrientation(self._target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
 
-        # test target object that stays in object frame to allow ground truth object frame (naive) SDF lookup
-        # shouldn't collide with anything other than the collision checker
-        self.testObjId, range_per_dim = self.obj_factory.make_collision_obj(self.z)
-        p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
-        p.changeDynamics(self.testObjId, -1, mass=0)
-        p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
-        self.movable.append(self.testObjId)
-
-        self.set_collision_filter_target_and_test_obj(False)
-
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
         self.freespace_ranges = copy.deepcopy(self.ranges)
-        self.freespace_ranges[0] -= self.freespace_ranges[0][0] + 0.1 # keep some
-        self.freespace_ranges[2] -= self.freespace_ranges[2][0] + 0.1 # keep some
+        self.freespace_ranges[0] -= self.freespace_ranges[0][0] + 0.1  # keep some
+        self.freespace_ranges[2] -= self.freespace_ranges[2][0] + 0.1  # keep some
         self._create_sdfs()
 
     def draw_mesh(self, *args, **kwargs):
@@ -911,18 +899,9 @@ class PokeEnv(PybulletEnv):
             p.changeVisualShape(objId, -1, rgbaColor=[0.2, 0.2, 0.2, 0.8])
         self.objects = self.immovable + self.movable
 
-    def set_collision_filter_target_and_test_obj(self, enable):
-        p.setCollisionFilterPair(self._target_object_id, self.testObjId, -1, -1, enable)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, -1, -1, enable)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, 0, -1, enable)
-        p.setCollisionFilterPair(self.robot_id, self.testObjId, 1, -1, enable)
-
     def reset(self):
         for _ in range(1000):
             p.stepSimulation()
-
-        # re-enable collision to avoid stale pairs
-        self.set_collision_filter_target_and_test_obj(True)
 
         self.open_gripper()
         if self.gripperConstraint:
@@ -1076,11 +1055,11 @@ obj_factory_map = {
                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                vis_frame_pos=[-.01, 0.0, -.01]),
     "drill": YCBObjectFactory("drill", "YcbPowerDrill", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
-                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
-                               vis_frame_pos=[-0.002, -0.011, -.06]),
+                              vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
+                              vis_frame_pos=[-0.002, -0.011, -.06]),
     # TODO seems to be a problem with the hammer experiment
     "hammer": YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.075, .075]]),
-                              vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
-                              vis_frame_pos=[-0.02, 0.01, -0.01]),
+                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                               vis_frame_pos=[-0.02, 0.01, -0.01]),
     # TODO create the other object factories
 }

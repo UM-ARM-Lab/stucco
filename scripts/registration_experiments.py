@@ -94,6 +94,16 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
 
 def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
                     volumetric_cost: icp_costs.VolumetricCost, reg_method: icp.ICPMethod):
+    """Register a set of observed surface points in world frame to an object using some method
+
+    :param model_points_world_frame:
+    :param model_points_register:
+    :param best_tsf_guess:
+    :param B:
+    :param volumetric_cost:
+    :param reg_method:
+    :return: B x 4 x 4 transform from world frame to object frame, B RMSE for each of the batches
+    """
     # perform ICP and visualize the transformed points
     # compare not against current model points (which may be few), but against the maximum number of model points
     if reg_method == icp.ICPMethod.ICP:
@@ -161,7 +171,6 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
         cache = pd.DataFrame()
 
     target_obj_id = exp.objId
-    vis_obj_id = exp.visId
     vis = exp.dd
     freespace_ranges = exp.ranges
 
@@ -236,12 +245,12 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
                                        icp_method)
 
         errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis if exp.has_gui else None,
-                                                     vis_obj_id, distances, viewing_delay)
+                                                     exp.obj_factory, viewing_delay)
         errors.append(errors_per_batch)
 
     for num, err in zip(num_points_list, errors):
         df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
-                           "chamfer_err": np.array(err)})
+                           "chamfer_err": err.cpu().numpy()})
         cache = pd.concat([cache, df])
     cache.to_pkl(fullname)
     for i in range(len(num_points_list)):
@@ -267,7 +276,6 @@ def test_icp_freespace(exp,
         cache = pd.DataFrame()
 
     target_obj_id = exp.objId
-    vis_obj_id = exp.visId
     vis = exp.dd
     freespace_ranges = exp.ranges
 
@@ -346,14 +354,13 @@ def test_icp_freespace(exp,
         exp.policy.register_transforms(T, distances)
         exp.policy._debug_icp_distribution(None, None)
 
-        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id,
-                                                     distances,
+        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, exp.obj_factory,
                                                      viewing_delay)
         errors.append(errors_per_batch)
 
     for num, err in zip(num_freespace_points_list, errors):
         df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
-                           "chamfer_err": np.array(err)})
+                           "chamfer_err": err.cpu().numpy()})
         cache = pd.concat([cache, df])
     cache.to_pkl(fullname)
     for i in range(len(num_freespace_points_list)):
@@ -370,7 +377,6 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     data = cache[name][seed]
 
     target_obj_id = exp.objId
-    vis_obj_id = exp.visId
     vis = exp.dd
     freespace_ranges = exp.ranges
 
@@ -417,8 +423,7 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
                                      batch=B)
 
-    errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, vis_obj_id, distances,
-                                                 viewing_delay)
+    errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, exp.obj_factory, viewing_delay)
 
 
 def marginalize_over_suffix(name):
@@ -582,12 +587,6 @@ class ShapeExplorationExperiment(abc.ABC):
         pose = p.getBasePositionAndOrientation(self.objId)
         self.draw_mesh("base_object", pose, (1.0, 1.0, 0., 0.5))
 
-        # also needs to be collision since we will test collision against it to get distance
-        self.visId, _ = self.obj_factory.make_collision_obj(self.z, rgba=[0.2, 0.2, 1.0, 0.5])
-        p.resetBasePositionAndOrientation(self.visId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
-        p.changeDynamics(self.visId, -1, mass=0)
-        p.setCollisionFilterPair(self.objId, self.visId, -1, -1, 0)
-
         self.has_run = False
 
     def close(self):
@@ -704,13 +703,8 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         super(ICPEVExperiment, self).__init__(**kwargs)
 
         # test object needs collision shape to test against, so we can't use visual only object
-        self.testObjId, range_per_dim = self.obj_factory.make_collision_obj(self.z)
-        p.resetBasePositionAndOrientation(self.testObjId, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
-        p.changeDynamics(self.testObjId, -1, mass=0)
-        p.changeVisualShape(self.testObjId, -1, rgbaColor=[0, 0, 0, 0])
-        p.setCollisionFilterPair(self.objId, self.testObjId, -1, -1, 0)
-
         obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
+        range_per_dim = copy.copy(self.obj_factory.ranges)
         # inflate the range_per_dim to allow for pose estimates around a single point
         range_per_dim *= 2
         # fix the z dimension since there shouldn't be that much variance across it
@@ -737,25 +731,13 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         # get points after transforming with best ICP pose estimate
 
         link_to_world = tf.Transform3d(matrix=self.policy.best_tsf_guess)
-        m = link_to_world.get_matrix()
-        pos = m[:, :3, 3]
-        rot = pytorch_kinematics.matrix_to_quaternion(m[:, :3, :3])
-        rot = tf.wxyz_to_xyzw(rot)
-        p.resetBasePositionAndOrientation(self.visId, pos[0], rot[0])
+        world_to_link = link_to_world.inverse()
 
         model_pts_to_compare = self.policy.model_points_world_transformed_ground_truth
+        # transform model points to object frame then use the object factory to get distances in object frame
+        _, dists, _ = self.obj_factory.object_frame_closest_point(world_to_link.transform_points(model_pts_to_compare))
 
-        # transform our visual object to the pose
-        dists = []
-        for i in range(model_pts_to_compare.shape[0]):
-            closest = closest_point_on_surface(self.visId, model_pts_to_compare[i])
-            dists.append(closest[ContactInfo.DISTANCE])
-            # if self.plot_point_type == PlotPointType.ERROR_AT_MODEL_POINTS:
-            #     self.dd.draw_point("test_point", self.model_points[i], color=(1, 0, 0), length=0.005)
-            #     self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
-            #                        length=0.005,
-            #                        label=f'{closest[ContactInfo.DISTANCE]:.5f}')
-        dists = torch.tensor(dists).abs()
+        dists = dists.abs()
         err = dists.mean()
         error_at_model_points.append(err)
         error_at_rep_surface.append(err)
@@ -1206,8 +1188,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
 
                 # evaluate with chamfer distance
-                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.testObjId,
-                                                             rmse_per_object[best_segment_idx], 0)
+                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.obj_factory,
+                                                             0)
 
                 link_to_current_tf = tf.Transform3d(matrix=T)
                 interior_pts = link_to_current_tf.transform_points(volumetric_cost.model_interior_points_orig)
@@ -1216,7 +1198,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 chamfer_err.append(errors_per_batch)
                 num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
                 freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
-                logger.info(f"chamfer distance {simTime}: {np.mean(errors_per_batch)}")
+                logger.info(f"chamfer distance {simTime}: {torch.mean(errors_per_batch)}")
 
                 # draw mesh at where our best guess is
                 guess_pose = util.matrix_to_pos_rot(best_T)
@@ -1232,7 +1214,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         obs, rew, done, info = env.step(action)
 
         if len(chamfer_err) > 0:
-            _c = np.array(chamfer_err[-1])
+            _c = np.array(chamfer_err[-1].cpu().numpy())
             _f = np.array(freespace_violations[-1])
             _n = num_freespace_voxels[-1]
             _r = _f / _n
@@ -1527,6 +1509,8 @@ if __name__ == "__main__":
     registration_method = registration_map[args.registration]
     obj_name = level_to_obj_map[level]
     obj_factory = obj_factory_map[obj_name]
+
+    rand.seed(0)
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":

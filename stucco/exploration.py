@@ -137,13 +137,12 @@ class PlotPointType(enum.Enum):
 class ShapeExplorationPolicy(abc.ABC):
     def __init__(self, icp_pose_score=ICPPoseScore(), vis: Visualizer = None,
                  plot_point_type=PlotPointType.ERROR_AT_MODEL_POINTS,
-                 vis_obj_id=None, debug=False, debug_name=""):
+                 debug=False, debug_name=""):
         self.model_points = None
         self.model_normals = None
         self.model_points_world_transformed_ground_truth = None
         self.model_normals_world_transformed_ground_truth = None
         self.plot_point_type = plot_point_type
-        self.visId = vis_obj_id
         self.icp_pose_score = icp_pose_score
 
         self.best_tsf_guess = None
@@ -212,7 +211,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         self.distance_filter = distance_filter
 
         # debug flags
-        self.verify_icp_error = verify_icp_error
         self.evaluate_icpev_correlation = evaluate_icpev_correlation
 
         # for creating visual shapes in debugging
@@ -286,9 +284,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             # pass through filters
             if self.distance_filter is not None:
                 query_icp_error = self.distance_filter(query_icp_error)
-
-            if self.debug and self.verify_icp_error:
-                self._debug_verify_icp_error(new_points_world_frame, query_icp_error)
 
             # score ICP and save best one to initialize for next step
             model_points_world_frame = self._link_to_world_tf().transform_points(self.model_points)
@@ -391,25 +386,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # TODO actually go to this state again so we can see it in the visualizer
                 do_plot(f"{(x, y)}", (x, y))
 
-    def _debug_verify_icp_error(self, new_points_world_frame, query_icp_error):
-        # compare our method of transforming all points to link frame with transforming all objects
-        query_icp_error_ground_truth = torch.zeros(self.B, self.N)
-        m = self._link_to_world_tf().get_matrix()
-        for b in range(self.B):
-            pos, rot = util.matrix_to_pos_rot(m[b])
-            p.resetBasePositionAndOrientation(self.visId, pos, rot)
-
-            # transform our visual object to the pose
-            for i in range(self.N):
-                closest = closest_point_on_surface(self.visId, new_points_world_frame[i])
-                query_icp_error_ground_truth[b, i] = closest[ContactInfo.DISTANCE]
-                if self.plot_point_type == PlotPointType.ICP_ERROR_POINTS:
-                    self.dd.draw_point("test_point", new_points_world_frame[i], color=(1, 0, 0), length=0.005)
-                    self.dd.draw_point("test_point_surf", closest[ContactInfo.POS_A], color=(0, 1, 0),
-                                       length=0.005,
-                                       label=f'{closest[ContactInfo.DISTANCE]:.5f}')
-        query_icp_error_ground_truth = query_icp_error_ground_truth.abs()
-        assert (query_icp_error_ground_truth - query_icp_error).sum() < 1e-4
 
     def _debug_icp_distribution(self, new_points_world_frame, icp_error_var):
         # create visual objects

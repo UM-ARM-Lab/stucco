@@ -324,7 +324,6 @@ def icp_2(A, B, init_pose=None, max_iterations=20, tolerance=0.001):
 def init_random_transform_with_given_init(m, batch, dtype, device, given_init_pose=None):
     # apply some random initial poses
     if m > 2:
-        import pytorch_kinematics.transforms as tf
         R = tf.random_rotations(batch, dtype=dtype, device=device)
     else:
         theta = torch.rand(batch, dtype=dtype, device=device) * math.pi * 2
