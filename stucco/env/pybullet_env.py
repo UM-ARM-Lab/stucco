@@ -254,6 +254,7 @@ def get_lateral_friction_forces(contact, flip=True):
 class DebugDrawer(Visualizer):
     def __init__(self, default_height, camera_height):
         self._debug_ids = {}
+        self._mesh_to_single_id = {}
         self._drawn_mesh_ids = set()
         self._camera_pos = None
         self._camera_height = camera_height
@@ -348,6 +349,7 @@ class DebugDrawer(Visualizer):
             for mesh in self._drawn_mesh_ids:
                 p.removeBody(mesh)
             self._drawn_mesh_ids = set()
+            self._mesh_to_single_id = {}
             return
 
         for name in names:
@@ -472,9 +474,14 @@ class DebugDrawer(Visualizer):
                                                   visualFramePosition=vis_frame_pos)
             self._mesh_shape_ids[visual_shape_name] = visual_shape_id
         pos, rot = pose
+
+        if object_id == self.USE_DEFAULT_ID_FOR_NAME:
+            object_id = self._mesh_to_single_id.get(name, None)
+
         if object_id is None:
             object_id = p.createMultiBody(baseMass=0, basePosition=pos, baseVisualShapeIndex=visual_shape_id)
         p.resetBasePositionAndOrientation(object_id, pos, rot)
         self._drawn_mesh_ids.add(object_id)
+        self._mesh_to_single_id[name] = object_id
 
         return object_id

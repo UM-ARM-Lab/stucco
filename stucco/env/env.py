@@ -94,6 +94,10 @@ class TrajectoryLoader(load_utils.DataLoader):
 
 class Visualizer:
     """Common interface for drawing environment elements"""
+    # many times when drawing mesh we only need 1 mesh per name
+    # in these cases it's more convenient for the drawer to bookkeep the mesh's ID
+    # this is a special value for the object_id input of draw_mesh that will handle this case
+    USE_DEFAULT_ID_FOR_NAME = -100
 
     @abc.abstractmethod
     def draw_point(self, name, point, color=(0, 0, 0), length=0.01, length_ratio=1, rot=0, height=None, label=None,

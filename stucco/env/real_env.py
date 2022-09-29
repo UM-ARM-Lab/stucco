@@ -71,6 +71,7 @@ class DebugRvizDrawer(Visualizer):
         self.max_nom_model_error = max_nominal_model_error
         self.world_frame = world_frame
         self._ns = {}
+        self._mesh_to_single_id = {}
 
     def _extract_ns_id_from_name(self, name):
         tokens = name.split('.')
@@ -256,6 +257,7 @@ class DebugRvizDrawer(Visualizer):
     def clear_visualizations(self, names=None):
         if names is None:
             names = list(self._ns)
+            self._mesh_to_single_id = {}
         for name in names:
             self.clear_markers(name)
 
@@ -300,6 +302,9 @@ class DebugRvizDrawer(Visualizer):
 
     def draw_mesh(self, name, model, pose, rgba=(0, 0, 0, 1.), scale=1., object_id=None, vis_frame_pos=(0, 0, 0),
                   vis_frame_rot=(0, 0, 0, 1)):
+        if object_id == self.USE_DEFAULT_ID_FOR_NAME:
+            object_id = self._mesh_to_single_id.get(name, None)
+
         if object_id is None:
             if name not in self._ns:
                 object_id = 0
