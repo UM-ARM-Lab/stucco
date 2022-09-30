@@ -202,29 +202,28 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: Visualizer,
     # average across the evaluation points
     errors_per_batch = chamfer_distance.mean(dim=-1)
 
-    m = link_to_world.get_matrix()
+    if vis is not None:
+        m = link_to_world.get_matrix()
+        for b in range(B):
+            pos, rot = util.matrix_to_pos_rot(m[b])
+            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
+                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
 
-    for b in range(B):
-        pos, rot = util.matrix_to_pos_rot(m[b])
-        obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
-                              object_id=vis.USE_DEFAULT_ID_FOR_NAME)
+            if print_err:
+                for i in range(eval_num_points):
+                    query = model_points_world_frame_eval[i].cpu()
+                    closest = closest_pt_world_frame[b, i].cpu()
+                    vis.draw_point("query", query, (0, 1, 0))
+                    vis.draw_point("closest", closest, (0, 1, 1), label=f"{chamfer_distance[b, i].item():.1f}")
+                    vis.draw_2d_line("qc", query, closest - query, (0, 1, 0), scale=1)
 
-        if print_err and vis is not None:
-            for i in range(eval_num_points):
-                query = model_points_world_frame_eval[i].cpu()
-                closest = closest_pt_world_frame[b, i].cpu()
-                vis.draw_point("query", query, (0, 1, 0))
-                vis.draw_point("closest", closest, (0, 1, 1), label=f"{chamfer_distance[b, i].item():.1f}")
-                vis.draw_2d_line("qc", query, closest - query, (0, 1, 0), scale=1)
+                for j in range(eval_num_points):
+                    closest = closest_pt_world_frame[b, j].cpu()
+                    vis.draw_point(f"closest.{j}", closest, (0, 1, 1))
 
-            for j in range(eval_num_points):
-                closest = closest_pt_world_frame[b, j].cpu()
-                vis.draw_point(f"closest.{j}", closest, (0, 1, 1))
-
-        if vis is not None:
             time.sleep(viewing_delay)
 
-    # return to link frame
-    obj_factory.draw_mesh(vis, "chamfer evaluation", ([0, 0, 0], [0, 0, 0, 1]), rgba=(0, 0.2, 0.8, 0.2),
-                          object_id=vis.USE_DEFAULT_ID_FOR_NAME)
+        # return to link frame
+        obj_factory.draw_mesh(vis, "chamfer evaluation", ([0, 0, 0], [0, 0, 0, 1]), rgba=(0, 0.2, 0.8, 0.2),
+                              object_id=vis.USE_DEFAULT_ID_FOR_NAME)
     return errors_per_batch
