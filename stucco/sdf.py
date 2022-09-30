@@ -47,6 +47,22 @@ class ObjectFactory(abc.ABC):
         return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
                             object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)
 
+    def precompute_sdf(self):
+        # scale mesh the approrpiate amount
+        self._mesh = o3d.io.read_triangle_mesh(self.get_mesh_high_poly_resource_filename()).scale(self.scale,
+                                                                                                  [0, 0, 0])
+        # convert from mesh object frame to simulator object frame
+        x, y, z, w = self.vis_frame_rot
+        self._mesh = self._mesh.rotate(o3d.geometry.get_rotation_matrix_from_quaternion((w, x, y, z)),
+                                       center=[0, 0, 0])
+        self._mesh = self._mesh.translate(np.array(self.vis_frame_pos) * self.scale)
+
+        self._mesht = o3d.t.geometry.TriangleMesh.from_legacy(self._mesh)
+        self._raycasting_scene = o3d.t.geometry.RaycastingScene()
+        _ = self._raycasting_scene.add_triangles(self._mesht)
+        self._mesh.compute_triangle_normals()
+        self._face_normals = np.asarray(self._mesh.triangle_normals)
+
     @tensor_utils.handle_batch_input
     def object_frame_closest_point(self, points_in_object_frame, invert_normal_for_inside_query=False):
         """
@@ -64,20 +80,7 @@ class ObjectFactory(abc.ABC):
         query point, and the surface normal at the closest point
         """
         if self._mesh is None:
-            # scale mesh the approrpiate amount
-            self._mesh = o3d.io.read_triangle_mesh(self.get_mesh_high_poly_resource_filename()).scale(self.scale,
-                                                                                                      [0, 0, 0])
-            # convert from mesh object frame to simulator object frame
-            x, y, z, w = self.vis_frame_rot
-            self._mesh = self._mesh.rotate(o3d.geometry.get_rotation_matrix_from_quaternion((w, x, y, z)),
-                                           center=[0, 0, 0])
-            self._mesh = self._mesh.translate(np.array(self.vis_frame_pos) * self.scale)
-
-            self._mesht = o3d.t.geometry.TriangleMesh.from_legacy(self._mesh)
-            self._raycasting_scene = o3d.t.geometry.RaycastingScene()
-            _ = self._raycasting_scene.add_triangles(self._mesht)
-            self._mesh.compute_triangle_normals()
-            self._face_normals = np.asarray(self._mesh.triangle_normals)
+            self.precompute_sdf()
 
         if torch.is_tensor(points_in_object_frame):
             dtype = points_in_object_frame.dtype
@@ -238,20 +241,29 @@ class CachedSDF(util.ObjectFrameSDF):
         return sdf_val
 
     def __call__(self, points_in_object_frame):
-        res = self.voxels[points_in_object_frame]
-
+        # check when points are out of cached range and use ground truth sdf for both value and grad
         keys = self.voxels.ensure_index_key(points_in_object_frame)
         keys_ravelled = self.voxels.ravel_multi_index(keys, self.voxels.shape)
-        grad = self.voxels_grad[keys_ravelled]
+
+        out_of_bound_keys = (keys_ravelled >= self.voxels_grad.shape[0]) | (keys_ravelled < 0)
+        inbound_keys = ~out_of_bound_keys
+
+        dtype = points_in_object_frame.dtype
+        val = torch.zeros((keys.shape,), device=self.device, dtype=dtype)
+        grad = torch.zeros((keys.shape,) + (3,), device=self.device, dtype=dtype)
+
+        val[inbound_keys] = self.voxels[keys_ravelled[inbound_keys]]
+        grad[inbound_keys] = self.voxels_grad[keys_ravelled[inbound_keys]]
+        val[out_of_bound_keys], grad[out_of_bound_keys] = self.gt_sdf(points_in_object_frame[out_of_bound_keys])
 
         if self.debug_check_sdf:
-            res_gt = self._fallback_sdf_value_func(points_in_object_frame)
+            val_gt = self._fallback_sdf_value_func(points_in_object_frame)
             # the ones that are valid should be close enough to the ground truth
-            diff = torch.abs(res - res_gt)
+            diff = torch.abs(val - val_gt)
             close_enough = diff < self.resolution
             within_bounds = self.voxels.get_valid_values(points_in_object_frame)
             assert torch.all(close_enough[within_bounds])
-        return res, grad
+        return val, grad
 
     def get_voxel_view(self, voxels: util.VoxelGrid = None) -> torch_view.TorchMultidimView:
         if voxels is None:
