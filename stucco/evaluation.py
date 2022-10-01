@@ -193,12 +193,11 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: Visualizer,
     link_to_world = world_to_link.inverse()
     model_points_object_frame_eval = world_to_link.transform_points(model_points_world_frame_eval)
 
-    closest_pt_object_frame, chamfer_distance, _ = obj_factory.object_frame_closest_point(
-        model_points_object_frame_eval)
-    closest_pt_world_frame = link_to_world.transform_points(closest_pt_object_frame)
+    res = obj_factory.object_frame_closest_point(model_points_object_frame_eval)
+    closest_pt_world_frame = link_to_world.transform_points(res.closest)
     # closest_pt_world_frame = closest_pt_object_frame
     # convert to mm**2
-    chamfer_distance = (1000 * chamfer_distance) ** 2
+    chamfer_distance = (1000 * res.distance) ** 2
     # average across the evaluation points
     errors_per_batch = chamfer_distance.mean(dim=-1)
 

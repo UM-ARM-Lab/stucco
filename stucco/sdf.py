@@ -10,8 +10,16 @@ from multidim_indexing import torch_view
 
 from stucco import util, cfg
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
+from typing import NamedTuple, Union
 
 logger = logging.getLogger(__name__)
+
+
+class SDFQuery(NamedTuple):
+    closest: torch.Tensor
+    distance: torch.Tensor
+    gradient: torch.Tensor
+    normal: Union[torch.Tensor, None]
 
 
 class ObjectFactory(abc.ABC):
@@ -64,20 +72,19 @@ class ObjectFactory(abc.ABC):
         self._face_normals = np.asarray(self._mesh.triangle_normals)
 
     @tensor_utils.handle_batch_input
-    def object_frame_closest_point(self, points_in_object_frame, invert_normal_for_inside_query=False):
+    def object_frame_closest_point(self, points_in_object_frame, compute_normal=False) -> SDFQuery:
         """
-        Return the closest surface point in object frame, the signed distance to it, and the surface normal for
-        query points in object frame. Assumes the input is in the simulator object frame and will return outputs
+        Assumes the input is in the simulator object frame and will return outputs
         also in the simulator object frame. Note that the simulator object frame and the mesh object frame may be
         different
 
         :param points_in_object_frame: N x 3 points in the object frame
         (can have arbitrary batch dimensions in front of N)
-        :param invert_normal_for_inside_query: By default the normal returned is for the closest triangle regardless
-        of where the query point is with respect to the mesh. With this on, invert the surface normal (so point towards
-        the surface) for query points inside the object
-        :return: tuple(N x 3, N, N x 3) the closest points on the surface, their corresponding signed distance to the
-        query point, and the surface normal at the closest point
+        :param compute_normal: bool: whether to compute surface normal at the closest point or not
+        :return: dict(closest: N x 3, distance: N, gradient: N x 3, normal: N x 3)
+        the closest points on the surface, their corresponding signed distance to the query point, the negative SDF
+        gradient at the query point if the query point is outside, otherwise it's the positive SDF gradient
+        (points from the query point to the closest point), and the surface normal at the closest point
         """
         if self._mesh is None:
             self.precompute_sdf()
@@ -95,17 +102,27 @@ class ObjectFactory(abc.ABC):
         closest_points = closest['points']
         face_ids = closest['primitive_ids']
         pts = closest_points.numpy()
-        normals = self._face_normals[face_ids.numpy()]
+        # negative SDF gradient outside the object and positive SDF gradient inside the object
+        gradient = pts - points_in_object_frame
 
-        distance = np.linalg.norm(points_in_object_frame - pts, axis=-1)
+        distance = np.linalg.norm(gradient, axis=-1)
+        # normalize gradients
+        has_direction = distance > 0
+        gradient[has_direction] /= distance[has_direction, None]
+
         rays = np.concatenate([points_in_object_frame, np.ones_like(points_in_object_frame)], axis=-1)
         intersection_counts = self._raycasting_scene.count_intersections(rays).numpy()
         is_inside = intersection_counts % 2 == 1
         distance[is_inside] *= -1
-        if invert_normal_for_inside_query:
-            normals[is_inside] *= -1
 
-        return tensor_utils.ensure_tensor(device, dtype, pts, distance, normals)
+        pts, distances, gradient = tensor_utils.ensure_tensor(device, dtype, pts, distance, gradient)
+
+        normals = None
+        if compute_normal:
+            normals = self._face_normals[face_ids.numpy()]
+            normals = torch.tensor(normals, device=device, dtype=dtype)
+
+        return SDFQuery(pts, distances, gradient, normals)
 
 
 class PyBulletNaiveSDF(util.ObjectFrameSDF):
@@ -154,10 +171,7 @@ class MeshSDF(util.ObjectFrameSDF):
         B, N, d = points_in_object_frame.shape
 
         # compute SDF value for new sampled points
-        pts, sdf, sdf_grad = self.obj_factory.object_frame_closest_point(points_in_object_frame,
-                                                                         invert_normal_for_inside_query=True)
-        # want the gradient from low to high value (pointing out of surface), so need negative
-        sdf_grad *= -1
+        res = self.obj_factory.object_frame_closest_point(points_in_object_frame)
 
         # points are transformed to link frame, thus it needs to compare against the object in link frame
         # objId is not in link frame and shouldn't be moved
@@ -165,13 +179,13 @@ class MeshSDF(util.ObjectFrameSDF):
             for b in range(B):
                 for i in range(N):
                     self.vis.draw_point("test_point", points_in_object_frame[b, i], color=(1, 0, 0), length=0.005)
-                    self.vis.draw_2d_line(f"test_normal", points_in_object_frame[b, i],
-                                          sdf_grad[b, i].detach().cpu(), color=(0, 0, 0),
+                    self.vis.draw_2d_line(f"test_grad", points_in_object_frame[b, i],
+                                          res.gradient[b, i].detach().cpu(), color=(0, 0, 0),
                                           size=2., scale=0.03)
-                    self.vis.draw_point("test_point_surf", pts[b, i].detach().cpu(), color=(0, 1, 0),
+                    self.vis.draw_point("test_point_surf", res.closest[b, i].detach().cpu(), color=(0, 1, 0),
                                         length=0.005,
-                                        label=f'{sdf[b, i].item():.5f}')
-        return sdf, sdf_grad
+                                        label=f'{res.distance[b, i].item():.5f}')
+        return res.distance, res.gradient
 
 
 class CachedSDF(util.ObjectFrameSDF):
@@ -249,10 +263,10 @@ class CachedSDF(util.ObjectFrameSDF):
         inbound_keys = ~out_of_bound_keys
 
         dtype = points_in_object_frame.dtype
-        val = torch.zeros((keys.shape,), device=self.device, dtype=dtype)
-        grad = torch.zeros((keys.shape,) + (3,), device=self.device, dtype=dtype)
+        val = torch.zeros(keys_ravelled.shape, device=self.device, dtype=dtype)
+        grad = torch.zeros(keys.shape, device=self.device, dtype=dtype)
 
-        val[inbound_keys] = self.voxels[keys_ravelled[inbound_keys]]
+        val[inbound_keys] = self.voxels.raw_data[keys_ravelled[inbound_keys]]
         grad[inbound_keys] = self.voxels_grad[keys_ravelled[inbound_keys]]
         val[out_of_bound_keys], grad[out_of_bound_keys] = self.gt_sdf(points_in_object_frame[out_of_bound_keys])
 
