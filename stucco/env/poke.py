@@ -797,7 +797,7 @@ class PokeEnv(PybulletEnv):
         else:
             pass
 
-        self.obj_factory = obj_factory_map[self.target_model_name]
+        self.obj_factory = obj_factory_map(self.target_model_name)
         # reset target and robot to their object frame to create the SDF
         # self.target_pose = target_pos, target_rot
         self._target_object_id, self.ranges = self.obj_factory.make_collision_obj(self.z)
@@ -810,9 +810,9 @@ class PokeEnv(PybulletEnv):
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
 
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
-        self.freespace_ranges = copy.deepcopy(self.ranges)
-        self.freespace_ranges[0] -= self.freespace_ranges[0][0] + 0.1  # keep some
-        self.freespace_ranges[2] -= self.freespace_ranges[2][0] + 0.1  # keep some
+        self.freespace_ranges = np.array([[-0.1, 0.5],
+                                          [-0.2, 0.2],
+                                          [-0.075, 0.625]])
         self._create_sdfs()
 
     def draw_mesh(self, *args, **kwargs):
@@ -1029,16 +1029,15 @@ class YCBObjectFactory(ObjectFactory):
     def __init__(self, name, ycb_name, ranges=np.array([[-.15, .15], [-.15, .15], [-0.15, .4]]), **kwargs):
         super(YCBObjectFactory, self).__init__(name, **kwargs)
         self.ycb_name = ycb_name
-        self.ranges = ranges
+        self.ranges = ranges * self.scale
 
     def make_collision_obj(self, z, rgba=None):
         obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
                             [0., 0., z * 3],
                             p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale, **self.other_load_kwargs)
-        ranges = self.ranges * self.scale
         if rgba is not None:
             p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
-        return obj_id, ranges
+        return obj_id, self.ranges
 
     def get_mesh_resource_filename(self):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
@@ -1047,19 +1046,22 @@ class YCBObjectFactory(ObjectFactory):
         return os.path.join(cfg.URDF_DIR, self.ycb_name, "textured_simple_reoriented.obj")
 
 
-obj_factory_map = {
-    "mustard": YCBObjectFactory("mustard", "YcbMustardBottle",
+def obj_factory_map(obj_name):
+    if obj_name == "mustard":
+        return YCBObjectFactory("mustard", "YcbMustardBottle",
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                vis_frame_pos=[-0.005, -0.005, 0.015]),
-    "banana": YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
-                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
-                               vis_frame_pos=[-.01, 0.0, -.01]),
-    "drill": YCBObjectFactory("drill", "YcbPowerDrill", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
-                              vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
-                              vis_frame_pos=[-0.002, -0.011, -.06]),
-    # TODO seems to be a problem with the hammer experiment
-    "hammer": YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.075, .075]]),
-                               vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
-                               vis_frame_pos=[-0.02, 0.01, -0.01]),
+                                vis_frame_pos=[-0.005, -0.005, 0.015])
+    if obj_name == "banana":
+        return YCBObjectFactory("banana", "YcbBanana", ranges=np.array([[-.075, .075], [-.075, .075], [-0.1, .15]]),
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                                vis_frame_pos=[-.01, 0.0, -.01])
+    if obj_name == "drill":
+        return YCBObjectFactory("drill", "YcbPowerDrill", ranges=np.array([[-.075, .125], [-.075, .075], [-0.08, .15]]),
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
+                                vis_frame_pos=[-0.002, -0.011, -.06])
+    if obj_name == "hammer":
+        # TODO seems to be a problem with the hammer experiment
+        return YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.1, .1]]),
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                                vis_frame_pos=[-0.02, 0.01, -0.01])
     # TODO create the other object factories
-}

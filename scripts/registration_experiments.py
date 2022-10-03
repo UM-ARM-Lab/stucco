@@ -7,6 +7,7 @@ import pandas as pd
 import argparse
 import matplotlib
 import numpy as np
+import seaborn as sns
 import pybullet_data
 import pymeshlab
 import pytorch_kinematics
@@ -49,6 +50,8 @@ from stucco.sdf import ObjectFactory
 from stucco.retrieval_controller import sample_mesh_points, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
 
+plt.switch_backend('Qt5Agg')
+
 # try:
 #     import rospy
 #
@@ -84,7 +87,8 @@ def build_model(obj_factory: stucco.sdf.ObjectFactory, vis, model_name, seed, nu
     print(f"finished building {model_name} {seed} {num_points}")
     if pause_at_end:
         input("paused for inspection")
-    vis.clear_visualizations()
+    vis.clear_visualization_after("mpt", 0)
+    vis.clear_visualization_after("mn", 0)
 
 
 def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, device="cpu"):
@@ -249,10 +253,13 @@ def test_icp(exp, seed=0, name="", clean_cache=False, viewing_delay=0.1,
         errors.append(errors_per_batch)
 
     for num, err in zip(num_points_list, errors):
-        df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
-                           "chamfer_err": err.cpu().numpy()})
+        df = pd.DataFrame(
+            {"date": datetime.today().date(), "method": icp_method.name, "name": name, "seed": seed, "points": num,
+             "batch": np.arange(B),
+             "chamfer_err": err.cpu().numpy()})
         cache = pd.concat([cache, df])
-    cache.to_pkl(fullname)
+
+    cache.to_pickle(fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
 
@@ -359,10 +366,12 @@ def test_icp_freespace(exp,
         errors.append(errors_per_batch)
 
     for num, err in zip(num_freespace_points_list, errors):
-        df = pd.DataFrame({"method": icp_method.name, "name": name, "seed": seed, "points": num, "batch": np.arange(B),
-                           "chamfer_err": err.cpu().numpy()})
+        df = pd.DataFrame(
+            {"date": datetime.today().date(), "method": icp_method.name, "name": name, "seed": seed, "points": num,
+             "batch": np.arange(B),
+             "chamfer_err": err.cpu().numpy()})
         cache = pd.concat([cache, df])
-    cache.to_pkl(fullname)
+    cache.to_pickle(fullname)
     for i in range(len(num_freespace_points_list)):
         print(f"num {num_freespace_points_list[i]} err {errors[i]}")
 
@@ -441,108 +450,38 @@ def marginalize_over_registration_num(name):
     return f"{registration_num[0]} registered points" if registration_num is not None else name
 
 
-def plot_icp_results(names_to_include=None, logy=True, plot_median=True, marginalize_over_name=None, x_filter=None,
-                     data_key=None, reduce_batch=None, leave_out_percentile=30, icp_res_file='icp_comparison.pkl',
-                     x_axis_label="num test points"):
+def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='chamfer_err',
+                     key_columns=("method", "name", "seed", "points", "batch"),
+                     leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
     # TODO adjust to load DataFrame
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
-    cache = torch.load(fullname)
+    cache = pd.read_pickle(fullname)
 
-    fig, axs = plt.subplots(1, 1, sharex="col", figsize=(8, 8), constrained_layout=True)
+    # clean up the database by removing duplicates (keeping latest results)
+    cache = cache.drop_duplicates(subset=key_columns, keep='last')
+    # save this version to keep the size small and not waste the filtering work we just did
+    cache.to_pickle(fullname)
+    cache.reset_index(inplace=True)
+
+    if filter is not None:
+        cache = filter(cache)
+
+    # def reduce(data):
+    #     return data
+    #
+    # # TODO consider using multiindex for the groups
+    # group = cache.groupby(['method', 'name', 'points'], as_index=False, group_keys=True, sort=False)
+    # d = group['chamfer_err'].agg([np.mean, np.std, np.median])
+    # # recover from multi-index
+    # e = d.reset_index(level=[0, 1, 2])
+    # marginalize over seed and batch
+    # res = sns.lineplot(data=e, x='points', y='median', hue='method', style='name')
+
+    res = sns.lineplot(data=cache, x=x, y=y, hue='method', style='name',
+                       estimator=np.median if plot_median else np.mean,
+                       errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
     if logy:
-        axs.set_yscale('log')
-
-    to_plot = {}
-    for name in cache.keys():
-        to_plot_name = marginalize_over_name(name) if marginalize_over_name is not None else name
-        if names_to_include is not None and not names_to_include(name):
-            print(f"ignored {name}")
-            continue
-
-        for seed in cache[name]:
-            data = cache[name][seed]
-            # short by num points
-            if data_key is not None:
-                data = data[data_key]
-            # if our data is not a dictionary, it should be indexed
-            try:
-                a, b = zip(*sorted(data.items(), key=lambda e: e[0]))
-            except AttributeError:
-                a = range(1, len(data) + 1, 1)
-                b = data
-
-            if to_plot_name not in to_plot:
-                to_plot[to_plot_name] = a, []
-            to_plot[to_plot_name][1].append(b)
-
-    # sort by name
-    to_plot = dict(sorted(to_plot.items()))
-    for name, data in to_plot.items():
-        x = np.array(data[0])
-        errors = data[1]
-        # assume all the num errors are the same
-        # convert to cm^2 (saved as mm^2, so divide by 10^2
-        errors = np.stack(errors) / 100
-
-        # expect [seed, x, batch]
-        if len(errors.shape) < 3:
-            logger.warning("data for %s is less than 3 dimensional; probably outdated", name)
-            continue
-
-        if x_filter is not None:
-            to_keep = x_filter(x)
-            x = x[to_keep]
-            errors = errors[:, to_keep]
-
-        if leave_out_percentile > 0:
-            # is sorted, so can just leave out the last few parts of the last dimension
-            to_keep_ratio = (100 - leave_out_percentile) / 100
-            to_keep = round(errors.shape[-1] * to_keep_ratio)
-            errors = errors[:, :, :to_keep]
-
-            # remove_threshold = np.percentile(errors, 100 - leave_out_percentile, axis=-1)
-            # to_keep = errors < remove_threshold[:, :, None]
-            # this is equivalent to the below; can uncomment to check
-            # errors = errors[to_keep].reshape(errors.shape[0], errors.shape[1], -1)
-
-            # t1 = []
-            # for i in range(to_keep.shape[0]):
-            #     t2 = []
-            #     for j in range(to_keep.shape[1]):
-            #         t2.append(errors[i, j, to_keep[i, j]])
-            #     t1.append(np.stack(t2))
-            # errors = np.stack(t1)
-
-        # transpose to get [x, seed, ...]
-        errors = errors.transpose(1, 0, 2)
-        if reduce_batch is not None:
-            errors = reduce_batch(errors, axis=-1)
-        # flatten the other dimensions for plotting
-        errors = errors.reshape(errors.shape[0], -1)
-
-        mean = errors.mean(axis=1)
-        median = np.median(errors, axis=1)
-        low = np.percentile(errors, 20, axis=1)
-        high = np.percentile(errors, 80, axis=1)
-        std = errors.std(axis=1)
-
-        if plot_median:
-            axs.plot(x, median, label=name)
-        else:
-            axs.plot(x, mean, label=name)
-        # axs.errorbar(x, mean, std, label=name)
-        axs.fill_between(x, low, high, alpha=0.2)
-
-        # print each numerically
-        for i in range(len(mean)):
-            print(f"{name} {x[i]:>4} : {mean[i]:.2f} ({std[i]:.2f})")
-        print()
-
-    axs.set_ylabel('unidirectional chamfer dist (UCD [cm^2])')
-    axs.set_xlabel(x_axis_label)
-    if not logy:
-        axs.set_ylim(bottom=0)
-    axs.legend()
+        res.set(yscale='log')
     plt.show()
 
 
@@ -550,7 +489,7 @@ class ShapeExplorationExperiment(abc.ABC):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, obj_factory=obj_factory_map["mustard"],
+    def __init__(self, obj_factory=obj_factory_map("mustard"),
                  device="cpu",
                  gui=True,
                  eval_period=10,
@@ -705,10 +644,6 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         # test object needs collision shape to test against, so we can't use visual only object
         obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
         range_per_dim = copy.copy(self.obj_factory.ranges)
-        # inflate the range_per_dim to allow for pose estimates around a single point
-        range_per_dim *= 2
-        # fix the z dimension since there shouldn't be that much variance across it
-        range_per_dim[2] = [-range_per_dim[2, 1] * 0.4, range_per_dim[2, 1] * 0.6]
         if clean_cache:
             # draw the bounding box of the object frame SDF
             # get extreme points
@@ -1031,10 +966,13 @@ def predetermined_controls():
     ctrl += [[0., 0., 1]] * 2
     ctrl += [[1., 0., 0]] * 6
 
-    ctrl += [[0., 1., 0]] * 7
+    ctrl += [[-0.4, 1., 0]] * 3
+    ctrl += [[-0.4, 1., -0.5]] * 4
 
-    ctrl += [[1., 0., -0.5]] * 4
-    ctrl += [[-1., 0., -0.5]] * 4
+    ctrl += [[1.0, -0.2, 0]] * 2
+
+    ctrl += [[1., 0., -0.4]] * 4
+    ctrl += [[-1., 0., -0.4]] * 4
 
     # poke the side inwards once
     ctrl += [[0., -1., 0]] * 2
@@ -1046,7 +984,7 @@ def predetermined_controls():
         ctrl += [[-1, 0., -0.5]] * 4
 
     ctrl += [[-1., 0., 0]] * 5
-    ctrl += [[0., -.97, 0]] * 13
+    ctrl += [[0., -.99, 0]] * 12
     #
     ctrl += [[1., 0., 0]] * 3
     for _ in range(3):
@@ -1074,9 +1012,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
              eval_num_points=200, ctrl_noise_max=0.005):
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
-    fullname = os.path.join(cfg.DATA_DIR, f'poking.pkl')
+    fullname = os.path.join(cfg.DATA_DIR, f'poking_{env.obj_factory.name}.pkl')
     if os.path.exists(fullname):
-        cache = torch.load(fullname)
+        cache = pd.read_pickle(fullname)
     else:
         cache = pd.DataFrame()
 
@@ -1221,12 +1159,14 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             batch = np.arange(B)
 
             df = pd.DataFrame(
-                {"method": reg_method.name, "level": env.level.name, "name": name, "seed": seed, "step": simTime,
-                 "batch": batch, "chamfer_err": _c, 'freespace_violations': _f,
+                {"date": datetime.today().date(), "method": reg_method.name, "level": env.level.name, "name": name,
+                 "seed": seed, "step": simTime,
+                 "batch": batch,
+                 "chamfer_err": _c, 'freespace_violations': _f,
                  'num_freespace_voxels': _n,
                  "freespace_violation_percent": _r})
             cache = pd.concat([cache, df])
-            cache.to_pkl(fullname)
+            cache.to_pickle(fullname)
 
     if reg_method == icp.ICPMethod.NONE:
         input("waiting for trajectory evaluation")
@@ -1433,16 +1373,25 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
                      icp_method=icp.ICPMethod.ICP_SGD_REVERSE,
                      name=f"comparison")
         experiment.close()
-    plot_icp_results(icp_res_file=file, reduce_batch=np.mean,
-                     names_to_include=lambda name: "comparison" in name or (
-                             "volumetric" in name and "free pts 0 delta 0.025" in name))
-    plot_icp_results(icp_res_file=file, reduce_batch=np.mean, x_filter=lambda x: x < 40,
-                     names_to_include=lambda name: "comparison" in name or (
-                             "volumetric" in name and "free pts 0 delta 0.025" in name))
+
+    def filter_names(df):
+        df = df[df["name"].str.contains("comparison")]
+        return df
+
+    def filter_names_and_x(df):
+        df = filter_names(df)
+        df = df[df["points"] < 40]
+        return df
+
+    plot_icp_results(filter=filter_names, icp_res_file=file)
+    plot_icp_results(filter=filter_names_and_x, icp_res_file=file)
 
 
 def plot_sdf(experiment: ICPEVExperiment, filter_pts=None):
     vis = experiment.dd
+    experiment.obj_factory.draw_mesh(experiment.dd, "objframe", ([0, 0, 0], [0, 0, 0, 1]), (0.3, 0.3, 0.3, 0.5),
+                                     object_id=experiment.dd.USE_DEFAULT_ID_FOR_NAME)
+    # TODO figure out why we're getting out of bound issues when using the sdf range as the input
     coords, pts = util.get_coordinates_and_points_in_grid(experiment.sdf.resolution, experiment.sdf.ranges)
     if filter_pts is not None:
         pts = filter_pts(pts)
@@ -1508,13 +1457,15 @@ if __name__ == "__main__":
     tracking_method_name = args.tracking
     registration_method = registration_map[args.registration]
     obj_name = level_to_obj_map[level]
-    obj_factory = obj_factory_map[obj_name]
+    obj_factory = obj_factory_map(obj_name)
 
     rand.seed(0)
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
         experiment = ICPEVExperiment(obj_factory=obj_factory, clean_cache=True, gui=not args.no_gui)
+        experiment.draw_mesh(name='objframe', pose=([0, 0, 0], [0, 0, 0, 1]), rgba=(1, 1, 1, 0.5),
+                             object_id=experiment.dd.USE_DEFAULT_ID_FOR_NAME)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in range(10):
@@ -1528,6 +1479,9 @@ if __name__ == "__main__":
             c1 = (pts[:, 0] > -0.15) & (pts[:, 0] < 0.15)
             c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
             c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.4)
+            # c1 = (pts[:, 0] > -0.2) & (pts[:, 0] < 0.2)
+            # c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
+            # c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.5)
             c = c1 & c2 & c3
             return pts[c][::2]
 
@@ -1562,9 +1516,12 @@ if __name__ == "__main__":
         # plot_icp_results(icp_res_file="poking.pkl",
         #                  names_to_include=lambda name: "gt" not in name and "temp" not in name and name != "VOLUMETRIC",
         #                  data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
-        plot_icp_results(icp_res_file="poking.pkl",
-                         names_to_include=lambda name: "h2" in name and "temp" not in name,
-                         data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
+        plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
+                         key_columns=("method", "name", "seed", "step", "batch"),
+                         plot_median=True, x='step', y='chamfer_err')
+        plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
+                         key_columns=("method", "name", "seed", "step", "batch"),
+                         plot_median=False, x='step', y='chamfer_err')
 
         pass
         # -- exploration experiment
