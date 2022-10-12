@@ -2,6 +2,7 @@ import abc
 import typing
 import re
 import copy
+import time
 import pandas as pd
 
 import argparse
@@ -1004,10 +1005,16 @@ def predetermined_controls():
     return predetermined_control
 
 
-def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory):
+def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
         pos, rot = util.matrix_to_pos_rot(m[b])
+        # if we're given a sequential delay, then instead of drawing the distribution simultaneously, we render them
+        # sequentially
+        if sequential_delay is not None:
+            b = 0
+            time.sleep(sequential_delay)
+        
         object_id = obj_id_map.get(b, None)
         object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
         obj_id_map[b] = object_id
