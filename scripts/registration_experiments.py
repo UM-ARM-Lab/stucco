@@ -1015,6 +1015,13 @@ def predetermined_controls():
     return predetermined_control
 
 
+def predetermined_poke_range():
+    # y,z order of poking
+    return {
+        poke.Levels.DRILL: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)),
+    }
+
+
 def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
@@ -1136,7 +1143,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         cache = pd.DataFrame()
 
     # ctrl = method.create_controller(predetermined_controls()[env.level])
-    ctrl = PokingController(env.contact_detector, method.contact_set)
+    y_order, z_order = predetermined_poke_range().get(env.level, (None, None))
+    ctrl = PokingController(env.contact_detector, method.contact_set, y_order=y_order, z_order=z_order)
 
     obs = env.reset()
 
@@ -1205,7 +1213,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             best_segment_idx = None
             for k, this_pts in enumerate(method):
                 N = len(this_pts)
-                if N < start_at_num_pts:
+                if N < start_at_num_pts or pokes < start_at_num_pts:
                     continue
                 # this_pts corresponds to tracked contact points that are segmented together
                 this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
@@ -1257,7 +1265,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
 
                 # evaluate with chamfer distance
-                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, env.vis, env.obj_factory,
+                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, None, env.obj_factory,
                                                              0)
 
                 link_to_current_tf = tf.Transform3d(matrix=T)
