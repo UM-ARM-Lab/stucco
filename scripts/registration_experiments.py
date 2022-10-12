@@ -101,6 +101,12 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
                        device=device)
 
 
+def registration_method_uses_only_contact_points(reg_method: icp.ICPMethod):
+    if reg_method in [icp.ICPMethod.VOLUMETRIC]:
+        return False
+    return True
+
+
 def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
                     volumetric_cost: icp_costs.VolumetricCost, reg_method: icp.ICPMethod):
     """Register a set of observed surface points in world frame to an object using some method
@@ -1163,6 +1169,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     num_freespace_voxels = []
     pose_obj_map = {}
 
+    num_points_to_T_cache = {}
+
     contact_id = []
 
     # placeholder for now
@@ -1196,7 +1204,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             rmse_per_object = []
             best_segment_idx = None
             for k, this_pts in enumerate(method):
-                if len(this_pts) < start_at_num_pts:
+                N = len(this_pts)
+                if N < start_at_num_pts:
                     continue
                 # this_pts corresponds to tracked contact points that are segmented together
                 this_pts = tensor_utils.ensure_tensor(device, dtype, this_pts)
@@ -1206,8 +1215,13 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 if ground_truth_initialization:
                     best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
 
-                T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
-                                               reg_method)
+                # avoid giving methods that don't use freespace more training iterations
+                if registration_method_uses_only_contact_points(reg_method) and N in num_points_to_T_cache:
+                    T, distances = num_points_to_T_cache[N]
+                else:
+                    T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
+                                                   reg_method)
+                    num_points_to_T_cache[N] = T, distances
 
                 transforms_per_object.append(T)
                 T = T.inverse()
