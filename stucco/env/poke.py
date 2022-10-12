@@ -858,7 +858,7 @@ class PokeEnv(PybulletEnv):
         floor_range = self.ranges.copy()
         # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
         # so for debugging/visualization use the following lines; otherwise uncomment it and use the whole floor
-        floor_offset = 0.15
+        floor_offset = 0.25
         floor_range[0, 0] = self.target_pose[0][0] - floor_offset
         floor_range[0, 1] = self.target_pose[0][0] + floor_offset
         floor_range[1, 0] = self.target_pose[0][1] - floor_offset
