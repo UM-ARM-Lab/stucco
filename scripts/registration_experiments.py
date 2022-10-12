@@ -482,6 +482,8 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                        errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
     if logy:
         res.set(yscale='log')
+    else:
+        res.set(ylim=(0, None))
     plt.show()
 
 
@@ -959,20 +961,23 @@ def predetermined_controls():
     for i in range(3):
         ctrl += [[1., 0., 0]] * 3
         ctrl += [[-1., 0., 1]] * 2
+        ctrl.append(None)
 
     ctrl += [[1., 0., 0]] * 2
     ctrl += [[-1., 0., 0]] * 1
+    ctrl.append(None)
     ctrl += [[0., 0., 1]] * 2
     ctrl += [[0., 0., 1]] * 2
     ctrl += [[1., 0., 0]] * 6
+    ctrl.append(None)
 
     ctrl += [[-0.4, 1., 0]] * 3
     ctrl += [[-0.4, 1., -0.5]] * 4
 
     ctrl += [[1.0, -0.2, 0]] * 2
-
     ctrl += [[1., 0., -0.4]] * 4
     ctrl += [[-1., 0., -0.4]] * 4
+    ctrl.append(None)
 
     # poke the side inwards once
     ctrl += [[0., -1., 0]] * 2
@@ -982,6 +987,7 @@ def predetermined_controls():
     for _ in range(2):
         ctrl += [[1., 0., -0.5]] * 4
         ctrl += [[-1, 0., -0.5]] * 4
+        ctrl.append(None)
 
     ctrl += [[-1., 0., 0]] * 5
     ctrl += [[0., -.99, 0]] * 12
@@ -990,6 +996,7 @@ def predetermined_controls():
     for _ in range(3):
         ctrl += [[1., 0., 0.5]] * 4
         ctrl += [[-1, 0., 0.5]] * 4
+        ctrl.append(None)
 
     ctrl += [[-1, 0., 0]] * 2
     predetermined_control[poke.Levels.DRILL] = ctrl
@@ -1041,6 +1048,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
     info = None
     simTime = 0
+    pokes = 0
 
     B = 30
     device = env.device
@@ -1072,7 +1080,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         else:
             contact_id.append(NO_CONTACT_ID)
 
-        if reg_method != icp.ICPMethod.NONE:
+        if reg_method != icp.ICPMethod.NONE and action is None:
+            pokes += 1
             # note that we update our registration regardless if we're in contact or not
             dist_per_est_obj = []
             transforms_per_object = []
@@ -1145,28 +1154,30 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 pose_obj_map[-1] = id
                 # TODO save current pose and contact point for playback
 
-        if torch.is_tensor(action):
-            action = action.cpu()
+            if len(chamfer_err) > 0:
+                _c = np.array(chamfer_err[-1].cpu().numpy())
+                _f = np.array(freespace_violations[-1])
+                _n = num_freespace_voxels[-1]
+                _r = _f / _n
+                batch = np.arange(B)
 
-        action = np.array(action).flatten()
-        obs, rew, done, info = env.step(action)
+                df = pd.DataFrame(
+                    {"date": datetime.today().date(), "method": reg_method.name, "level": env.level.name, "name": name,
+                     "seed": seed, "poke": pokes,
+                     "batch": batch,
+                     "chamfer_err": _c, 'freespace_violations': _f,
+                     'num_freespace_voxels': _n,
+                     "freespace_violation_percent": _r})
+                cache = pd.concat([cache, df])
+                cache.to_pickle(fullname)
 
-        if len(chamfer_err) > 0:
-            _c = np.array(chamfer_err[-1].cpu().numpy())
-            _f = np.array(freespace_violations[-1])
-            _n = num_freespace_voxels[-1]
-            _r = _f / _n
-            batch = np.arange(B)
+        if action is not None:
+            if torch.is_tensor(action):
+                action = action.cpu()
 
-            df = pd.DataFrame(
-                {"date": datetime.today().date(), "method": reg_method.name, "level": env.level.name, "name": name,
-                 "seed": seed, "step": simTime,
-                 "batch": batch,
-                 "chamfer_err": _c, 'freespace_violations': _f,
-                 'num_freespace_voxels': _n,
-                 "freespace_violation_percent": _r})
-            cache = pd.concat([cache, df])
-            cache.to_pickle(fullname)
+            action = np.array(action).flatten()
+            action += np.random.randn(action.shape[0]) * ctrl_noise_max
+            obs, rew, done, info = env.step(action)
 
     if reg_method == icp.ICPMethod.NONE:
         input("waiting for trajectory evaluation")
@@ -1513,15 +1524,16 @@ if __name__ == "__main__":
 
         env.close()
     elif args.experiment == "debug":
-        # plot_icp_results(icp_res_file="poking.pkl",
-        #                  names_to_include=lambda name: "gt" not in name and "temp" not in name and name != "VOLUMETRIC",
-        #                  data_key='chamfer_err', reduce_batch=np.median, x_axis_label='steps')
-        plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "step", "batch"),
-                         plot_median=True, x='step', y='chamfer_err')
-        plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "step", "batch"),
-                         plot_median=False, x='step', y='chamfer_err')
+        def filter(cache):
+
+            return cache
+
+        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                         key_columns=("method", "name", "seed", "poke", "batch"), logy=True,
+                         plot_median=True, x='poke', y='chamfer_err')
+        # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
+        #                  key_columns=("method", "name", "seed", "poke", "batch"),
+        #                  plot_median=False, x='poke', y='chamfer_err')
 
         pass
         # -- exploration experiment

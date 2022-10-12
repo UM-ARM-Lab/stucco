@@ -116,7 +116,8 @@ class RetrievalPredeterminedController(Controller):
             u = self.controls[self.i]
             self.i += 1
 
-        self.u_history.append(u)
+        if u is not None:
+            self.u_history.append(u)
         return u
 
 
