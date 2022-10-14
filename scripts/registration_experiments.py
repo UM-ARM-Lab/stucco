@@ -13,7 +13,6 @@ import numpy as np
 import seaborn as sns
 import pybullet_data
 import pymeshlab
-import pytorch_kinematics
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
@@ -28,23 +27,22 @@ from datetime import datetime
 
 import gpytorch
 import matplotlib.colors, matplotlib.cm
-from matplotlib import cm
 from matplotlib import pyplot as plt
 from arm_pytorch_utilities import tensor_utils, rand
 from torchmcubes import marching_cubes
 
-from stucco import cfg, icp, exploration, util
+from stucco import cfg, icp
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
 from stucco.env import poke
 from stucco.env.env import InfoKeys
-from stucco.env.poke import obj_factory_map
-from stucco.env.pybullet_env import make_sphere, closest_point_on_surface, ContactInfo, \
+from stucco.env.poke import obj_factory_map, level_to_obj_map
+from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, \
     surface_normal_at_point
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
 from stucco.env_getters.poke import PokeGetter
-from stucco.evaluation import evaluate_chamfer_distance, clustering_metrics, compute_contact_error
+from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
 from stucco import util
@@ -1019,6 +1017,9 @@ def predetermined_poke_range():
     # y,z order of poking
     return {
         poke.Levels.DRILL: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)),
+        poke.Levels.DRILL_OPPOSITE: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
+        poke.Levels.DRILL_SLANTED: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
+        poke.Levels.DRILL_FALLEN: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.18, 0.25, 0.4)),
     }
 
 
@@ -1112,7 +1113,7 @@ class PokingController(Controller):
             elif self.mode == self.Mode.PUSH_FORWARD:
                 u[0] = 1.
                 self.push_i += 1
-                if self.push_i >= self.push_forward_count:
+                if self.push_i >= self.push_forward_count or np.linalg.norm(info['reaction']) > 5:
                     self.mode = self.Mode.RETURN_BACKWARD
             elif self.mode == self.Mode.RETURN_BACKWARD:
                 diff = self.x_rest - obs[0]
@@ -1143,7 +1144,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         cache = pd.DataFrame()
 
     # ctrl = method.create_controller(predetermined_controls()[env.level])
-    y_order, z_order = predetermined_poke_range().get(env.level, (None, None))
+    y_order, z_order = predetermined_poke_range().get(env.level, ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
     ctrl = PokingController(env.contact_detector, method.contact_set, y_order=y_order, z_order=z_order)
 
     obs = env.reset()
@@ -1582,10 +1583,7 @@ parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 # run parameters
-task_map = {"mustard": poke.Levels.MUSTARD, "banana": poke.Levels.BANANA, "drill": poke.Levels.DRILL,
-            "hammer": poke.Levels.HAMMER}
-level_to_obj_map = {poke.Levels.MUSTARD: "mustard", poke.Levels.BANANA: "banana", poke.Levels.DRILL: "drill",
-                    poke.Levels.HAMMER: "hammer", }
+task_map = {level.name.lower(): level for level in poke.Levels}
 parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
@@ -1655,12 +1653,12 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         def filter(cache):
-
+            cache = cache[cache["level"] == level.name]
             return cache
 
 
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "poke", "batch"), logy=True,
+                         key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=True,
                          plot_median=True, x='poke', y='chamfer_err')
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),

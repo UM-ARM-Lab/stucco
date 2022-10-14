@@ -47,9 +47,21 @@ class Levels(enum.IntEnum):
     BANANA = 3
     DRILL = 4
     HAMMER = 5
+    DRILL_OPPOSITE = 6
+    DRILL_SLANTED = 7
+    DRILL_FALLEN = 8
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
+level_to_obj_map = {Levels.MUSTARD: "mustard",
+                    Levels.BANANA: "banana",
+                    Levels.DRILL: "drill",
+                    Levels.HAMMER: "hammer",
+                    Levels.DRILL_OPPOSITE: "drill",
+                    Levels.DRILL_SLANTED: "drill",
+                    Levels.DRILL_FALLEN: "drill",
+                    }
+
 DEFAULT_MOVABLE_RGBA = [0.8, 0.7, 0.3, 0.8]
 
 
@@ -321,7 +333,7 @@ class PokeEnv(PybulletEnv):
 
     def _set_goal(self, goal):
         # ignore the pusher position
-        self.goal = np.array(tuple(goal) + (0, 0, 0))
+        self.goal = np.array(goal)
         if self._debug_visualizations[DebugVisualization.GOAL]:
             self._dd.draw_point('goal', self.goal)
 
@@ -787,15 +799,8 @@ class PokeEnv(PybulletEnv):
         self._make_robot_translucent(self.gripperId)
 
     def create_target_obj(self, target_pos, target_rot, flags, immovable=False, mass=2):
-        if self.level in [Levels.MUSTARD]:
-            # TODO set up target model name for each level
-            self.target_model_name = "mustard"
-            self.z = 0.1
-        elif self.level in [Levels.DRILL]:
-            self.target_model_name = "drill"
-            self.z = 0.1
-        else:
-            pass
+        self.z = 0.1
+        self.target_model_name = level_to_obj_map.get(self.level)
 
         self.obj_factory = obj_factory_map(self.target_model_name)
         # reset target and robot to their object frame to create the SDF
@@ -889,7 +894,11 @@ class PokeEnv(PybulletEnv):
         flags = p.URDF_USE_INERTIA_FROM_FILE
         target_pos = [self.goal[0], self.goal[1], self.goal[2]]
         # all targets are upright
-        target_rot = p.getQuaternionFromEuler([0, 0, self.goal[3]])
+        target_rot = self.goal[3:]
+        if len(target_rot) == 1:
+            target_rot = p.getQuaternionFromEuler([0, 0, target_rot[0]])
+        elif len(target_rot) == 3:
+            target_rot = p.getQuaternionFromEuler(target_rot)
 
         self.create_target_obj(target_pos, target_rot, flags, immovable=self.immovable_target)
         p.changeDynamics(self.planeId, -1, lateralFriction=0.6, spinningFriction=0.8)

@@ -5,6 +5,7 @@ from arm_pytorch_utilities.optim import get_device
 from stucco import tracking
 from stucco.env import poke
 from stucco.env_getters.getter import EnvGetter
+import math
 
 
 class PokeGetter(EnvGetter):
@@ -25,7 +26,7 @@ class PokeGetter(EnvGetter):
 
     @staticmethod
     def contact_parameters(env: poke.PokeEnv, **kwargs) -> tracking.ContactParameters:
-        params = tracking.ContactParameters(length=0.03,
+        params = tracking.ContactParameters(length=1.0, # use large length scale initially to ensure everyone is 1 body
                                             penetration_length=0.002,
                                             hard_assignment_threshold=0.4,
                                             intersection_tolerance=0.005)
@@ -40,6 +41,12 @@ class PokeGetter(EnvGetter):
         goal = (0.25, 0.0, 0.2, 0.)
         if level in [poke.Levels.MUSTARD, poke.Levels.DRILL]:
             goal = (0.25, 0.0, 0.2, 0.)
+        if level in [poke.Levels.DRILL_OPPOSITE]:
+            goal = (0.42, 0.0, 0.2, math.pi)
+        if level in [poke.Levels.DRILL_SLANTED]:
+            goal = (0.35, 0.1, 0.2, 2 * math.pi/3)
+        if level in [poke.Levels.DRILL_FALLEN]:
+            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
         env = poke.PokeEnv(environment_level=level, goal=goal, log_video=log_video, **kwargs)
         cls.env_dir = '{}/floating'.format(poke.DIR)
         return env
