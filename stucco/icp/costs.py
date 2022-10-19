@@ -217,7 +217,6 @@ class VolumetricCost(ICPPoseCost):
                     if b != 0:
                         continue
 
-                    b = 0
                     i = 0
 
                     # select what to visualize
@@ -297,9 +296,15 @@ class VolumetricCost(ICPPoseCost):
                             self.vis.draw_2d_line(f"mingrad.{i}", pt, -self._pts_all.grad[b, i], color=(0, 1, 0),
                                                   size=5.,
                                                   scale=10)
+                        for j, pt in enumerate(self._pts_interior[b]):
+                            self.vis.draw_2d_line(f"intgrad.{j}", pt, -self._pts_interior.grad[b, j], color=(0, 1, 0),
+                                                  size=5.,
+                                                  scale=10)
+
                         self.vis.clear_visualization_after("mipt", i + 1)
                         self.vis.clear_visualization_after("min", i + 1)
                         self.vis.clear_visualization_after("mingrad", i + 1)
+                        self.vis.clear_visualization_after("intgrad", j + 1)
 
 
 class ICPPoseCostMatrixInputWrapper:
