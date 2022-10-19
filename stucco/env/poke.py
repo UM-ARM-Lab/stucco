@@ -121,10 +121,9 @@ class PybulletOracleContactSensor(ContactSensor):
         # assume only 1 contact
         pt = self._cached_contact[0][ContactInfo.POS_B]
         # caller expects it in link frame while we have it in global frame
-        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(torch.tensor(pose[1])),
-                                            dtype=self.dtype, device=self.device)
-        return link_to_current_tf.inverse().transform_points(
-            torch.tensor(pt, dtype=self.dtype, device=self.device).view(1, -1)).view(-1)
+        pt, pos, rot = tensor_utils.ensure_tensor(self.device, self.dtype, pt, pose[0], pose[1])
+        link_to_current_tf = tf.Transform3d(pos=pos, rot=tf.xyzw_to_wxyz(rot), dtype=self.dtype, device=self.device)
+        return link_to_current_tf.inverse().transform_points(pt.view(1, -1)).view(-1)
 
 
 class PokeEnv(PybulletEnv):
