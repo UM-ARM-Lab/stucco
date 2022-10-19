@@ -180,8 +180,8 @@ def object_robot_penetration_score(pt_to_config, config, object_transform, model
     return -d
 
 
-def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: Visualizer, obj_factory: ObjectFactory,
-                              viewing_delay, print_err=False):
+def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Optional[Visualizer],
+                              obj_factory: ObjectFactory, viewing_delay, print_err=False):
     # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
     # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
     # evaluation model points on the ground truth object surface, and the surface points of the object transformed
@@ -207,6 +207,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: Visualizer,
             pos, rot = util.matrix_to_pos_rot(m[b])
             obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
                                   object_id=vis.USE_DEFAULT_ID_FOR_NAME)
+            vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"avgerr: {round(errors_per_batch[b].item())}")
 
             if print_err:
                 for i in range(eval_num_points):
