@@ -471,6 +471,8 @@ def marginalize_over_registration_num(name):
 def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='chamfer_err',
                      key_columns=("method", "name", "seed", "points", "batch"),
                      keep_lowest_y_quantile=0.5,
+                     keep_lowest_y_wrt=None,
+                     scatter=False,
                      leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     df = pd.read_pickle(fullname)
@@ -487,40 +489,16 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     group = [x, "method", "name", "seed"]
     if "level" in key_columns:
         group.append("level")
-    df = df[df[y] <= df.groupby(group)[y].transform('quantile', keep_lowest_y_quantile)]
+    if keep_lowest_y_wrt:
+        keep_lowest_y_wrt = y
+    df = df[df[keep_lowest_y_wrt] <= df.groupby(group)[keep_lowest_y_wrt].transform('quantile', keep_lowest_y_quantile)]
 
-    res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
-                       estimator=np.median if plot_median else np.mean,
-                       errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
-    if logy:
-        res.set(yscale='log')
+    if scatter:
+        res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
     else:
-        res.set(ylim=(0, None))
-    plt.show()
-
-
-def plot_single_poke_run(filter=None, logy=True, x='points', y='chamfer_err',
-                         key_columns=("method", "name", "seed", "points", "batch"),
-                         keep_lowest_y_quantile=0.5,
-                         icp_res_file='icp_comparison.pkl'):
-    fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
-    df = pd.read_pickle(fullname)
-
-    # clean up the database by removing duplicates (keeping latest results)
-    df = df.drop_duplicates(subset=key_columns, keep='last')
-    # save this version to keep the size small and not waste the filtering work we just did
-    df.to_pickle(fullname)
-    df.reset_index(inplace=True)
-
-    if filter is not None:
-        df = filter(df)
-
-    group = [x, "method", "name", "seed"]
-    if "level" in key_columns:
-        group.append("level")
-    df = df[df[y] <= df.groupby(group)[y].transform('quantile', keep_lowest_y_quantile)]
-
-    res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
+        res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
+                           estimator=np.median if plot_median else np.mean,
+                           errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
     if logy:
         res.set(yscale='log')
     else:
@@ -1718,13 +1696,10 @@ if __name__ == "__main__":
             return df
 
 
-        # plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-        #                  key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=True,
-        #                  plot_median=True, x='poke', y='chamfer_err')
-
-        plot_single_poke_run(filter=filter_single, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                             key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=False,
-                             x='poke', y='chamfer_err')
+        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                         key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=False,
+                         keep_lowest_y_wrt="rmse",
+                         plot_median=True, x='poke', y='chamfer_err')
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
