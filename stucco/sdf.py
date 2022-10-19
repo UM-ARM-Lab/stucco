@@ -72,20 +72,7 @@ class ObjectFactory(abc.ABC):
         self._face_normals = np.asarray(self._mesh.triangle_normals)
 
     @tensor_utils.handle_batch_input
-    def object_frame_closest_point(self, points_in_object_frame, compute_normal=False) -> SDFQuery:
-        """
-        Assumes the input is in the simulator object frame and will return outputs
-        also in the simulator object frame. Note that the simulator object frame and the mesh object frame may be
-        different
-
-        :param points_in_object_frame: N x 3 points in the object frame
-        (can have arbitrary batch dimensions in front of N)
-        :param compute_normal: bool: whether to compute surface normal at the closest point or not
-        :return: dict(closest: N x 3, distance: N, gradient: N x 3, normal: N x 3)
-        the closest points on the surface, their corresponding signed distance to the query point, the negative SDF
-        gradient at the query point if the query point is outside, otherwise it's the positive SDF gradient
-        (points from the query point to the closest point), and the surface normal at the closest point
-        """
+    def _do_object_frame_closest_point(self, points_in_object_frame, compute_normal=False):
         if self._mesh is None:
             self.precompute_sdf()
 
@@ -121,8 +108,24 @@ class ObjectFactory(abc.ABC):
         if compute_normal:
             normals = self._face_normals[face_ids.numpy()]
             normals = torch.tensor(normals, device=device, dtype=dtype)
+        return pts, distances, gradient, normals
 
-        return SDFQuery(pts, distances, gradient, normals)
+    def object_frame_closest_point(self, points_in_object_frame, compute_normal=False) -> SDFQuery:
+        """
+        Assumes the input is in the simulator object frame and will return outputs
+        also in the simulator object frame. Note that the simulator object frame and the mesh object frame may be
+        different
+
+        :param points_in_object_frame: N x 3 points in the object frame
+        (can have arbitrary batch dimensions in front of N)
+        :param compute_normal: bool: whether to compute surface normal at the closest point or not
+        :return: dict(closest: N x 3, distance: N, gradient: N x 3, normal: N x 3)
+        the closest points on the surface, their corresponding signed distance to the query point, the negative SDF
+        gradient at the query point if the query point is outside, otherwise it's the positive SDF gradient
+        (points from the query point to the closest point), and the surface normal at the closest point
+        """
+
+        return SDFQuery(*self._do_object_frame_closest_point(points_in_object_frame, compute_normal=compute_normal))
 
 
 class PyBulletNaiveSDF(util.ObjectFrameSDF):
