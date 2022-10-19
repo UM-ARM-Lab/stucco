@@ -1030,6 +1030,10 @@ def predetermined_poke_range():
         poke.Levels.DRILL_OPPOSITE: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
         poke.Levels.DRILL_SLANTED: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
         poke.Levels.DRILL_FALLEN: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.18, 0.25, 0.4)),
+        poke.Levels.MUSTARD: ((0, 0.18, 0.24, -0.25), (0.05, 0.2, 0.35, 0.52)),
+        poke.Levels.MUSTARD_SIDEWAYS: ((0, 0.2, -0.2), (0.05, 0.2, 0.35, 0.52)),
+        poke.Levels.MUSTARD_FALLEN: ((0, 0.3, -0.15, -0.36), (0.05, 0.2, 0.35)),
+        poke.Levels.MUSTARD_FALLEN_SIDEWAYS: ((0, 0.2, 0.35, -0.2, -0.35), (0.05, 0.12, 0.2)),
     }
 
 
@@ -1279,7 +1283,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                               object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
                 if draw_pose_distribution_separately:
-                    evaluate_chamfer_dist_extra_args = [env.vis, env.obj_factory, 0.1, True]
+                    evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory, 0.1,
+                                                        True]
                 else:
                     draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
                     evaluate_chamfer_dist_extra_args = [None, env.obj_factory, 0., False]

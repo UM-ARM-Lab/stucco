@@ -50,17 +50,24 @@ class Levels(enum.IntEnum):
     DRILL_OPPOSITE = 6
     DRILL_SLANTED = 7
     DRILL_FALLEN = 8
+    MUSTARD_SIDEWAYS = 9
+    MUSTARD_FALLEN = 10
+    MUSTARD_FALLEN_SIDEWAYS = 11
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
-level_to_obj_map = {Levels.MUSTARD: "mustard",
-                    Levels.BANANA: "banana",
-                    Levels.DRILL: "drill",
-                    Levels.HAMMER: "hammer",
-                    Levels.DRILL_OPPOSITE: "drill",
-                    Levels.DRILL_SLANTED: "drill",
-                    Levels.DRILL_FALLEN: "drill",
-                    }
+level_to_obj_map = {
+    Levels.MUSTARD: "mustard",
+    Levels.BANANA: "banana",
+    Levels.DRILL: "drill",
+    Levels.HAMMER: "hammer",
+    Levels.DRILL_OPPOSITE: "drill",
+    Levels.DRILL_SLANTED: "drill",
+    Levels.DRILL_FALLEN: "drill",
+    Levels.MUSTARD_SIDEWAYS: "mustard",
+    Levels.MUSTARD_FALLEN: "mustard",
+    Levels.MUSTARD_FALLEN_SIDEWAYS: "mustard",
+}
 
 DEFAULT_MOVABLE_RGBA = [0.8, 0.7, 0.3, 0.8]
 
