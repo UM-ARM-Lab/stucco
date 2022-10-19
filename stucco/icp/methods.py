@@ -480,7 +480,7 @@ def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
                                           torch.ones(batch, device=A.device, dtype=A.dtype))
 
     res = iterative_closest_point(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
-                                  allow_reflection=True)
+                                  allow_reflection=False)
     T = torch.eye(4, device=A.device).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R.transpose(-1, -2)
     T[:, :3, 3] = res.RTs.T
