@@ -223,7 +223,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Opti
 
             time.sleep(viewing_delay)
 
-        # return to link frame
-        obj_factory.draw_mesh(vis, "chamfer evaluation", ([0, 0, 0], [0, 0, 0, 1]), rgba=(0, 0.2, 0.8, 0.2),
+        # move somewhere far away
+        obj_factory.draw_mesh(vis, "chamfer evaluation", ([0, 0, 100], [0, 0, 0, 1]), rgba=(0, 0.2, 0.8, 0.2),
                               object_id=vis.USE_DEFAULT_ID_FOR_NAME)
     return errors_per_batch
