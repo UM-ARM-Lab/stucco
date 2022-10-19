@@ -213,13 +213,9 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Opti
                 for i in range(eval_num_points):
                     query = model_points_world_frame_eval[i].cpu()
                     closest = closest_pt_world_frame[b, i].cpu()
-                    vis.draw_point("query", query, (0, 1, 0))
-                    vis.draw_point("closest", closest, (0, 1, 1), label=f"{chamfer_distance[b, i].item():.1f}")
-                    vis.draw_2d_line("qc", query, closest - query, (0, 1, 0), scale=1)
-
-                for j in range(eval_num_points):
-                    closest = closest_pt_world_frame[b, j].cpu()
-                    vis.draw_point(f"closest.{j}", closest, (0, 1, 1))
+                    vis.draw_point(f"query.{i}", query, (0, 1, 0))
+                    vis.draw_point(f"closest.{i}", closest, (0, 1, 1))
+                    vis.draw_2d_line(f"qc.{i}", query, closest - query, (0, 1, 0), scale=1)
 
             time.sleep(viewing_delay)
 
