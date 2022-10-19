@@ -100,7 +100,7 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
 
 
 def registration_method_uses_only_contact_points(reg_method: icp.ICPMethod):
-    if reg_method in [icp.ICPMethod.VOLUMETRIC]:
+    if reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_ICP_INIT]:
         return False
     return True
 
@@ -111,7 +111,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 
     :param model_points_world_frame:
     :param model_points_register:
-    :param best_tsf_guess:
+    :param best_tsf_guess: initial estimate of object frame to world frame
     :param B:
     :param volumetric_cost:
     :param reg_method:
@@ -143,10 +143,19 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
                                              max_iterations=20, lr=0.01,
                                              learn_translation=True,
                                              use_matching_loss=False)
-    elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE]:
+    elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
+                        icp.ICPMethod.VOLUMETRIC_ICP_INIT]:
         if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
             volumetric_cost = copy.copy(volumetric_cost)
             volumetric_cost.scale_known_freespace = 0
+        if reg_method == icp.ICPMethod.VOLUMETRIC_ICP_INIT:
+            # try always using the prior
+            # best_tsf_guess = exploration.random_upright_transforms(B, model_points_register.dtype,
+            #                                                        model_points_register.device)
+            T, distances = icp.icp_pytorch3d(model_points_register, model_points_world_frame,
+                                             given_init_pose=best_tsf_guess, batch=B)
+            best_tsf_guess = T
+        # so given_init_pose expects world frame to object frame
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
                                           given_init_pose=best_tsf_guess.inverse(),
                                           batch=B, max_iterations=20, lr=0.01)
@@ -461,34 +470,57 @@ def marginalize_over_registration_num(name):
 
 def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='chamfer_err',
                      key_columns=("method", "name", "seed", "points", "batch"),
+                     keep_lowest_y_quantile=0.5,
                      leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
-    # TODO adjust to load DataFrame
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
-    cache = pd.read_pickle(fullname)
+    df = pd.read_pickle(fullname)
 
     # clean up the database by removing duplicates (keeping latest results)
-    cache = cache.drop_duplicates(subset=key_columns, keep='last')
+    df = df.drop_duplicates(subset=key_columns, keep='last')
     # save this version to keep the size small and not waste the filtering work we just did
-    cache.to_pickle(fullname)
-    cache.reset_index(inplace=True)
+    df.to_pickle(fullname)
+    df.reset_index(inplace=True)
 
     if filter is not None:
-        cache = filter(cache)
+        df = filter(df)
 
-    # def reduce(data):
-    #     return data
-    #
-    # # TODO consider using multiindex for the groups
-    # group = cache.groupby(['method', 'name', 'points'], as_index=False, group_keys=True, sort=False)
-    # d = group['chamfer_err'].agg([np.mean, np.std, np.median])
-    # # recover from multi-index
-    # e = d.reset_index(level=[0, 1, 2])
-    # marginalize over seed and batch
-    # res = sns.lineplot(data=e, x='points', y='median', hue='method', style='name')
+    group = [x, "method", "name", "seed"]
+    if "level" in key_columns:
+        group.append("level")
+    df = df[df[y] <= df.groupby(group)[y].transform('quantile', keep_lowest_y_quantile)]
 
-    res = sns.lineplot(data=cache, x=x, y=y, hue='method', style='name',
+    res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
                        estimator=np.median if plot_median else np.mean,
                        errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
+    if logy:
+        res.set(yscale='log')
+    else:
+        res.set(ylim=(0, None))
+    plt.show()
+
+
+def plot_single_poke_run(filter=None, logy=True, x='points', y='chamfer_err',
+                         key_columns=("method", "name", "seed", "points", "batch"),
+                         keep_lowest_y_quantile=0.5,
+                         icp_res_file='icp_comparison.pkl'):
+    fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
+    df = pd.read_pickle(fullname)
+
+    # clean up the database by removing duplicates (keeping latest results)
+    df = df.drop_duplicates(subset=key_columns, keep='last')
+    # save this version to keep the size small and not waste the filtering work we just did
+    df.to_pickle(fullname)
+    df.reset_index(inplace=True)
+
+    if filter is not None:
+        df = filter(df)
+
+    group = [x, "method", "name", "seed"]
+    if "level" in key_columns:
+        group.append("level")
+    df = df[df[y] <= df.groupby(group)[y].transform('quantile', keep_lowest_y_quantile)]
+
+    res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
     if logy:
         res.set(yscale='log')
     else:
@@ -1133,7 +1165,7 @@ class PokingController(Controller):
 
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500, start_at_num_pts=4,
-             ground_truth_initialization=False,
+             ground_truth_initialization=False, draw_pose_distribution_separately=True,
              eval_num_points=200, ctrl_noise_max=0.005):
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
@@ -1144,7 +1176,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
         cache = pd.DataFrame()
 
     # ctrl = method.create_controller(predetermined_controls()[env.level])
-    y_order, z_order = predetermined_poke_range().get(env.level, ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
+    y_order, z_order = predetermined_poke_range().get(env.level,
+                                                      ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
     ctrl = PokingController(env.contact_detector, method.contact_set, y_order=y_order, z_order=z_order)
 
     obs = env.reset()
@@ -1263,11 +1296,19 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
 
                 T = transforms_per_object[best_segment_idx]
-                draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
+
+                # when evaluating, move the best guess pose far away to improve clarity
+                env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
+                              object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
+                if draw_pose_distribution_separately:
+                    evaluate_chamfer_dist_extra_args = [env.vis, env.obj_factory, 0.1, True]
+                else:
+                    draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
+                    evaluate_chamfer_dist_extra_args = [None, env.obj_factory, 0., False]
 
                 # evaluate with chamfer distance
-                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, None, env.obj_factory,
-                                                             0)
+                errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval,
+                                                             *evaluate_chamfer_dist_extra_args)
 
                 link_to_current_tf = tf.Transform3d(matrix=T)
                 interior_pts = link_to_current_tf.transform_points(volumetric_cost.model_interior_points_orig)
@@ -1280,10 +1321,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
                 # draw mesh at where our best guess is
                 guess_pose = util.matrix_to_pos_rot(best_T)
-                id = pose_obj_map.get(-1)
-                id = env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5), object_id=id)
-                pose_obj_map[-1] = id
-                # TODO save current pose and contact point for playback
+                env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5), object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
 
             if len(chamfer_err) > 0:
                 _c = np.array(chamfer_err[-1].cpu().numpy())
@@ -1291,6 +1329,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 _n = num_freespace_voxels[-1]
                 _r = _f / _n
                 batch = np.arange(B)
+                rmse = rmse_per_object[best_segment_idx]
 
                 df = pd.DataFrame(
                     {"date": datetime.today().date(), "method": reg_method.name, "level": env.level.name, "name": name,
@@ -1298,7 +1337,9 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                      "batch": batch,
                      "chamfer_err": _c, 'freespace_violations': _f,
                      'num_freespace_voxels': _n,
-                     "freespace_violation_percent": _r})
+                     "freespace_violation_percent": _r,
+                     "rmse": rmse.cpu().numpy(),
+                     })
                 cache = pd.concat([cache, df])
                 cache.to_pickle(fullname)
 
@@ -1497,23 +1538,36 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
         #              icp_method=icp.ICPMethod.ICP_SGD,
         #              name=f"comparison")
         # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.ICP,
+        #              name=f"comparison")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.ICP_REVERSE,
+        #              name=f"comparison")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.ICP_SGD_REVERSE,
+        #              name=f"comparison")
+        # experiment.close()
+
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
             test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.ICP,
+                     icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
                      name=f"comparison")
         experiment.close()
         experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.ICP_REVERSE,
-                     name=f"comparison")
-        experiment.close()
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.ICP_SGD_REVERSE,
-                     name=f"comparison")
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+                     icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
+                     name=f"comparison 100 free pts")
         experiment.close()
 
     def filter_names(df):
@@ -1560,6 +1614,7 @@ parser.add_argument('experiment',
                     help='which experiment to run')
 registration_map = {
     "volumetric": icp.ICPMethod.VOLUMETRIC,
+    "volumetric-icp-init": icp.ICPMethod.VOLUMETRIC_ICP_INIT,
     "volumetric-no-freespace": icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
     "icp": icp.ICPMethod.ICP,
     "icp-reverse": icp.ICPMethod.ICP_REVERSE,
@@ -1652,14 +1707,25 @@ if __name__ == "__main__":
 
         env.close()
     elif args.experiment == "debug":
-        def filter(cache):
-            cache = cache[cache["level"] == level.name]
-            return cache
+        def filter(df):
+            df = df[df["level"] == level.name]
+            return df
 
 
-        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=True,
-                         plot_median=True, x='poke', y='chamfer_err')
+        def filter_single(df):
+            df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
+            # df = df[(df["level"] == level.name) & (df["seed"] == 0)]
+            return df
+
+
+        # plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+        #                  key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=True,
+        #                  plot_median=True, x='poke', y='chamfer_err')
+
+        plot_single_poke_run(filter=filter_single, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                             key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=False,
+                             x='poke', y='chamfer_err')
+
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
         #                  plot_median=False, x='poke', y='chamfer_err')
