@@ -53,6 +53,8 @@ class Levels(enum.IntEnum):
     MUSTARD_SIDEWAYS = 9
     MUSTARD_FALLEN = 10
     MUSTARD_FALLEN_SIDEWAYS = 11
+    HAMMER_1 = 12
+    HAMMER_2 = 13
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
@@ -61,6 +63,8 @@ level_to_obj_map = {
     Levels.BANANA: "banana",
     Levels.DRILL: "drill",
     Levels.HAMMER: "hammer",
+    Levels.HAMMER_1: "hammer",
+    Levels.HAMMER_2: "hammer",
     Levels.DRILL_OPPOSITE: "drill",
     Levels.DRILL_SLANTED: "drill",
     Levels.DRILL_FALLEN: "drill",
@@ -818,12 +822,17 @@ class PokeEnv(PybulletEnv):
             p.stepSimulation()
         p.changeDynamics(self._target_object_id, -1, mass=0 if immovable else mass)
         self.target_pose = p.getBasePositionAndOrientation(self._target_object_id)
-        self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5))
+        self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5), object_id=self.vis.USE_DEFAULT_ID_FOR_NAME)
 
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
-        self.freespace_ranges = np.array([[-0.1, 0.5],
-                                          [-0.2, 0.2],
-                                          [-0.075, 0.625]])
+        if self.level in [Levels.HAMMER, Levels.HAMMER_2]:
+            self.freespace_ranges = np.array([[-0.1, 0.5],
+                                              [-0.3, 0.5],
+                                              [-0.075, 0.4]])
+        else:
+            self.freespace_ranges = np.array([[-0.1, 0.5],
+                                              [-0.3, 0.3],
+                                              [-0.075, 0.625]])
         self._create_sdfs()
 
     def draw_mesh(self, *args, **kwargs):
@@ -1079,4 +1088,9 @@ def obj_factory_map(obj_name):
         return YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.1, .1]]),
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.02, 0.01, -0.01])
+    if obj_name == "box":
+        # TODO seems to be a problem with the hammer experiment
+        return YCBObjectFactory("box", "YcbCrackerBox", ranges=np.array([[-.075, .125], [-.075, .075], [-0.08, .15]]),
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
+                                vis_frame_pos=[-0.03, 0.01, 0.02])
     # TODO create the other object factories

@@ -162,8 +162,11 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
         T, distances = icp.icp_medial_constraints(volumetric_cost.sdf, volumetric_cost.free_voxels,
                                                   model_points_world_frame,
-                                                  given_init_pose=best_tsf_guess.inverse(),
-                                                  batch=B, max_iterations=20)
+                                                  given_init_pose=best_tsf_guess,
+                                                  batch=B, max_iterations=5, verbose=False,
+                                                  # vis=None)
+                                                  vis=volumetric_cost.vis)
+        T = T.inverse()
     else:
         raise RuntimeError(f"Unsupported ICP method {reg_method}")
     # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
@@ -489,7 +492,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     group = [x, "method", "name", "seed"]
     if "level" in key_columns:
         group.append("level")
-    if keep_lowest_y_wrt:
+    if keep_lowest_y_wrt is None:
         keep_lowest_y_wrt = y
     df = df[df[keep_lowest_y_wrt] <= df.groupby(group)[keep_lowest_y_wrt].transform('quantile', keep_lowest_y_quantile)]
 
@@ -1034,6 +1037,9 @@ def predetermined_poke_range():
         poke.Levels.MUSTARD_SIDEWAYS: ((0, 0.2, -0.2), (0.05, 0.2, 0.35, 0.52)),
         poke.Levels.MUSTARD_FALLEN: ((0, 0.3, -0.15, -0.36), (0.05, 0.2, 0.35)),
         poke.Levels.MUSTARD_FALLEN_SIDEWAYS: ((0, 0.2, 0.35, -0.2, -0.35), (0.05, 0.12, 0.2)),
+        poke.Levels.HAMMER: ((0, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
+        poke.Levels.HAMMER_1: ((0, 0.15, -0.15), (0.05, 0.1, 0.2, 0.4)),
+        poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
     }
 
 
@@ -1490,12 +1496,12 @@ def experiment_vary_num_freespace(obj_factory, plot_only=False, gui=True):
 def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
     file = f"icp_comparison_{obj_factory.name}.pkl"
     if not plot_only:
-        # experiment = ICPEVExperiment(obj_factory=obj_factory, gui=gui)
-        # for seed in range(10):
-        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0, num_points_list=(30,),
-        #              icp_method=icp.ICPMethod.MEDIAL_CONSTRAINT,
-        #              name=f"medial constraint")
-        # experiment.close()
+        experiment = ICPEVExperiment(obj_factory=obj_factory, gui=gui)
+        for seed in range(10):
+            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0, num_points_list=(10,),
+                     icp_method=icp.ICPMethod.MEDIAL_CONSTRAINT,
+                     name=f"freespace baseline")
+        experiment.close()
 
         # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
         # for seed in range(10):
@@ -1540,18 +1546,18 @@ def experiment_compare_basic_baseline(obj_factory, plot_only=False, gui=True):
         #              name=f"comparison")
         # experiment.close()
 
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
-                     icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
-                     name=f"comparison")
-        experiment.close()
-        experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
-        for seed in range(10):
-            test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
-                     icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
-                     name=f"comparison 100 free pts")
-        experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=0,
+        #              icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
+        #              name=f"comparison")
+        # experiment.close()
+        # experiment = ICPEVExperiment(obj_factory=obj_factory, device="cuda", gui=gui)
+        # for seed in range(10):
+        #     test_icp(experiment, seed=seed, register_num_points=500, num_freespace=100,
+        #              icp_method=icp.ICPMethod.VOLUMETRIC_ICP_INIT,
+        #              name=f"comparison 100 free pts")
+        # experiment.close()
 
     def filter_names(df):
         df = df[df["name"].str.contains("comparison")]
@@ -1691,7 +1697,8 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         def filter(df):
-            df = df[df["level"] == level.name]
+
+            df = df[df["level"].str.contains(level.name)]
             return df
 
 
@@ -1702,9 +1709,9 @@ if __name__ == "__main__":
 
 
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "poke", "level", "batch"), logy=False,
-                         keep_lowest_y_wrt="rmse",
-                         plot_median=True, x='poke', y='chamfer_err')
+                         key_columns=("method", "name", "seed", "poke", "level", "batch"),
+                         logy=False, keep_lowest_y_wrt="rmse",
+                         plot_median=False, x='poke', y='chamfer_err')
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
