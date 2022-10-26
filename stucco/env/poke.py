@@ -871,7 +871,8 @@ class PokeEnv(PybulletEnv):
             input("interior SDF points for robot (press enter to confirm)")
             self.vis.clear_visualization_after("mipt", 0)
 
-        self.free_voxels = util.VoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges, device=self.device)
+        self.free_voxels = util.ExpandingVoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges,
+                                                   device=self.device)
 
         # register floor as freespace
 

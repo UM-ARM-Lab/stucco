@@ -1,6 +1,9 @@
 import abc
+import copy
+import math
 
 import matplotlib
+import numpy as np
 import torch
 from multidim_indexing import torch_view
 
@@ -55,13 +58,18 @@ class VoxelGrid(Voxels):
     def __init__(self, resolution, range_per_dim, dtype=torch.float, device='cpu'):
         self.resolution = resolution
         self.invalid_val = 0
+        self.dtype = dtype
+        self.device = device
+        self._create_voxels(resolution, range_per_dim)
 
+    def _create_voxels(self, resolution, range_per_dim):
         self.range_per_dim = get_divisible_range_by_resolution(resolution, range_per_dim)
-        self.coords, self.pts = get_coordinates_and_points_in_grid(resolution, range_per_dim, dtype=dtype,
-                                                                   device=device)
+        self.coords, self.pts = get_coordinates_and_points_in_grid(resolution, self.range_per_dim, dtype=self.dtype,
+                                                                   device=self.device)
         # underlying data
-        self._data = torch.zeros([len(coord) for coord in self.coords], dtype=dtype, device=device)
-        self.voxels = torch_view.TorchMultidimView(self._data, range_per_dim, invalid_value=self.invalid_val)
+        self._data = torch.zeros([len(coord) for coord in self.coords], dtype=self.dtype, device=self.device)
+        self.voxels = torch_view.TorchMultidimView(self._data, self.range_per_dim, invalid_value=self.invalid_val)
+        self.range_per_dim = np.array(self.range_per_dim)
 
     def get_known_pos_and_values(self):
         known = self.voxels.raw_data != self.invalid_val
@@ -79,6 +87,29 @@ class VoxelGrid(Voxels):
 
     def __setitem__(self, pts, value):
         self.voxels[pts] = value
+
+
+class ExpandingVoxelGrid(VoxelGrid):
+    def __setitem__(self, pts, value):
+        # if this query goes outside the range, expand the range in increments of the resolution
+        min = pts.min(dim=0).values
+        max = pts.max(dim=0).values
+        range_per_dim = copy.deepcopy(self.range_per_dim)
+        for dim in range(len(min)):
+            over = (max[dim] - self.range_per_dim[dim][1]).item()
+            under = (self.range_per_dim[dim][0] - min[dim]).item()
+            # adjust in increments of resolution
+            if over > 0:
+                range_per_dim[dim][1] += math.ceil(over / self.resolution) * self.resolution
+            if under > 0:
+                range_per_dim[dim][0] -= math.ceil(under / self.resolution) * self.resolution
+        if not np.allclose(range_per_dim, self.range_per_dim):
+            # transfer over values
+            known_pos, known_values = self.get_known_pos_and_values()
+            self._create_voxels(self.resolution, range_per_dim)
+            super().__setitem__(known_pos, known_values)
+
+        return super().__setitem__(pts, value)
 
 
 class VoxelSet(Voxels):
