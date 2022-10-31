@@ -884,8 +884,8 @@ class PokeEnv(PybulletEnv):
         floor_range[0] += self.target_pose[0][0]
         floor_range[1] += self.target_pose[0][1]
 
-        floor_range[2, 0] = -self.freespace_voxel_resolution * 3
-        floor_range[2, 1] = -self.freespace_voxel_resolution * 2
+        floor_range[2, 0] = -self.freespace_voxel_resolution * 2
+        floor_range[2, 1] = -self.freespace_voxel_resolution * 1
         floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
                                                                          dtype=self.dtype, device=self.device)
         self.free_voxels[floor_pts] = 1
