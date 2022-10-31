@@ -9,6 +9,7 @@ from arm_pytorch_utilities.tensor_utils import ensure_tensor
 import scipy.optimize as spo
 
 from stucco import util
+from stucco.env.env import Visualizer
 from stucco.icp.sgd import ICPSolution, SimilarityTransform, _apply_similarity_transform
 
 
@@ -17,8 +18,9 @@ def iterative_closest_point_medial_constraint(
         freespace_voxels: util.VoxelGrid,
         X: torch.Tensor,
         init_transform: SimilarityTransform = None,
-        max_iterations: int = 100,
+        max_iterations: int = 5,
         relative_rmse_thr: float = 1e-6,
+        vis: Visualizer = None,
         verbose: bool = False,
 ) -> ICPSolution:
     # make sure we convert input Pointclouds structures to
@@ -71,6 +73,7 @@ def iterative_closest_point_medial_constraint(
             Xt_init,
             R=R,
             T=T,
+            vis=vis
         )
         R, T, s = sim_transform
 
@@ -119,6 +122,7 @@ def minimal_medial_constraint_alignment(
         freespace_voxels: util.VoxelGrid,
         X,  # surface points
         R: torch.Tensor = None, T: torch.tensor = None,
+        vis: Visualizer = None,
 ) -> tuple[SimilarityTransform, torch.tensor]:
     # make sure we convert input Pointclouds structures to tensors
     Xt, num_points = oputil.convert_pointclouds_to_tensor(X)
@@ -143,14 +147,27 @@ def minimal_medial_constraint_alignment(
         return RR.unsqueeze(0), TT.unsqueeze(0)
 
     def cost(x, i):
-        R, T = get_torch_RT(x)
+        RR, TT = get_torch_RT(x)
         # transform points from world frame to object frame
-        world_to_object_frame = Transform3d(rot=R, pos=T, device=device, dtype=dtype).inverse()
+        world_to_object_frame = Transform3d(rot=RR, pos=TT, device=device, dtype=dtype).inverse()
         # sdf at the surface points should be 0
         pts = world_to_object_frame.transform_points(Xt[i])
         v, _ = obj_sdf.gt_sdf(pts)
-        v = v ** 2
-        v = v.sum()
+        obj_factory = obj_sdf.gt_sdf.obj_factory
+
+        # scale it up since minimize doesn't do well with small scale costs
+        v = (v * 1000) ** 2
+        v = v.mean()
+        if vis is not None:
+            np.set_printoptions(precision=3, suppress=True)
+            print(f"{x}: {v.item()}")
+            link_to_world = world_to_object_frame.inverse()
+            m = link_to_world.get_matrix()
+            pos, rot = util.matrix_to_pos_rot(m[0])
+            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
+                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
+            vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"sum: {round(v.item())}")
+
         return v.item()
 
     def constraint(x):
@@ -163,7 +180,7 @@ def minimal_medial_constraint_alignment(
         occupied = freespace_voxels[pts_interior_world]
         # voxels should be 1 where it is known free space, otherwise 0
         # return occupied.reshape(-1).cpu().numpy()
-        return occupied.sum().item()
+        return int(occupied.sum().item())
 
     # respect_freespace_constraint = NonlinearConstraint(constraint, 0, 0)
 
@@ -171,7 +188,6 @@ def minimal_medial_constraint_alignment(
     q = matrix_to_rotation_6d(R)
 
     total_loss = []
-    # TODO try to batch / parallelize the solving
     for i in range(b):
         # q, T are the parameters of the problem
         x0 = torch.cat([q[i], T[i]]).cpu().numpy()
@@ -181,14 +197,15 @@ def minimal_medial_constraint_alignment(
                            # constraints=[{
                            #     "type": "eq",
                            #     "fun": constraint,
-                           # }]
+                           # }],
                            tol=0.01,
-                           options={"disp": True}
+                           options={"disp": True, "eps": 0.01}
                            )
         # res = spo.dual_annealing(cost, [(-2, 2)] * 9, x0=x0, args=(i,))
         # extract q, t from res
         r, t = get_torch_RT(res.x)
-        print(x0 - res.x)
+        # print(x0 - res.x)
+        # print(cost(res.x, i))
         R[i] = r
         T[i] = t
         total_loss.append(res.fun)
