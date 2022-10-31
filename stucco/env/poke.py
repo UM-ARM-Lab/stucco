@@ -1051,15 +1051,27 @@ class ArmPointToConfig(PlanarPointToConfig):
 
 
 class YCBObjectFactory(ObjectFactory):
-    def __init__(self, name, ycb_name, ranges=np.array([[-.15, .15], [-.15, .15], [-0.15, .4]]), **kwargs):
+    def __init__(self, name, ycb_name, ranges=None, **kwargs):
+        # specify ranges=None to infer the range from the object's bounding box
         super(YCBObjectFactory, self).__init__(name, **kwargs)
         self.ycb_name = ycb_name
-        self.ranges = ranges * self.scale
+        self.ranges = ranges
+        if self.ranges is not None:
+            self.ranges *= self.scale
 
     def make_collision_obj(self, z, rgba=None):
         obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
                             [0., 0., z * 3],
                             p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale, **self.other_load_kwargs)
+        if self.ranges is None:
+            aabb = p.getAABB(obj_id)
+            world_min, world_max = aabb
+            # already scaled, but we add a little padding
+            self.ranges = np.array(list(zip(world_min, world_max)))
+            padding = 0.05
+            self.ranges[:, 0] -= padding
+            self.ranges[:, 1] += padding
+
         if rgba is not None:
             p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
         return obj_id, self.ranges
@@ -1085,13 +1097,11 @@ def obj_factory_map(obj_name):
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
                                 vis_frame_pos=[-0.002, -0.011, -.06])
     if obj_name == "hammer":
-        # TODO seems to be a problem with the hammer experiment
-        return YCBObjectFactory("hammer", "YcbHammer", ranges=np.array([[-.065, .065], [-.095, .095], [-0.1, .1]]),
+        return YCBObjectFactory("hammer", "YcbHammer",
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.02, 0.01, -0.01])
     if obj_name == "box":
-        # TODO seems to be a problem with the hammer experiment
-        return YCBObjectFactory("box", "YcbCrackerBox", ranges=np.array([[-.075, .125], [-.075, .075], [-0.08, .15]]),
+        return YCBObjectFactory("box", "YcbCrackerBox",
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.03, 0.01, 0.02])
     # TODO create the other object factories
