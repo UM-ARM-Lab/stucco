@@ -17,7 +17,7 @@ from arm_pytorch_utilities import tensor_utils
 
 import stucco.sdf
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
-    ContactInfo, make_cylinder, closest_point_on_surface
+    ContactInfo, make_cylinder, closest_point_on_surface, pybullet_obj_range
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
     PlanarPointToConfig
 from stucco.env.panda import PandaJustGripperID
@@ -860,7 +860,9 @@ class PokeEnv(PybulletEnv):
         # should be fine to use the actual robot ID for the ground truth SDF since we won't be querying outside of the
         # SDF range (and thus need to actually use the GT lookup)
         robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id)
-        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.01, self.ranges / 3,
+        robot_range = pybullet_obj_range(self.robot_id, 0.02)
+        # TODO consider if this resolution is too low (gets the gripper fingers; should we ignore gripper fingers?)
+        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.005, robot_range,
                                               robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
@@ -879,11 +881,8 @@ class PokeEnv(PybulletEnv):
         floor_range = self.ranges.copy()
         # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
         # so for debugging/visualization use the following lines; otherwise uncomment it and use the whole floor
-        floor_offset = 0.25
-        floor_range[0, 0] = self.target_pose[0][0] - floor_offset
-        floor_range[0, 1] = self.target_pose[0][0] + floor_offset
-        floor_range[1, 0] = self.target_pose[0][1] - floor_offset
-        floor_range[1, 1] = self.target_pose[0][1] + floor_offset
+        floor_range[0] += self.target_pose[0][0]
+        floor_range[1] += self.target_pose[0][1]
 
         floor_range[2, 0] = -self.freespace_voxel_resolution * 3
         floor_range[2, 1] = -self.freespace_voxel_resolution * 2
@@ -1064,13 +1063,7 @@ class YCBObjectFactory(ObjectFactory):
                             [0., 0., z * 3],
                             p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale, **self.other_load_kwargs)
         if self.ranges is None:
-            aabb = p.getAABB(obj_id)
-            world_min, world_max = aabb
-            # already scaled, but we add a little padding
-            self.ranges = np.array(list(zip(world_min, world_max)))
-            padding = 0.05
-            self.ranges[:, 0] -= padding
-            self.ranges[:, 1] += padding
+            self.ranges = pybullet_obj_range(obj_id, 0.05)
 
         if rgba is not None:
             p.changeVisualShape(obj_id, -1, rgbaColor=rgba)

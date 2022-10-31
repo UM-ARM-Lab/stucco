@@ -485,3 +485,61 @@ class DebugDrawer(Visualizer):
         self._mesh_to_single_id[name] = object_id
 
         return object_id
+
+
+def pybullet_obj_range(obj_id, padding=0):
+    aabb = p.getAABB(obj_id)
+    world_min, world_max = aabb
+    # already scaled, but we add a little padding
+    ranges = np.array(list(zip(world_min, world_max)))
+    ranges[:, 0] -= padding
+    ranges[:, 1] += padding
+    return ranges
+
+
+def draw_AABB(vis: Visualizer, aabb):
+    aabbMin = aabb[:, 0]
+    aabbMax = aabb[:, 1]
+    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
+    t = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
+    vis.draw_2d_line("bb.0", f, t - f, (1, 0, 0), scale=1)
+    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
+    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
+    vis.draw_2d_line("bb.1", f, t - f, (0, 1, 0), scale=1)
+    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
+    t = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
+    vis.draw_2d_line("bb.2", f, t - f, (0, 0, 1), scale=1)
+
+    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
+    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
+    vis.draw_2d_line("bb.3", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
+    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
+    vis.draw_2d_line("bb.4", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
+    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
+    vis.draw_2d_line("bb.5", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
+    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
+    vis.draw_2d_line("bb.6", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
+    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
+    vis.draw_2d_line("bb.7", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
+    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
+    vis.draw_2d_line("bb.8", f, t - f, (1, 1, 1), scale=1)
+
+    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
+    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
+    vis.draw_2d_line("bb.9", f, t - f, (1, 0.5, 0.5), scale=1)
+    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
+    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
+    vis.draw_2d_line("bb.10", f, t - f, (1, 1.0, 1.0), scale=1)
+    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
+    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
+    vis.draw_2d_line("bb.11", f, t - f, (1, 1.0, 1.0), scale=1)

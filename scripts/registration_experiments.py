@@ -35,10 +35,10 @@ from stucco import cfg, icp
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
 from stucco.env import poke
-from stucco.env.env import InfoKeys, Visualizer
+from stucco.env.env import InfoKeys
 from stucco.env.poke import obj_factory_map, level_to_obj_map
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, \
-    surface_normal_at_point
+    surface_normal_at_point, draw_AABB
 from stucco import exploration
 from stucco.env.real_env import CombinedVisualizer
 from stucco.env_getters.poke import PokeGetter
@@ -658,54 +658,6 @@ class ShapeExplorationExperiment(abc.ABC):
         return error_at_model_points
 
 
-def drawAABB(vis: Visualizer, aabb):
-    aabbMin = aabb[:, 0]
-    aabbMax = aabb[:, 1]
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    vis.draw_2d_line("bb.0", f, t - f, (1, 0, 0), scale=1)
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.1", f, t - f, (0, 1, 0), scale=1)
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.2", f, t - f, (0, 0, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.3", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.4", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.5", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.6", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.7", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.8", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.9", f, t - f, (1, 0.5, 0.5), scale=1)
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.10", f, t - f, (1, 1.0, 1.0), scale=1)
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.11", f, t - f, (1, 1.0, 1.0), scale=1)
-
-
 class ICPEVExperiment(ShapeExplorationExperiment):
     def __init__(self, policy_factory=ICPEVExplorationPolicy, policy_args=None, sdf_resolution=0.025, clean_cache=False,
                  **kwargs):
@@ -718,7 +670,7 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         range_per_dim = copy.copy(self.obj_factory.ranges)
         if clean_cache:
             # draw the bounding box of the object frame SDF
-            drawAABB(self.dd, range_per_dim)
+            draw_AABB(self.dd, range_per_dim)
 
         self.sdf = stucco.sdf.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
                                         obj_frame_sdf, device=self.device, clean_cache=clean_cache)
@@ -1743,6 +1695,7 @@ if __name__ == "__main__":
     elif args.experiment == "debug":
         def filter(df):
             df = df[df["level"].str.contains(level.name)]
+            # df = df[df["level"] == level.name]
             return df
 
 
@@ -1754,7 +1707,7 @@ if __name__ == "__main__":
 
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
                          key_columns=("method", "name", "seed", "poke", "level", "batch"),
-                         logy=False, keep_lowest_y_wrt="rmse",
+                         logy=True, keep_lowest_y_wrt="rmse",
                          plot_median=True, x='poke', y='chamfer_err')
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
