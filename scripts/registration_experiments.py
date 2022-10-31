@@ -77,6 +77,22 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
+def predetermined_poke_range():
+    # y,z order of poking
+    return {
+        poke.Levels.DRILL: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)),
+        poke.Levels.DRILL_OPPOSITE: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
+        poke.Levels.DRILL_SLANTED: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
+        poke.Levels.DRILL_FALLEN: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.18, 0.25, 0.4)),
+        poke.Levels.MUSTARD: ((0, 0.18, 0.24, -0.25), (0.05, 0.2, 0.35, 0.52)),
+        poke.Levels.MUSTARD_SIDEWAYS: ((0, 0.2, -0.2), (0.05, 0.2, 0.35, 0.52)),
+        poke.Levels.MUSTARD_FALLEN: ((0, 0.3, -0.15, -0.36), (0.05, 0.2, 0.35)),
+        poke.Levels.MUSTARD_FALLEN_SIDEWAYS: ((0, 0.2, 0.35, -0.2, -0.35), (0.05, 0.12, 0.2)),
+        poke.Levels.HAMMER: ((0,-0.2, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
+        poke.Levels.HAMMER_1: ((0, 0.15, -0.15), (0.05, 0.1, 0.2, 0.4)),
+        poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
+    }
+
 def build_model(obj_factory: stucco.sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu"):
     points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
@@ -1023,21 +1039,6 @@ def predetermined_controls():
     return predetermined_control
 
 
-def predetermined_poke_range():
-    # y,z order of poking
-    return {
-        poke.Levels.DRILL: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)),
-        poke.Levels.DRILL_OPPOSITE: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
-        poke.Levels.DRILL_SLANTED: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.4, 0.51)),
-        poke.Levels.DRILL_FALLEN: ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.18, 0.25, 0.4)),
-        poke.Levels.MUSTARD: ((0, 0.18, 0.24, -0.25), (0.05, 0.2, 0.35, 0.52)),
-        poke.Levels.MUSTARD_SIDEWAYS: ((0, 0.2, -0.2), (0.05, 0.2, 0.35, 0.52)),
-        poke.Levels.MUSTARD_FALLEN: ((0, 0.3, -0.15, -0.36), (0.05, 0.2, 0.35)),
-        poke.Levels.MUSTARD_FALLEN_SIDEWAYS: ((0, 0.2, 0.35, -0.2, -0.35), (0.05, 0.12, 0.2)),
-        poke.Levels.HAMMER: ((0, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
-        poke.Levels.HAMMER_1: ((0, 0.15, -0.15), (0.05, 0.1, 0.2, 0.4)),
-        poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
-    }
 
 
 def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None):
