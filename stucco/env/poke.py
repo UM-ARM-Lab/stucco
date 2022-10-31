@@ -17,7 +17,7 @@ from arm_pytorch_utilities import tensor_utils
 
 import stucco.sdf
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
-    ContactInfo, make_cylinder, closest_point_on_surface, pybullet_obj_range
+    ContactInfo, make_cylinder, closest_point_on_surface, pybullet_obj_range, draw_AABB
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
     PlanarPointToConfig
 from stucco.env.panda import PandaJustGripperID
@@ -850,6 +850,7 @@ class PokeEnv(PybulletEnv):
         self.target_sdf = stucco.sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
                                                obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
+            draw_AABB(self.vis, self.ranges)
             # display the voxels created for this sdf
             interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.0)
             for i, pt in enumerate(interior_pts):
@@ -861,12 +862,13 @@ class PokeEnv(PybulletEnv):
         # SDF range (and thus need to actually use the GT lookup)
         robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id)
         robot_range = pybullet_obj_range(self.robot_id, 0.02)
-        # TODO consider if this resolution is too low (gets the gripper fingers; should we ignore gripper fingers?)
-        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.005, robot_range,
+        # TODO consider if need the fingers of the gripper to sweep out freespace, or if that's too close
+        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.01, robot_range,
                                               robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
         if self.clean_cache:
+            draw_AABB(self.vis, robot_range)
             for i, pt in enumerate(self.robot_interior_points_orig):
                 self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
             self.vis.clear_visualization_after("mipt", i + 1)
@@ -1059,12 +1061,14 @@ class YCBObjectFactory(ObjectFactory):
             self.ranges *= self.scale
 
     def make_collision_obj(self, z, rgba=None):
+        canonical_pos = [0, 0, 0]
+        canonical_rot = p.getQuaternionFromEuler([0, 0, 0])
         obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
-                            [0., 0., z * 3],
-                            p.getQuaternionFromEuler([0, 0, -1]), globalScaling=self.scale, **self.other_load_kwargs)
+                            canonical_pos, canonical_rot, globalScaling=self.scale, **self.other_load_kwargs)
         if self.ranges is None:
             self.ranges = pybullet_obj_range(obj_id, 0.05)
 
+        p.resetBasePositionAndOrientation(obj_id, [0, 0, z * 3], canonical_rot)
         if rgba is not None:
             p.changeVisualShape(obj_id, -1, rgbaColor=rgba)
         return obj_id, self.ranges

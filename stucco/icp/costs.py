@@ -136,6 +136,8 @@ class VolumetricCost(ICPPoseCost):
         interior_threshold = -0.01
         surface_threshold = -interior_threshold
         self.model_interior_points_orig = self.sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < interior_threshold)
+        if self.model_interior_points_orig.shape[0] == 0:
+            raise RuntimeError("Something's wrong with the SDF since there are no interior points")
         self.model_interior_weights, self.model_interior_normals_orig = self.sdf(self.model_interior_points_orig)
         self.model_interior_weights *= -1
 
