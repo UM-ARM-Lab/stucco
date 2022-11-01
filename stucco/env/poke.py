@@ -875,26 +875,22 @@ class PokeEnv(PybulletEnv):
             input("interior SDF points for robot (press enter to confirm)")
             self.vis.clear_visualization_after("mipt", 0)
 
+        # restore robot pose
+        p.resetBasePositionAndOrientation(self.robot_id, rob_pos, rob_rot)
+        p.resetBasePositionAndOrientation(self._target_object_id, target_pos, target_rot)
+
         self.free_voxels = util.ExpandingVoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges,
                                                    device=self.device)
 
         # register floor as freespace
-
-        floor_range = self.ranges.copy()
         # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
         # so for debugging/visualization use the following lines; otherwise uncomment it and use the whole floor
-        floor_range[0] += self.target_pose[0][0]
-        floor_range[1] += self.target_pose[0][1]
-
+        floor_range = pybullet_obj_range(self.target_object_id(), 0.15)
         floor_range[2, 0] = -self.freespace_voxel_resolution * 2
         floor_range[2, 1] = -self.freespace_voxel_resolution * 1
         floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
                                                                          dtype=self.dtype, device=self.device)
         self.free_voxels[floor_pts] = 1
-
-        # restore robot pose
-        p.resetBasePositionAndOrientation(self.robot_id, rob_pos, rob_rot)
-        p.resetBasePositionAndOrientation(self._target_object_id, target_pos, target_rot)
 
     def _setup_objects(self):
         self.immovable = []
