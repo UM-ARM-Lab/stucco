@@ -7,9 +7,12 @@ from stucco.icp.methods import icp, icp_2, icp_3, icp_pytorch3d, icp_pytorch3d_s
 class ICPMethod(enum.Enum):
     ICP = 0
     ICP_SGD = 1
+
     VOLUMETRIC = 2
     VOLUMETRIC_ICP_INIT = 7
     VOLUMETRIC_NO_FREESPACE = 3
+    VOLUMETRIC_LIMITED_REINIT = 9
+
     ICP_SGD_VOLUMETRIC_NO_ALIGNMENT = 4
     ICP_REVERSE = 5
     ICP_SGD_REVERSE = 6
@@ -17,4 +20,4 @@ class ICPMethod(enum.Enum):
     # freespace baselines
     MEDIAL_CONSTRAINT = 8
 
-    NONE = 9
+    NONE = 10

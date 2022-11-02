@@ -88,10 +88,11 @@ def predetermined_poke_range():
         poke.Levels.MUSTARD_SIDEWAYS: ((0, 0.2, -0.2), (0.05, 0.2, 0.35, 0.52)),
         poke.Levels.MUSTARD_FALLEN: ((0, 0.3, -0.15, -0.36), (0.05, 0.2, 0.35)),
         poke.Levels.MUSTARD_FALLEN_SIDEWAYS: ((0, 0.2, 0.35, -0.2, -0.35), (0.05, 0.12, 0.2)),
-        poke.Levels.HAMMER: ((0,-0.2, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
+        poke.Levels.HAMMER: ((0, -0.2, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
         poke.Levels.HAMMER_1: ((0, 0.15, -0.15), (0.05, 0.1, 0.2, 0.4)),
         poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
     }
+
 
 def build_model(obj_factory: stucco.sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu"):
@@ -116,7 +117,8 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
 
 
 def registration_method_uses_only_contact_points(reg_method: icp.ICPMethod):
-    if reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_ICP_INIT]:
+    if reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_ICP_INIT,
+                      icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT]:
         return False
     return True
 
@@ -160,7 +162,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
                                              learn_translation=True,
                                              use_matching_loss=False)
     elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
-                        icp.ICPMethod.VOLUMETRIC_ICP_INIT]:
+                        icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT]:
         if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
             volumetric_cost = copy.copy(volumetric_cost)
             volumetric_cost.scale_known_freespace = 0
@@ -511,6 +513,8 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     if keep_lowest_y_wrt is None:
         keep_lowest_y_wrt = y
     df = df[df[keep_lowest_y_wrt] <= df.groupby(group)[keep_lowest_y_wrt].transform('quantile', keep_lowest_y_quantile)]
+    df.loc[df["method"].str.contains("ICP"), "name"] = "non-freespace baseline"
+    df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
 
     if scatter:
         res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
@@ -522,6 +526,24 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         res.set(yscale='log')
     else:
         res.set(ylim=(0, None))
+
+    # combine hue and styles in the legend
+    method_to_name = df.set_index("method")["name"].to_dict()
+    handles, labels = res.get_legend_handles_labels()
+    next_title_index = labels.index('name')
+    style_dict = {label: (handle.get_linestyle(), handle.get_marker(), handle._dashSeq)
+                  for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
+
+    for handle, label in zip(handles[1:next_title_index], labels[1:next_title_index]):
+        handle.set_linestyle(style_dict[method_to_name[label]][0])
+        handle.set_marker(style_dict[method_to_name[label]][1])
+        dashes = style_dict[method_to_name[label]][2]
+        if dashes is not None:
+            handle.set_dashes(dashes)
+
+    # create a legend only using the items
+    res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
+    # plt.tight_layout()
     plt.show()
 
 
@@ -1039,8 +1061,6 @@ def predetermined_controls():
     return predetermined_control
 
 
-
-
 def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
@@ -1273,13 +1293,24 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
                 best_T = best_tsf_guess
 
-                # create distribution of initializations centered at our previous best guess translation
-                # with random orientations
-                # ensure one of them (first of the batch) has the exact transform
-                temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
-                temp[0] = best_tsf_guess
-                best_tsf_guess = temp
-                # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
+                if registration_method == icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT:
+                    # sample delta rotations in axis angle form
+                    temp = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
+                    radian_sigma = 0.3
+                    delta_R = torch.randn((B, 3), dtype=dtype, device=device) * radian_sigma
+                    delta_R = tf.axis_angle_to_matrix(delta_R)
+                    temp[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
+                    temp[:, :3, 3] = best_tsf_guess[:3, 3]
+                    temp[0] = best_tsf_guess
+                    best_tsf_guess = temp
+                else:
+                    # create distribution of initializations centered at our previous best guess translation
+                    # with random orientations
+                    # ensure one of them (first of the batch) has the exact transform
+                    temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
+                    temp[0] = best_tsf_guess
+                    best_tsf_guess = temp
+                    # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
 
                 T = transforms_per_object[best_segment_idx]
 
@@ -1603,6 +1634,7 @@ registration_map = {
     "volumetric": icp.ICPMethod.VOLUMETRIC,
     "volumetric-icp-init": icp.ICPMethod.VOLUMETRIC_ICP_INIT,
     "volumetric-no-freespace": icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
+    "volumetric-limited-reinit": icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
     "icp": icp.ICPMethod.ICP,
     "icp-reverse": icp.ICPMethod.ICP_REVERSE,
     "icp-sgd": icp.ICPMethod.ICP_SGD,
@@ -1697,6 +1729,7 @@ if __name__ == "__main__":
         def filter(df):
             df = df[df["level"].str.contains(level.name)]
             # df = df[df["level"] == level.name]
+
             return df
 
 
