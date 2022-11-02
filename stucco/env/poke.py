@@ -886,8 +886,8 @@ class PokeEnv(PybulletEnv):
         # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
         # so for debugging/visualization use the following lines; otherwise uncomment it and use the whole floor
         floor_range = pybullet_obj_range(self.target_object_id(), 0.15)
-        floor_range[2, 0] = -self.freespace_voxel_resolution * 2
-        floor_range[2, 1] = -self.freespace_voxel_resolution * 1
+        floor_range[2, 0] = -self.freespace_voxel_resolution * 3
+        floor_range[2, 1] = -self.freespace_voxel_resolution * 2
         floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
                                                                          dtype=self.dtype, device=self.device)
         self.free_voxels[floor_pts] = 1
