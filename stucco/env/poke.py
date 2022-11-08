@@ -258,7 +258,7 @@ class PokeEnv(PybulletEnv):
 
         # poke target information
         self.obj_factory: YCBObjectFactory = None
-        self.sdf: util.ObjectFrameSDF = None
+        self.target_sdf: util.ObjectFrameSDF = None
         self.free_voxels: util.VoxelGrid = None
 
         self.target_model_name = None

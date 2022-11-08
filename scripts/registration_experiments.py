@@ -1169,6 +1169,42 @@ class PokingController(Controller):
         return u
 
 
+def _export_pcs(f, pc_free, pc_occ):
+    pc_free_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 0" for pt in pc_free]
+    pc_occ_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 1" for pt in pc_occ]
+    f.write("\n".join(pc_free_serialized))
+    f.write("\n")
+    f.write("\n".join(pc_occ_serialized))
+    f.write("\n")
+
+
+def export_pc_register_against(point_cloud_file: str, env: poke.PokeEnv):
+    os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
+    with open(point_cloud_file, 'w') as f:
+        surface_thresh = 0.01
+        pc_surface = env.target_sdf.get_filtered_points(
+            lambda voxel_sdf: (voxel_sdf < surface_thresh) & (voxel_sdf > -surface_thresh))
+        if len(pc_surface) == 0:
+            raise RuntimeError(f"Surface threshold of {surface_thresh} leads to no surface points")
+        pc_free = env.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf >= surface_thresh)
+
+        total_pts = len(pc_free) + len(pc_surface)
+        f.write(f"{total_pts}\n")
+        _export_pcs(f, pc_free, pc_surface)
+
+
+def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, method: TrackingMethod):
+    # append to the end and create it if it doesn't exist
+    os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
+    with open(point_cloud_file, 'a') as f:
+        # write out the poke index and the size of the point cloud
+        pc_free, _ = env.free_voxels.get_known_pos_and_values()
+        _, pc_occ = method.get_labelled_moved_points()
+        total_pts = len(pc_free) + len(pc_occ)
+        f.write(f"{pokes} {total_pts}\n")
+        _export_pcs(f, pc_free, pc_occ)
+
+
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False, draw_pose_distribution_separately=True,
@@ -1230,6 +1266,17 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     rand.seed(seed)
     # create the action noise before sampling to ensure they are the same across methods
     action_noise = np.random.randn(5000, 3) * ctrl_noise_max
+
+    data_dir = cfg.DATA_DIR
+    pc_to_register_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}.txt")
+    pc_register_against_file = os.path.join(data_dir, f"poke/{env.level.name}.txt")
+    # exporting data for offline baselines, remove the stale file
+    if reg_method == icp.ICPMethod.NONE:
+        export_pc_register_against(pc_register_against_file, env)
+        try:
+            os.remove(pc_to_register_file)
+        except OSError:
+            pass
 
     while not ctrl.done():
         best_distance = None
@@ -1360,6 +1407,11 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                      })
                 cache = pd.concat([cache, df])
                 cache.to_pickle(fullname)
+        elif reg_method == icp.ICPMethod.NONE and action is None:
+            # export data for offline baselines
+            pokes += 1
+            if pokes >= start_at_num_pts:
+                export_pc_to_register(pc_to_register_file, pokes, env, method)
 
         if action is not None:
             if torch.is_tensor(action):
