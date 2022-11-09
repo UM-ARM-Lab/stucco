@@ -1205,6 +1205,18 @@ def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, 
         _export_pcs(f, pc_free, pc_occ)
 
 
+def export_init_transform(transform_file: str, T: torch.tensor):
+    os.makedirs(os.path.dirname(transform_file), exist_ok=True)
+    B = len(T)
+    with open(transform_file, 'w') as f:
+        f.write(f"{B}\n")
+        for b in range(len(T)):
+            f.write(f"{b}\n")
+            serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T[b]]
+            f.write("\n".join(serialized))
+            f.write("\n")
+
+
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False, draw_pose_distribution_separately=True,
@@ -1270,9 +1282,13 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     data_dir = cfg.DATA_DIR
     pc_to_register_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}.txt")
     pc_register_against_file = os.path.join(data_dir, f"poke/{env.level.name}.txt")
+    transform_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}_trans.txt")
+    transform_gt_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}_gt_trans.txt")
     # exporting data for offline baselines, remove the stale file
     if reg_method == icp.ICPMethod.NONE:
         export_pc_register_against(pc_register_against_file, env)
+        export_init_transform(transform_file, best_tsf_guess)
+        export_init_transform(transform_gt_file, link_to_current_tf_gt.get_matrix().repeat(B, 1, 1))
         try:
             os.remove(pc_to_register_file)
         except OSError:
