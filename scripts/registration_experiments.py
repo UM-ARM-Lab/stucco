@@ -1437,8 +1437,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             action += action_noise[simTime]
             obs, rew, done, info = env.step(action)
 
-    if reg_method == icp.ICPMethod.NONE:
-        input("waiting for trajectory evaluation")
+    # if reg_method == icp.ICPMethod.NONE:
+    #     input("waiting for trajectory evaluation")
 
 
 def create_tracking_method(env, method_name) -> TrackingMethod:

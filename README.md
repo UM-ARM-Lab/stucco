@@ -215,3 +215,9 @@ python retrieval_main.py ours --task TC --seed 0 1 2 3 4 5 6 7; python retrieval
 ```
 
 repeat with baselines by replacing `ours` with `online-birch` and other baselines
+
+### Volumetric Registration Experiments
+Generate and export data for offline baselines:
+```shell
+python run_many_registration_experiments.py --registration none --no_gui
+```
