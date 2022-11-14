@@ -1,10 +1,67 @@
+import enum
+
+import cma
+import numpy as np
 import torch
 import warnings
 from typing import Union, Optional
+
+from arm_pytorch_utilities.tensor_utils import ensure_tensor
 from pytorch3d.ops import utils as oputil
+from torch import optim
+
 from stucco.icp.sgd import ICPSolution, SimilarityTransform, _apply_similarity_transform
 from stucco.icp.costs import VolumetricCost
 from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
+
+import os
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from stucco import cfg
+
+from stucco.svgd import RBF, SVGD
+
+restart_index = 0
+sgd_index = 0
+
+
+def plot_restart_losses(losses):
+    global restart_index, sgd_index
+    losses = torch.stack(losses).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.set_xlabel('restart iteration')
+    ax.set_ylabel('cost')
+    ax.set_yscale('log')
+    fig.suptitle(f"poke {restart_index}")
+
+    for b in range(losses.shape[1]):
+        c = (b + 1) / losses.shape[1]
+        ax.plot(losses[:, b], c=cm.GnBu(c))
+    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
+    restart_index += 1
+    sgd_index = 0
+
+
+def plot_sgd_losses(losses):
+    global restart_index, sgd_index
+    losses = torch.stack(losses).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.set_xlabel('sgd iteration')
+    ax.set_ylabel('cost')
+    ax.set_yscale('log')
+    fig.suptitle(f"poke {restart_index} restart {sgd_index}")
+
+    for b in range(losses.shape[1]):
+        c = (b + 1) / losses.shape[1]
+        ax.plot(losses[:, b], c=cm.PuRd(c))
+    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/sgd', f"{restart_index}_{sgd_index}.png"))
+    sgd_index += 1
+
+
+class Optimization(enum.Enum):
+    SGD = 0
+    CMAES = 1
+    SVGD = 2
 
 
 def iterative_closest_point_volumetric(
@@ -72,35 +129,10 @@ def iterative_closest_point_volumetric(
     # padded tensors of shape (N, P, 3)
     Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
     b, size_X, dim = Xt.shape
+    Xt, R, T, s = apply_init_transform(Xt, init_transform)
 
     # clone the initial point cloud
     Xt_init = Xt.clone()
-
-    if init_transform is not None:
-        # parse the initial transform from the input and apply to Xt
-        try:
-            R, T, s = init_transform
-            assert (
-                    R.shape == torch.Size((b, dim, dim))
-                    and T.shape == torch.Size((b, dim))
-                    and s.shape == torch.Size((b,))
-            )
-        except Exception:
-            raise ValueError(
-                "The initial transformation init_transform has to be "
-                "a named tuple SimilarityTransform with elements (R, T, s). "
-                "R are dim x dim orthonormal matrices of shape "
-                "(minibatch, dim, dim), T is a batch of dim-dimensional "
-                "translations of shape (minibatch, dim) and s is a batch "
-                "of scalars of shape (minibatch,)."
-            )
-        # apply the init transform to the input point cloud
-        Xt = _apply_similarity_transform(Xt, R, T, s)
-    else:
-        # initialize the transformation with identity
-        R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
-        T = Xt.new_zeros((b, dim))
-        s = Xt.new_ones(b)
 
     prev_rmse = None
     rmse = None
@@ -109,8 +141,9 @@ def iterative_closest_point_volumetric(
 
     # initialize the transformation history
     t_history = []
+    losses = []
 
-    # the main loop over ICP iterations
+    # --- SGD
     for iteration in range(max_iterations):
         # get the alignment of the nearest neighbors from Yt with Xt_init
         sim_transform, rmse = volumetric_points_alignment(
@@ -123,6 +156,7 @@ def iterative_closest_point_volumetric(
             **kwargs
         )
         R, T, s = sim_transform
+        losses.append(rmse)
 
         # apply the estimated similarity transform to Xt_init
         Xt = _apply_similarity_transform(Xt_init, R, T, s)
@@ -152,11 +186,167 @@ def iterative_closest_point_volumetric(
         # update the previous rmse
         prev_rmse = rmse
 
+    plot_restart_losses(losses)
+
     if verbose:
         if converged:
             print(f"ICP has converged in {iteration + 1} iterations.")
         else:
             print(f"ICP has not converged in {max_iterations} iterations.")
+
+    if oputil.is_pointclouds(X):
+        Xt = X.update_padded(Xt)  # type: ignore
+
+    return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+
+def apply_init_transform(Xt, init_transform: Optional[SimilarityTransform] = None):
+    b, size_X, dim = Xt.shape
+    if init_transform is not None:
+        # parse the initial transform from the input and apply to Xt
+        try:
+            R, T, s = init_transform
+            assert (
+                    R.shape == torch.Size((b, dim, dim))
+                    and T.shape == torch.Size((b, dim))
+                    and s.shape == torch.Size((b,))
+            )
+        except Exception:
+            raise ValueError(
+                "The initial transformation init_transform has to be "
+                "a named tuple SimilarityTransform with elements (R, T, s). "
+                "R are dim x dim orthonormal matrices of shape "
+                "(minibatch, dim, dim), T is a batch of dim-dimensional "
+                "translations of shape (minibatch, dim) and s is a batch "
+                "of scalars of shape (minibatch,)."
+            )
+        # apply the init transform to the input point cloud
+        Xt = _apply_similarity_transform(Xt, R, T, s)
+    else:
+        # initialize the transformation with identity
+        R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
+        T = Xt.new_zeros((b, dim))
+        s = Xt.new_ones(b)
+    return Xt, R, T, s
+
+
+def iterative_closest_point_volumetric_cmaes(
+        volumetric_cost: VolumetricCost,
+        X: Union[torch.Tensor, "Pointclouds"],
+        init_transform: Optional[SimilarityTransform] = None,
+        sigma=0.2,
+        **kwargs,
+) -> ICPSolution:
+    # make sure we convert input Pointclouds structures to
+    # padded tensors of shape (N, P, 3)
+    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+    Xt, R, T, s = apply_init_transform(Xt, init_transform)
+    b = Xt.shape[0]
+
+    converged = False
+
+    # initialize the transformation history
+    t_history = []
+    losses = []
+
+    # --- CMA-ES
+    device = Xt.device
+    dtype = Xt.dtype
+
+    def get_torch_RT(x):
+        q_ = x[:, :6]
+        t = x[:, 6:]
+        qq, TT = ensure_tensor(device, dtype, q_, t)
+        RR = rotation_6d_to_matrix(qq)
+        return RR, TT
+
+    # TODO investigate why we're always offset by a little
+    q0 = matrix_to_rotation_6d(R[0])
+    T0 = T[0]
+    x0 = torch.cat([q0, T0]).cpu().numpy()
+    options = {"popsize": b, 'seed': 234}
+    options.update(kwargs)
+    es = cma.CMAEvolutionStrategy(x0=x0, sigma0=sigma, inopts=options)
+    while not es.stop():
+        solutions = es.ask()
+        # convert back to R, T, s
+        R, T = get_torch_RT(np.stack(solutions))
+        cost = volumetric_cost(R, T, s)
+        losses.append(cost)
+        # cost = cost.numpy()
+        es.tell(solutions, cost.cpu().numpy())
+
+    # convert ES back to R, T
+    solutions = es.ask()
+    R, T = get_torch_RT(np.stack(solutions))
+    # print("init")
+    # print(T0)
+    # print("sol")
+    # print(T[0])
+    rmse = volumetric_cost(R, T, s)
+
+    plot_restart_losses(losses)
+
+    if oputil.is_pointclouds(X):
+        Xt = X.update_padded(Xt)  # type: ignore
+
+    return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+
+class CostProb:
+    def __init__(self, cost, scale=1.):
+        self.cost = cost
+        self.scale = scale
+
+    def log_prob(self, X):
+        # turn into R, T
+        q = X[:, :6]
+        T = X[:, 6:9]
+        s = X[:, 9]
+        R = rotation_6d_to_matrix(q)
+        c = self.cost(R, T, s)
+        # p = N exp(-c * self.scale)
+        # logp \propto -c * self.scale
+        return -c * self.scale
+
+
+def iterative_closest_point_volumetric_svgd(
+        volumetric_cost: VolumetricCost,
+        X: Union[torch.Tensor, "Pointclouds"],
+        init_transform: Optional[SimilarityTransform] = None,
+        max_iterations: int = 500,
+) -> ICPSolution:
+    # make sure we convert input Pointclouds structures to
+    # padded tensors of shape (N, P, 3)
+    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+    Xt, R, T, s = apply_init_transform(Xt, init_transform)
+
+    converged = False
+
+    # initialize the transformation history
+    t_history = []
+    losses = []
+
+    # SVGD
+    K = RBF()
+
+    q = matrix_to_rotation_6d(R)
+    params = torch.cat([q, T, s.view(-1, 1)], dim=1)
+    svgd = SVGD(CostProb(volumetric_cost), K, optim.Adam([params], lr=1e-2))
+    for i in range(max_iterations):
+        # convert back to R, T, s
+        logprob = svgd.step(params)
+        cost = -logprob / logprob.P.scale
+        losses.append(cost)
+
+    # convert ES back to R, T
+    q = params[:, :6]
+    T = params[:, 6:9]
+    s = params[:, 9]
+    R = rotation_6d_to_matrix(q)
+    rmse = volumetric_cost(R, T, s)
+
+    plot_restart_losses(losses)
 
     if oputil.is_pointclouds(X):
         Xt = X.update_padded(Xt)  # type: ignore
@@ -171,7 +361,7 @@ def volumetric_points_alignment(
         R: torch.Tensor = None, T: torch.tensor = None, s: torch.tensor = None,
         iterations: int = 50,
         lr: float = 0.01,
-        verbose = False
+        verbose=False
 ) -> tuple[SimilarityTransform, torch.tensor]:
     """
     Finds a similarity transformation (rotation `R`, translation `T`
@@ -230,17 +420,22 @@ def volumetric_points_alignment(
         R = rotation_6d_to_matrix(q)
         return R, T
 
+    losses = []
+
     for epoch in range(iterations):
         R, T = get_usable_transform_representation()
 
         total_loss = volumetric_cost(R, T, s)
         total_loss.mean().backward()
+        losses.append(total_loss.detach())
 
         # visualize gradients on the losses
         volumetric_cost.visualize(R, T, s)
 
         optimizer.step()
         optimizer.zero_grad()
+
+    plot_sgd_losses(losses)
 
     if verbose:
         print(f"pose loss {total_loss.mean().item()}")

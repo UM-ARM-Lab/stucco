@@ -219,5 +219,11 @@ repeat with baselines by replacing `ours` with `online-birch` and other baseline
 ### Volumetric Registration Experiments
 Generate and export data for offline baselines:
 ```shell
-python run_many_registration_experiments.py --registration none --no_gui
+python run_many_registration_experiments.py --registration none --no_gui --task mustard mustard_sideways mustard_fallen mustard_fallen_sideways drill drill_opposite drill_slanted drill_fallen hammer hammer_1 hammer_2
+```
+
+Generate gifs from the logged images after `cd`ing into their log directories:
+```shell
+ffmpeg -i %d.png -vf palettegen palette.png
+ffmpeg -i %d.png -i palette.png -lavfi paletteuse all.gif
 ```

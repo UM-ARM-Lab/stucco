@@ -12,6 +12,8 @@ class ICPMethod(enum.Enum):
     VOLUMETRIC_ICP_INIT = 7
     VOLUMETRIC_NO_FREESPACE = 3
     VOLUMETRIC_LIMITED_REINIT = 9
+    VOLUMETRIC_CMAES = 10
+    VOLUMETRIC_SVGD = 11
 
     ICP_SGD_VOLUMETRIC_NO_ALIGNMENT = 4
     ICP_REVERSE = 5
@@ -20,4 +22,4 @@ class ICPMethod(enum.Enum):
     # freespace baselines
     MEDIAL_CONSTRAINT = 8
 
-    NONE = 10
+    NONE = 12

@@ -45,6 +45,7 @@ from stucco.env_getters.poke import PokeGetter
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.icp import costs as icp_costs
+from stucco.icp import volumetric
 from stucco import util
 from stucco.sdf import ObjectFactory
 
@@ -162,7 +163,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
                                              learn_translation=True,
                                              use_matching_loss=False)
     elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
-                        icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT]:
+                        icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
+                        icp.ICPMethod.VOLUMETRIC_CMAES, icp.ICPMethod.VOLUMETRIC_SVGD]:
         if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
             volumetric_cost = copy.copy(volumetric_cost)
             volumetric_cost.scale_known_freespace = 0
@@ -173,8 +175,14 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
             T, distances = icp.icp_pytorch3d(model_points_register, model_points_world_frame,
                                              given_init_pose=best_tsf_guess, batch=B)
             best_tsf_guess = T
+
+        optimization = volumetric.Optimization.SGD
+        if reg_method == icp.ICPMethod.VOLUMETRIC_CMAES:
+            optimization = volumetric.Optimization.CMAES
+        elif reg_method == icp.ICPMethod.VOLUMETRIC_SVGD:
+            optimization = volumetric.Optimization.SVGD
         # so given_init_pose expects world frame to object frame
-        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame,
+        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
                                           given_init_pose=best_tsf_guess.inverse(),
                                           batch=B, max_iterations=20, lr=0.01)
     elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
@@ -1381,8 +1389,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                               object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
                 if draw_pose_distribution_separately:
-                    evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory, 0.1,
-                                                        True]
+                    evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory, 0.,
+                                                        False]
                 else:
                     draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
                     evaluate_chamfer_dist_extra_args = [None, env.obj_factory, 0., False]

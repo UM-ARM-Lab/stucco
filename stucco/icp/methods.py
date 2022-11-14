@@ -7,7 +7,7 @@ from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
 from stucco.icp.sgd import iterative_closest_point_sgd
-from stucco.icp.volumetric import iterative_closest_point_volumetric
+from stucco.icp import volumetric
 from stucco.icp.medial_constraints import iterative_closest_point_medial_constraint
 from stucco import util
 
@@ -508,15 +508,29 @@ def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
     return T, distances
 
 
-def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, **kwargs):
+def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimization=volumetric.Optimization.SGD,
+                   **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
                                           given_init_pose[:, :3, 3],
                                           torch.ones(batch, device=A.device, dtype=A.dtype))
 
-    res = iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                                             **kwargs)
+    if optimization == volumetric.Optimization.SGD:
+        res = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
+                                                            init_transform=given_init_pose,
+                                                            **kwargs)
+    elif optimization == volumetric.Optimization.CMAES:
+        res = volumetric.iterative_closest_point_volumetric_cmaes(volumetric_cost, A.repeat(batch, 1, 1),
+                                                                  init_transform=given_init_pose,
+                                                                  **kwargs)
+    elif optimization == volumetric.Optimization.SVGD:
+        res = volumetric.iterative_closest_point_volumetric_svgd(volumetric_cost, A.repeat(batch, 1, 1),
+                                                                 init_transform=given_init_pose,
+                                                                 **kwargs)
+    else:
+        raise RuntimeError(f"Unsupported optimization method {optimization}")
+
     T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
     T[:, :3, :3] = res.RTs.R
     T[:, :3, 3] = res.RTs.T
