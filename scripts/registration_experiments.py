@@ -69,7 +69,7 @@ plt.switch_backend('Qt5Agg')
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
-logging.basicConfig(level=logging.INFO,
+logging.basicConfig(level=logging.INFO, force=True,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh])
 
@@ -183,7 +183,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
             optimization = volumetric.Optimization.SVGD
         # so given_init_pose expects world frame to object frame
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
-                                          given_init_pose=best_tsf_guess.inverse(), save_loss_plot=True,
+                                          given_init_pose=best_tsf_guess.inverse(), save_loss_plot=False,
                                           batch=B)
     elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
         T, distances = icp.icp_medial_constraints(volumetric_cost.sdf, volumetric_cost.free_voxels,
