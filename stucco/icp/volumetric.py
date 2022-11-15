@@ -68,10 +68,11 @@ def iterative_closest_point_volumetric(
         volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
-        max_iterations: int = 100,
+        max_iterations: int = 20,
         relative_rmse_thr: float = 1e-6,
         estimate_scale: bool = False,
         verbose: bool = False,
+        save_loss_plot=True,
         **kwargs,
 ) -> ICPSolution:
     """
@@ -153,6 +154,7 @@ def iterative_closest_point_volumetric(
             R=R,
             T=T,
             s=s,
+            save_loss_plot=save_loss_plot,
             **kwargs
         )
         R, T, s = sim_transform
@@ -186,7 +188,8 @@ def iterative_closest_point_volumetric(
         # update the previous rmse
         prev_rmse = rmse
 
-    plot_restart_losses(losses)
+    if save_loss_plot:
+        plot_restart_losses(losses)
 
     if verbose:
         if converged:
@@ -235,6 +238,7 @@ def iterative_closest_point_volumetric_cmaes(
         X: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
         sigma=0.2,
+        save_loss_plot=True,
         **kwargs,
 ) -> ICPSolution:
     # make sure we convert input Pointclouds structures to
@@ -285,7 +289,8 @@ def iterative_closest_point_volumetric_cmaes(
     # print(T[0])
     rmse = volumetric_cost(R, T, s)
 
-    plot_restart_losses(losses)
+    if save_loss_plot:
+        plot_restart_losses(losses)
 
     if oputil.is_pointclouds(X):
         Xt = X.update_padded(Xt)  # type: ignore
@@ -298,11 +303,10 @@ class CostProb:
         self.cost = cost
         self.scale = scale
 
-    def log_prob(self, X):
+    def log_prob(self, X, s):
         # turn into R, T
         q = X[:, :6]
         T = X[:, 6:9]
-        s = X[:, 9]
         R = rotation_6d_to_matrix(q)
         c = self.cost(R, T, s)
         # p = N exp(-c * self.scale)
@@ -314,7 +318,11 @@ def iterative_closest_point_volumetric_svgd(
         volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
-        max_iterations: int = 500,
+        max_iterations: int = 300,
+        lr=0.005,
+        kernel_scale=None,  # None indicates to use the median heuristic
+        cost_scale=10.,
+        save_loss_plot=True,
 ) -> ICPSolution:
     # make sure we convert input Pointclouds structures to
     # padded tensors of shape (N, P, 3)
@@ -328,25 +336,25 @@ def iterative_closest_point_volumetric_svgd(
     losses = []
 
     # SVGD
-    K = RBF()
+    K = RBF(kernel_scale)
 
     q = matrix_to_rotation_6d(R)
-    params = torch.cat([q, T, s.view(-1, 1)], dim=1)
-    svgd = SVGD(CostProb(volumetric_cost), K, optim.Adam([params], lr=1e-2))
+    params = torch.cat([q, T], dim=1)
+    svgd = SVGD(CostProb(volumetric_cost, scale=cost_scale), K, optim.Adam([params], lr=lr))
     for i in range(max_iterations):
         # convert back to R, T, s
-        logprob = svgd.step(params)
-        cost = -logprob / logprob.P.scale
+        logprob = svgd.step(params, s)
+        cost = -logprob / svgd.P.scale
         losses.append(cost)
 
     # convert ES back to R, T
     q = params[:, :6]
     T = params[:, 6:9]
-    s = params[:, 9]
     R = rotation_6d_to_matrix(q)
     rmse = volumetric_cost(R, T, s)
 
-    plot_restart_losses(losses)
+    if save_loss_plot:
+        plot_restart_losses(losses)
 
     if oputil.is_pointclouds(X):
         Xt = X.update_padded(Xt)  # type: ignore
@@ -361,6 +369,7 @@ def volumetric_points_alignment(
         R: torch.Tensor = None, T: torch.tensor = None, s: torch.tensor = None,
         iterations: int = 50,
         lr: float = 0.01,
+        save_loss_plot=True,
         verbose=False
 ) -> tuple[SimilarityTransform, torch.tensor]:
     """
@@ -435,7 +444,8 @@ def volumetric_points_alignment(
         optimizer.step()
         optimizer.zero_grad()
 
-    plot_sgd_losses(losses)
+    if save_loss_plot:
+        plot_sgd_losses(losses)
 
     if verbose:
         print(f"pose loss {total_loss.mean().item()}")

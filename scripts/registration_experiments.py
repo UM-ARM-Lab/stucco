@@ -183,8 +183,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
             optimization = volumetric.Optimization.SVGD
         # so given_init_pose expects world frame to object frame
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
-                                          given_init_pose=best_tsf_guess.inverse(),
-                                          batch=B, max_iterations=20, lr=0.01)
+                                          given_init_pose=best_tsf_guess.inverse(), save_loss_plot=True,
+                                          batch=B)
     elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
         T, distances = icp.icp_medial_constraints(volumetric_cost.sdf, volumetric_cost.free_voxels,
                                                   model_points_world_frame,
@@ -1428,7 +1428,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                               object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
                 if draw_pose_distribution_separately:
-                    evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory, 0.,
+                    evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory, 0.05,
                                                         False]
                 else:
                     draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)

@@ -36,10 +36,10 @@ class SVGD:
         self.K = K
         self.optim = optimizer
 
-    def phi(self, X):
+    def phi(self, X, *args, **kwargs):
         X = X.detach().requires_grad_(True)
 
-        self.log_prob = self.P.log_prob(X)
+        self.log_prob = self.P.log_prob(X, *args, **kwargs)
         score_func = autograd.grad(self.log_prob.sum(), X)[0]
 
         K_XX = self.K(X, X.detach())
@@ -49,9 +49,9 @@ class SVGD:
 
         return phi
 
-    def step(self, X):
+    def step(self, X, *args, **kwargs):
         self.optim.zero_grad()
-        p = -self.phi(X)
+        p = -self.phi(X, *args, **kwargs)
         X.grad = p
         self.optim.step()
         return self.log_prob.detach().clone()
