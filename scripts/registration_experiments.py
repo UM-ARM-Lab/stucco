@@ -1740,10 +1740,46 @@ def plot_sdf(experiment: ICPEVExperiment, filter_pts=None):
     input("finished")
 
 
+def plot_exported_pcd(env: poke.PokeEnv, seed=0):
+    target_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}.txt")
+    source_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}_{seed}.txt")
+
+    with open(target_file) as f:
+        num = f.readline()
+        points = f.readlines()
+        points = np.array([[float(v) for v in line.strip().split()] for line in points])
+        env.draw_user_text(f"target pcd", xy=[-0.3, 1., -0.5])
+        for i, pt in enumerate(points):
+            if pt[-1] == 0:
+                c = (1, 0, 1)
+            else:
+                c = (0, 1, 1)
+            env.vis.draw_point(f"target.{i}", pt[:3], color=c, scale=2, length=0.003)
+        input()
+    env.vis.clear_visualizations()
+
+    with open(source_file) as f:
+        data = f.readlines()
+        j = 0
+        while j < len(data):
+            line = data[j]
+            pokes, num = [int(v) for v in line.strip().split()]
+            points = np.array([[float(v) for v in line.strip().split()] for line in data[j + 1:j + num + 1]])
+            j += num + 1
+            env.draw_user_text(f"source pcd {pokes}", xy=[-0.4, 1., -0.4])
+            for i, pt in enumerate(points):
+                if pt[-1] == 0:
+                    c = (1, 0, 1)
+                else:
+                    c = (0, 1, 1)
+                env.vis.draw_point(f"source.{i}", pt[:3], color=c, scale=2, length=0.003)
+            input()
+
+
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
-                             'poke-visualize-sdf', 'debug'],
+                             'poke-visualize-sdf', 'poke-visualize-pcd', 'debug'],
                     help='which experiment to run')
 registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
 parser.add_argument('--registration',
@@ -1814,6 +1850,10 @@ if __name__ == "__main__":
         experiment_compare_basic_baseline(obj_factory, plot_only=args.plot_only, gui=not args.no_gui)
     elif args.experiment == "poke-visualize-sdf":
         env = PokeGetter.env(level=level, mode=p.GUI, clean_cache=True)
+        env.close()
+    elif args.experiment == "poke-visualize-pcd":
+        env = PokeGetter.env(level=level, mode=p.GUI)
+        plot_exported_pcd(env, seed=args.seed[0])
         env.close()
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False, device="cuda")
