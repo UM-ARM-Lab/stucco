@@ -237,7 +237,7 @@ def iterative_closest_point_volumetric_cmaes(
         volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
-        sigma=0.2,
+        sigma=0.1,
         save_loss_plot=True,
         **kwargs,
 ) -> ICPSolution:
@@ -268,7 +268,7 @@ def iterative_closest_point_volumetric_cmaes(
     q0 = matrix_to_rotation_6d(R[0])
     T0 = T[0]
     x0 = torch.cat([q0, T0]).cpu().numpy()
-    options = {"popsize": b, 'seed': 234}
+    options = {"popsize": b, "seed": np.random.randint(0, 10000), "tolfun": 1e-5, "tolfunhist": 1e-6}
     options.update(kwargs)
     es = cma.CMAEvolutionStrategy(x0=x0, sigma0=sigma, inopts=options)
     while not es.stop():
