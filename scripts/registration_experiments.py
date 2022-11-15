@@ -118,10 +118,10 @@ def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, de
 
 
 def registration_method_uses_only_contact_points(reg_method: icp.ICPMethod):
-    if reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_ICP_INIT,
-                      icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT]:
-        return False
-    return True
+    if reg_method in [icp.ICPMethod.ICP, icp.ICPMethod.ICP_SGD, icp.ICPMethod.ICP_REVERSE,
+                      icp.ICPMethod.ICP_SGD_REVERSE, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE]:
+        return True
+    return False
 
 
 def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
@@ -201,6 +201,39 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 
     # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
     #                              batch=B)
+    return T, distances
+
+
+def read_offline_output(level, seed, pokes):
+    filepath = os.path.join(cfg.DATA_DIR, f"poke/cvo/{level.name}_{seed}.txt")
+    if not os.path.isfile(filepath):
+        raise RuntimeError(f"Missing path, should run offline method first: {filepath}")
+
+    T = []
+    distances = []
+    with open(filepath) as f:
+        data = f.readlines()
+        i = 0
+        while i < len(data):
+            header = data[i].split()
+            this_poke = int(header[0])
+            if this_poke < pokes:
+                # keep going forward
+                i += 5
+                continue
+            elif this_poke > pokes:
+                # assuming the pokes are ordered, if we're past then there won't be anymore of this poke later
+                break
+
+            transform = torch.tensor([[float(v) for v in line.strip().split()] for line in data[i + 1:i + 5]])
+            T.append(transform)
+            # TODO save RMSE
+            distances.append(0.)
+            i += 5
+
+    T = torch.stack(T)
+    T = T.inverse()
+    distances = torch.tensor(distances)
     return T, distances
 
 
@@ -1338,8 +1371,14 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 if registration_method_uses_only_contact_points(reg_method) and N in num_points_to_T_cache:
                     T, distances = num_points_to_T_cache[N]
                 else:
-                    T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B, volumetric_cost,
-                                                   reg_method)
+                    if reg_method == icp.ICPMethod.CVO:
+                        T, distances = read_offline_output(level, seed, pokes)
+                        T = T.to(device=device, dtype=dtype)
+                        distances = distances.to(device=device, dtype=dtype)
+                    else:
+                        T, distances = do_registration(this_pts, model_points_register, best_tsf_guess, B,
+                                                       volumetric_cost,
+                                                       reg_method)
                     num_points_to_T_cache[N] = T, distances
 
                 transforms_per_object.append(T)
@@ -1706,20 +1745,7 @@ parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
                              'poke-visualize-sdf', 'debug'],
                     help='which experiment to run')
-registration_map = {
-    "volumetric": icp.ICPMethod.VOLUMETRIC,
-    "volumetric-icp-init": icp.ICPMethod.VOLUMETRIC_ICP_INIT,
-    "volumetric-no-freespace": icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
-    "volumetric-limited-reinit": icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
-    "icp": icp.ICPMethod.ICP,
-    "icp-reverse": icp.ICPMethod.ICP_REVERSE,
-    "icp-sgd": icp.ICPMethod.ICP_SGD,
-    "icp-sgd-reverse": icp.ICPMethod.ICP_SGD_REVERSE,
-    "icp-sgd-no-alignment": icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT,
-
-    "medial": icp.ICPMethod.MEDIAL_CONSTRAINT,
-    "none": icp.ICPMethod.NONE
-}
+registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
 parser.add_argument('--registration',
                     choices=registration_map.keys(),
                     default='volumetric',

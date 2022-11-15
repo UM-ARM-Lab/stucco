@@ -21,5 +21,6 @@ class ICPMethod(enum.Enum):
 
     # freespace baselines
     MEDIAL_CONSTRAINT = 8
+    CVO = 12
 
-    NONE = 12
+    NONE = 13
