@@ -408,7 +408,7 @@ class TrackingMethod:
         """Iterating over this provides a set of contact points corresponding to an object"""
 
     @abc.abstractmethod
-    def create_controller(self, controls):
+    def create_controller(self, controls) -> Controller:
         """Return a predetermined controller that updates the method when querying for a command"""
 
     @abc.abstractmethod
@@ -416,7 +416,7 @@ class TrackingMethod:
         """Render the tracked contact points in the given environment"""
 
     @abc.abstractmethod
-    def get_labelled_moved_points(self, labels=None):
+    def get_labelled_moved_points(self, labels=None) -> typing.Tuple[torch.Tensor, torch.Tensor]:
         """Return the final position of the tracked points as well as their object label"""
 
     def register_transforms(self, T, best_T):

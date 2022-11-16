@@ -556,6 +556,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     df = df[df[keep_lowest_y_wrt] <= df.groupby(group)[keep_lowest_y_wrt].transform('quantile', keep_lowest_y_quantile)]
     df.loc[df["method"].str.contains("ICP"), "name"] = "non-freespace baseline"
     df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
+    df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
 
     if scatter:
         res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
@@ -1261,6 +1262,7 @@ def export_init_transform(transform_file: str, T: torch.tensor):
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False, draw_pose_distribution_separately=True,
+             init_method=icp.InitMethod.RANDOM,
              eval_num_points=200, ctrl_noise_max=0.005):
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
@@ -1300,7 +1302,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
     B = 30
     device = env.device
-    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = None
     chamfer_err = []
     freespace_violations = []
     num_freespace_voxels = []
@@ -1328,7 +1330,6 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     # exporting data for offline baselines, remove the stale file
     if reg_method == icp.ICPMethod.NONE:
         export_pc_register_against(pc_register_against_file, env)
-        export_init_transform(transform_file, best_tsf_guess)
         export_init_transform(transform_gt_file, link_to_current_tf_gt.get_matrix().repeat(B, 1, 1))
         try:
             os.remove(pc_to_register_file)
@@ -1364,6 +1365,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
                                                            torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
 
+                if best_tsf_guess is None:
+                    best_tsf_guess = initialize_transform_estimates(B, env, init_method, method)
                 if ground_truth_initialization:
                     best_tsf_guess = link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
 
@@ -1474,6 +1477,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             # export data for offline baselines
             pokes += 1
             if pokes >= start_at_num_pts:
+                if best_tsf_guess is None:
+                    best_tsf_guess = initialize_transform_estimates(B, env, init_method, method)
+                    export_init_transform(transform_file, best_tsf_guess)
+
                 export_pc_to_register(pc_to_register_file, pokes, env, method)
 
         if action is not None:
@@ -1486,6 +1493,26 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
 
     # if reg_method == icp.ICPMethod.NONE:
     #     input("waiting for trajectory evaluation")
+
+
+def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
+    dtype = env.dtype
+    device = env.device
+    # translation is 0,0,0
+    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    if init_method == icp.InitMethod.ORIGIN:
+        pass
+    elif init_method == icp.InitMethod.CONTACT_CENTROID:
+        _, points = tracker.get_labelled_moved_points()
+        centroid = points.mean(dim=0).to(device=device, dtype=dtype)
+        best_tsf_guess[:, :3, 3] = centroid
+    elif init_method == icp.InitMethod.RANDOM:
+        trans = np.random.uniform(env.freespace_ranges[:, 0], env.freespace_ranges[:, 1], (B, 3))
+        trans = torch.tensor(trans, device=device, dtype=dtype)
+        best_tsf_guess[:, :3, 3] = trans
+    else:
+        raise RuntimeError(f"Unsupported initialization method: {init_method}")
+    return best_tsf_guess
 
 
 def create_tracking_method(env, method_name) -> TrackingMethod:
@@ -1869,15 +1896,17 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         def filter(df):
-            df = df[df["level"].str.contains(level.name)]
-            # df = df[df["level"] == level.name]
+            df = df[df["level"].str.contains(level.name) & (
+                    (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
+                    df["method"] == "VOLUMETRIC_CMAES"))]
+            # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
 
             return df
 
 
         def filter_single(df):
-            df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
-            # df = df[(df["level"] == level.name) & (df["seed"] == 0)]
+            # df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
+            df = df[(df["level"] == level.name) & (df["seed"] == args.seed[0])]
             return df
 
 

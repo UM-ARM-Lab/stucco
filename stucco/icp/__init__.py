@@ -24,3 +24,9 @@ class ICPMethod(enum.Enum):
     CVO = 12
 
     NONE = 13
+
+
+class InitMethod(enum.Enum):
+    ORIGIN = 0
+    CONTACT_CENTROID = 1
+    RANDOM = 2
