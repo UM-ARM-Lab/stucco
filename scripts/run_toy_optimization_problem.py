@@ -69,7 +69,13 @@ particles = (torch.rand(B, 2, device=device) - 0.5) * 5
 # particles = (torch.rand(B, 2, device=device) - 0.5) * 2.0 + 1
 vis_particles = None
 
-svgd = SVGD(P, K, optim.Adam([particles], lr=1e-1))
+use_lbfgs = True
+if use_lbfgs:
+    optimizer = optim.LBFGS([particles], lr=1e-1)
+else:
+    optimizer = optim.Adam([particles], lr=1e-1)
+
+svgd = SVGD(P, K, optimizer)
 max_iterations = 100
 losses = []
 
@@ -79,8 +85,23 @@ for i in range(max_iterations):
             vis_particles.remove()
         z = P.prob(particles)
         vis_particles = ax.scatter(particles[:, 0].cpu(), particles[:, 1].cpu(), z.cpu() + 3e-2, color=(1, 0, 0))
-    logprob = svgd.step(particles)
-    cost = -logprob / P.scale
+
+
+    def closure():
+        svgd.optim.zero_grad()
+        p = -svgd.phi(particles)
+        particles.grad = p
+        logprob = svgd.log_prob.detach().clone()
+        cost = -logprob / P.scale
+        return cost.mean()
+
+
+    svgd.optim.step(closure)
+    cost = -svgd.log_prob.detach().clone() / P.scale
+
+    # logprob = svgd.step(particles)
+    # cost = -logprob / P.scale
+
     losses.append(cost)
     plt.savefig(os.path.join(cfg.DATA_DIR, 'img/svgd', f"{i}.png"))
 
