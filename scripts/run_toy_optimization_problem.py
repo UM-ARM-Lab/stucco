@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import math
+from arm_pytorch_utilities.rand import seed
 
 from stucco.icp.volumetric import plot_restart_losses
 from stucco.svgd import RBF, SVGD
@@ -62,11 +63,12 @@ plt.tight_layout()
 # plt.show()
 # exit()
 
+seed(0)
 # generate random initial particles
 B = 100
 K = RBF()
 particles = (torch.rand(B, 2, device=device) - 0.5) * 5
-# particles = (torch.rand(B, 2, device=device) - 0.5) * 2.0 + 1
+# particles = (torch.rand(B, 2, device=device) - 0.5) * 0.1 + 1
 vis_particles = None
 
 use_lbfgs = True
@@ -85,6 +87,8 @@ for i in range(max_iterations):
             vis_particles.remove()
         z = P.prob(particles)
         vis_particles = ax.scatter(particles[:, 0].cpu(), particles[:, 1].cpu(), z.cpu() + 3e-2, color=(1, 0, 0))
+        ax.set_xlim([min(particles[:, 0].min().cpu(), -3), max(particles[:, 0].max().cpu(), 3)])
+        ax.set_ylim([min(particles[:, 1].min().cpu(), -3), max(particles[:, 1].max().cpu(), 3)])
 
 
     def closure():
