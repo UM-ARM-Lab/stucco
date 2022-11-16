@@ -1,3 +1,4 @@
+import enum
 import os
 
 from torch import optim
@@ -12,6 +13,7 @@ from arm_pytorch_utilities.rand import seed
 
 from stucco.icp.volumetric import plot_restart_losses
 from stucco.svgd import RBF, SVGD
+import cma
 
 
 def f(x, y):
@@ -71,17 +73,9 @@ particles = (torch.rand(B, 2, device=device) - 0.5) * 5
 # particles = (torch.rand(B, 2, device=device) - 0.5) * 0.1 + 1
 vis_particles = None
 
-use_lbfgs = True
-if use_lbfgs:
-    optimizer = optim.LBFGS([particles], lr=1e-1)
-else:
-    optimizer = optim.Adam([particles], lr=1e-1)
 
-svgd = SVGD(P, K, optimizer)
-max_iterations = 100
-losses = []
-
-for i in range(max_iterations):
+def plot_particles(i):
+    global vis_particles
     with torch.no_grad():
         if vis_particles is not None:
             vis_particles.remove()
@@ -89,24 +83,68 @@ for i in range(max_iterations):
         vis_particles = ax.scatter(particles[:, 0].cpu(), particles[:, 1].cpu(), z.cpu() + 3e-2, color=(1, 0, 0))
         ax.set_xlim([min(particles[:, 0].min().cpu(), -3), max(particles[:, 0].max().cpu(), 3)])
         ax.set_ylim([min(particles[:, 1].min().cpu(), -3), max(particles[:, 1].max().cpu(), 3)])
+    img_path = os.path.join(cfg.DATA_DIR, 'img/svgd', f"{i}.png")
+    plt.savefig(img_path)
+    print(f"particles saved to {img_path}")
 
 
-    def closure():
-        svgd.optim.zero_grad()
-        p = -svgd.phi(particles)
-        particles.grad = p
-        logprob = svgd.log_prob.detach().clone()
-        cost = -logprob / P.scale
-        return cost.mean()
+class OptimizationMethod(enum.Enum):
+    SVGD = 0
+    CMAES = 1
 
 
-    svgd.optim.step(closure)
-    cost = -svgd.log_prob.detach().clone() / P.scale
+method = OptimizationMethod.CMAES
+losses = []
 
-    # logprob = svgd.step(particles)
-    # cost = -logprob / P.scale
+if method is OptimizationMethod.SVGD:
+    use_lbfgs = True
+    if use_lbfgs:
+        optimizer = optim.LBFGS([particles], lr=1e-1)
+    else:
+        optimizer = optim.Adam([particles], lr=1e-1)
 
-    losses.append(cost)
-    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/svgd', f"{i}.png"))
+    svgd = SVGD(P, K, optimizer)
+    max_iterations = 100
+
+    for i in range(max_iterations):
+        plot_particles(i)
+
+
+        def closure():
+            svgd.optim.zero_grad()
+            p = -svgd.phi(particles)
+            particles.grad = p
+            logprob = svgd.log_prob.detach().clone()
+            cost = -logprob / P.scale
+            return cost.mean()
+
+
+        svgd.optim.step(closure)
+        cost = -svgd.log_prob.detach().clone() / P.scale
+
+        # logprob = svgd.step(particles)
+        # cost = -logprob / P.scale
+
+        losses.append(cost)
+
+elif method is OptimizationMethod.CMAES:
+    x0 = particles[0].cpu().numpy()
+    sigma = 1.0
+    options = {"popsize": B, "seed": np.random.randint(0, 10000), "tolfun": 1e-5, "tolfunhist": 1e-6}
+    es = cma.CMAEvolutionStrategy(x0=x0, sigma0=sigma, inopts=options)
+    i = 0
+    while not es.stop():
+        solutions = es.ask()
+        # convert back to R, T, s
+        particles = torch.tensor(solutions, device=device)
+        plot_particles(i)
+
+        cost = f(particles[..., 0], particles[..., 1])
+        losses.append(cost)
+        es.tell(solutions, cost.cpu().numpy())
+        i += 1
+
+    # convert ES back to R, T
+    solutions = es.ask()
 
 plot_restart_losses(losses)
