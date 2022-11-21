@@ -320,8 +320,8 @@ def iterative_closest_point_volumetric_svgd(
         init_transform: Optional[SimilarityTransform] = None,
         max_iterations: int = 300,
         lr=0.005,
-        kernel_scale=None,  # None indicates to use the median heuristic
-        cost_scale=10.,
+        kernel_scale=0.01,  # None indicates to use the median heuristic
+        cost_scale=5.,
         save_loss_plot=True,
 ) -> ICPSolution:
     # make sure we convert input Pointclouds structures to
