@@ -16,6 +16,7 @@ parser.add_argument('--seed', metavar='N', type=int, nargs='+',
                     default=[0, 1, 2, 3, 4],
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+parser.add_argument('--read_stored', action='store_true', help='read stored output instead of rerunning when possible')
 task_map = {level.name.lower(): level for level in poke.Levels}
 parser.add_argument('--task', type=str, nargs='+',
                     default=['all'],
@@ -37,6 +38,8 @@ if __name__ == "__main__":
                 to_run.append(args.name)
             if args.no_gui:
                 to_run.append("--no_gui")
+            if args.read_stored:
+                to_run.append("--read_stored")
 
             print(" ".join(to_run))
             if not args.dry:

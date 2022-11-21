@@ -204,8 +204,17 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     return T, distances
 
 
-def read_offline_output(level, seed, pokes):
-    filepath = os.path.join(cfg.DATA_DIR, f"poke/cvo/{level.name}_{seed}.txt")
+def saved_traj_dir_for_method(reg_method: icp.ICPMethod):
+    name = reg_method.name.lower().replace('_', '-')
+    return os.path.join(cfg.DATA_DIR, f"poke/{name}")
+
+
+def saved_traj_file(reg_method: icp.ICPMethod, level: poke.Levels, seed):
+    return f"{saved_traj_dir_for_method(reg_method)}/{level.name}_{seed}.txt"
+
+
+def read_offline_output(reg_method: icp.ICPMethod, level: poke.Levels, seed: int, pokes: int):
+    filepath = saved_traj_file(reg_method, level, seed)
     if not os.path.isfile(filepath):
         raise RuntimeError(f"Missing path, should run offline method first: {filepath}")
 
@@ -227,8 +236,10 @@ def read_offline_output(level, seed, pokes):
 
             transform = torch.tensor([[float(v) for v in line.strip().split()] for line in data[i + 1:i + 5]])
             T.append(transform)
-            # TODO save RMSE
-            distances.append(0.)
+            batch = int(header[1])
+            # lower is better
+            rmse = float(header[2])
+            distances.append(rmse)
             i += 5
 
     T = torch.stack(T)
@@ -1263,6 +1274,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
              register_num_points=500, start_at_num_pts=4,
              ground_truth_initialization=False, draw_pose_distribution_separately=True,
              init_method=icp.InitMethod.RANDOM,
+             read_stored=False,
              eval_num_points=200, ctrl_noise_max=0.005):
     # [name][seed] to access
     # chamfer_err: T x B number of steps by batch chamfer error
@@ -1374,8 +1386,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 if registration_method_uses_only_contact_points(reg_method) and N in num_points_to_T_cache:
                     T, distances = num_points_to_T_cache[N]
                 else:
-                    if reg_method == icp.ICPMethod.CVO:
-                        T, distances = read_offline_output(level, seed, pokes)
+                    if read_stored or reg_method == icp.ICPMethod.CVO:
+                        T, distances = read_offline_output(reg_method, level, seed, pokes)
                         T = T.to(device=device, dtype=dtype)
                         distances = distances.to(device=device, dtype=dtype)
                     else:
@@ -1827,6 +1839,8 @@ parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--plot_only', action='store_true',
                     help='plot only (previous) results without running any experiments')
+parser.add_argument('--read_stored', action='store_true', help='read and process previously output results rather than'
+                                                               ' rerunning where possible')
 
 args = parser.parse_args()
 
@@ -1890,7 +1904,7 @@ if __name__ == "__main__":
         for seed in args.seed:
             env.draw_user_text(f"{registration_method.name}{args.name} seed {seed}", xy=[-0.3, 1., -0.5])
             run_poke(env, create_tracking_method(env, tracking_method_name), registration_method, seed=seed,
-                     name=args.name, ground_truth_initialization=False)
+                     name=args.name, ground_truth_initialization=False, read_stored=args.read_stored)
             env.vis.clear_visualizations()
 
         env.close()
