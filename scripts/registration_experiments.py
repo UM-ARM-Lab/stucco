@@ -242,6 +242,7 @@ def read_offline_output(reg_method: icp.ICPMethod, level: poke.Levels, seed: int
             distances.append(rmse)
             i += 5
 
+    # current_to_link transform (world to base frame)
     T = torch.stack(T)
     T = T.inverse()
     distances = torch.tensor(distances)
@@ -1231,6 +1232,12 @@ def _export_pcs(f, pc_free, pc_occ):
     f.write("\n")
 
 
+def _export_transform(f, T):
+    T_serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T]
+    f.write("\n".join(T_serialized))
+    f.write("\n")
+
+
 def export_pc_register_against(point_cloud_file: str, env: poke.PokeEnv):
     os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
     with open(point_cloud_file, 'w') as f:
@@ -1256,6 +1263,21 @@ def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, 
         total_pts = len(pc_free) + len(pc_occ)
         f.write(f"{pokes} {total_pts}\n")
         _export_pcs(f, pc_free, pc_occ)
+
+
+def export_registration(stored_file: str, to_export):
+    """Exports current_to_link (world frame to base frame) transforms to file"""
+    os.makedirs(os.path.dirname(stored_file), exist_ok=True)
+    with open(stored_file, 'w') as f:
+        # sort to order by pokes
+        for pokes, data in sorted(to_export.items()):
+            T = data['T'].inverse()
+            d = data['rmse']
+            B = T.shape[0]
+            assert B == d.shape[0]
+            for b in range(B):
+                f.write(f"{pokes} {b} {d[b]}\n")
+                _export_transform(f, T[b])
 
 
 def export_init_transform(transform_file: str, T: torch.tensor):
@@ -1318,7 +1340,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     chamfer_err = []
     freespace_violations = []
     num_freespace_voxels = []
+    # for debug rendering of object meshes and keeping track of their object IDs
     pose_obj_map = {}
+    # for exporting out to file, maps poke # -> data
+    to_export = {}
 
     num_points_to_T_cache = {}
 
@@ -1485,6 +1510,11 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                      })
                 cache = pd.concat([cache, df])
                 cache.to_pickle(fullname)
+                # additional data to export fo file
+                to_export[pokes] = {
+                    'T': transforms_per_object[best_segment_idx],
+                    'rmse': rmse,
+                }
         elif reg_method == icp.ICPMethod.NONE and action is None:
             # export data for offline baselines
             pokes += 1
@@ -1503,6 +1533,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
             action += action_noise[simTime]
             obs, rew, done, info = env.step(action)
 
+    if not read_stored:
+        export_registration(saved_traj_file(reg_method, level, seed), to_export)
     # if reg_method == icp.ICPMethod.NONE:
     #     input("waiting for trajectory evaluation")
 
