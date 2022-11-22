@@ -547,6 +547,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                      keep_lowest_y_quantile=0.5,
                      keep_lowest_y_wrt=None,
                      scatter=False,
+                     save_path=None, show=True,
                      leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     df = pd.read_pickle(fullname)
@@ -606,7 +607,11 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     # create a legend only using the items
     res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
     # plt.tight_layout()
-    plt.show()
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
+    if show:
+        plt.show()
 
 
 class ShapeExplorationExperiment(abc.ABC):
@@ -1967,7 +1972,8 @@ if __name__ == "__main__":
 
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
                          key_columns=("method", "name", "seed", "poke", "level", "batch"),
-                         logy=True, keep_lowest_y_wrt="rmse",
+                         logy=True, keep_lowest_y_wrt="rmse", save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
+                         show=not args.no_gui,
                          plot_median=True, x='poke', y='chamfer_err')
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
