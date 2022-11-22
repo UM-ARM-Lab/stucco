@@ -570,11 +570,20 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
     df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
 
+    method_to_name = df.set_index("method")["name"].to_dict()
+    # order the methods should be shown
+    full_method_order = ["VOLUMETRIC", "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE", "VOLUMETRIC_LIMITED_REINIT",
+                         "VOLUMETRIC_CMAES", "VOLUMETRIC_SVGD", "ICP", "ICP_REVERSE", "CVO"]
+    # order the categories should be shown
+    full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
+    methods_order = [m for m in full_method_order if m in method_to_name]
+    category_order = [m for m in full_category_order if m in method_to_name.values()]
     if scatter:
         res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
     else:
         res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
                            estimator=np.median if plot_median else np.mean,
+                           hue_order=methods_order, style_order=category_order,
                            errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
     if logy:
         res.set(yscale='log')
@@ -582,7 +591,6 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         res.set(ylim=(0, None))
 
     # combine hue and styles in the legend
-    method_to_name = df.set_index("method")["name"].to_dict()
     handles, labels = res.get_legend_handles_labels()
     next_title_index = labels.index('name')
     style_dict = {label: (handle.get_linestyle(), handle.get_marker(), handle._dashSeq)
@@ -1942,10 +1950,11 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "debug":
         def filter(df):
-            df = df[df["level"].str.contains(level.name) & (
-                    (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
-                    df["method"] == "VOLUMETRIC_CMAES"))]
+            # df = df[df["level"].str.contains(level.name) & (
+            #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
+            #         df["method"] == "VOLUMETRIC_CMAES"))]
             # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
+            df = df[(df["level"] == level.name)]
 
             return df
 
