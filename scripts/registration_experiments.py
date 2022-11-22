@@ -164,6 +164,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
                                              use_matching_loss=False)
     elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
                         icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
+                        icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL,
                         icp.ICPMethod.VOLUMETRIC_CMAES, icp.ICPMethod.VOLUMETRIC_SVGD]:
         if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
             volumetric_cost = copy.copy(volumetric_cost)
@@ -573,8 +574,14 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
 
     method_to_name = df.set_index("method")["name"].to_dict()
     # order the methods should be shown
-    full_method_order = ["VOLUMETRIC", "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE", "VOLUMETRIC_LIMITED_REINIT",
-                         "VOLUMETRIC_CMAES", "VOLUMETRIC_SVGD", "ICP", "ICP_REVERSE", "CVO"]
+    full_method_order = ["VOLUMETRIC",
+                         # variants of our method
+                         "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE",
+                         "VOLUMETRIC_LIMITED_REINIT", "VOLUMETRIC_LIMITED_REINIT_FULL",
+                         # variants with non-SGD optimization
+                         "VOLUMETRIC_CMAES", "VOLUMETRIC_SVGD",
+                         # baselines
+                         "ICP", "ICP_REVERSE", "CVO"]
     # order the categories should be shown
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     methods_order = [m for m in full_method_order if m in method_to_name]
@@ -1456,7 +1463,8 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
                 best_T = best_tsf_guess
 
-                if registration_method == icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT:
+                if registration_method in [icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
+                                           icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL]:
                     # sample delta rotations in axis angle form
                     temp = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
                     radian_sigma = 0.3
@@ -1464,6 +1472,10 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                     delta_R = tf.axis_angle_to_matrix(delta_R)
                     temp[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
                     temp[:, :3, 3] = best_tsf_guess[:3, 3]
+                    if registration_method == icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL:
+                        translation_sigma = 0.05
+                        delta_t = torch.randn((B, 3), dtype=dtype, device=device) * translation_sigma
+                        temp[:, :3, 3] += delta_t
                     temp[0] = best_tsf_guess
                     best_tsf_guess = temp
                 else:
@@ -1959,7 +1971,12 @@ if __name__ == "__main__":
             #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
             #         df["method"] == "VOLUMETRIC_CMAES"))]
             # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
+
+            # show each level individually or marginalize over all of them
             df = df[(df["level"] == level.name)]
+            # df = df[(df["level"].str.contains(level.name))]
+
+            df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
 
             return df
 
@@ -1972,7 +1989,8 @@ if __name__ == "__main__":
 
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
                          key_columns=("method", "name", "seed", "poke", "level", "batch"),
-                         logy=True, keep_lowest_y_wrt="rmse", save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
+                         logy=True, keep_lowest_y_wrt="rmse",
+                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
                          show=not args.no_gui,
                          plot_median=True, x='poke', y='chamfer_err')
 
@@ -1980,7 +1998,6 @@ if __name__ == "__main__":
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
         #                  plot_median=False, x='poke', y='chamfer_err')
 
-        pass
         # -- exploration experiment
         # exp_name = "tukey voxel 0.1"
         # policy_args = {"upright_bias": 0.1, "debug": True, "num_samples_each_action": 200,
