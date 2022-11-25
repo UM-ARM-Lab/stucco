@@ -1463,29 +1463,23 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
                 logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
                 best_T = best_tsf_guess
 
-                if registration_method in [icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
-                                           icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL]:
-                    # sample delta rotations in axis angle form
-                    temp = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
-                    radian_sigma = 0.3
-                    delta_R = torch.randn((B, 3), dtype=dtype, device=device) * radian_sigma
-                    delta_R = tf.axis_angle_to_matrix(delta_R)
-                    temp[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
-                    temp[:, :3, 3] = best_tsf_guess[:3, 3]
-                    if registration_method == icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL:
-                        translation_sigma = 0.05
-                        delta_t = torch.randn((B, 3), dtype=dtype, device=device) * translation_sigma
-                        temp[:, :3, 3] += delta_t
-                    temp[0] = best_tsf_guess
-                    best_tsf_guess = temp
-                else:
-                    # create distribution of initializations centered at our previous best guess translation
-                    # with random orientations
-                    # ensure one of them (first of the batch) has the exact transform
-                    temp = exploration.random_upright_transforms(B, dtype, device, best_tsf_guess[:3, 3])
-                    temp[0] = best_tsf_guess
-                    best_tsf_guess = temp
-                    # best_tsf_guess = best_tsf_guess.repeat(B, 1, 1)
+                # sample rotation and translation around the previous best solution to reinitialize
+                radian_sigma = 0.3
+                translation_sigma = 0.05
+
+                # sample delta rotations in axis angle form
+                temp = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
+
+                delta_R = torch.randn((B, 3), dtype=dtype, device=device) * radian_sigma
+                delta_R = tf.axis_angle_to_matrix(delta_R)
+                temp[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
+                temp[:, :3, 3] = best_tsf_guess[:3, 3]
+
+                delta_t = torch.randn((B, 3), dtype=dtype, device=device) * translation_sigma
+                temp[:, :3, 3] += delta_t
+                # ensure one of them (first of the batch) has the exact transform
+                temp[0] = best_tsf_guess
+                best_tsf_guess = temp
 
                 T = transforms_per_object[best_segment_idx]
 
@@ -1973,10 +1967,10 @@ if __name__ == "__main__":
             # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
 
             # show each level individually or marginalize over all of them
-            df = df[(df["level"] == level.name)]
-            # df = df[(df["level"].str.contains(level.name))]
+            # df = df[(df["level"] == level.name)]
+            df = df[(df["level"].str.contains(level.name))]
 
-            df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
+            # df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
 
             return df
 
