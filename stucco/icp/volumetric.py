@@ -1,6 +1,5 @@
 import enum
 
-import cma
 import numpy as np
 import torch
 import warnings
@@ -10,6 +9,7 @@ from arm_pytorch_utilities.tensor_utils import ensure_tensor
 from pytorch3d.ops import utils as oputil
 from torch import optim
 
+from stucco import util
 from stucco.icp.sgd import ICPSolution, SimilarityTransform, _apply_similarity_transform
 from stucco.icp.costs import VolumetricCost
 from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
@@ -18,6 +18,11 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from stucco import cfg
+
+import cma
+from ribs.archives import GridArchive
+from ribs.emitters import ImprovementEmitter
+from ribs.optimizers import Optimizer
 
 from stucco.svgd import RBF, SVGD
 
@@ -58,10 +63,26 @@ def plot_sgd_losses(losses):
     sgd_index += 1
 
 
+def plot_cmame_archive(archive):
+    global restart_index
+    from ribs.visualize import grid_archive_heatmap
+
+    fig, ax = plt.subplots()
+    grid_archive_heatmap(archive, ax=ax, vmin=-4, vmax=0)
+    # for MUSTARD task
+    # ax.scatter(0.25, 0)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    fig.suptitle(f"poke {restart_index}")
+
+    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
+    restart_index += 1
+
 class Optimization(enum.Enum):
     SGD = 0
     CMAES = 1
-    SVGD = 2
+    CMAME = 2
+    SVGD = 3
 
 
 def iterative_closest_point_volumetric(
@@ -296,6 +317,83 @@ def iterative_closest_point_volumetric_cmaes(
         Xt = X.update_padded(Xt)  # type: ignore
 
     return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+
+def iterative_closest_point_volumetric_cmame(
+        volumetric_cost: VolumetricCost,
+        X: Union[torch.Tensor, "Pointclouds"],
+        init_transform: Optional[SimilarityTransform] = None,
+        bins=40,
+        iterations=1000,
+        ranges=None,
+        save_loss_plot=True,
+        **kwargs,
+) -> ICPSolution:
+    # make sure we convert input Pointclouds structures to
+    # padded tensors of shape (N, P, 3)
+    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+    Xt, R, T, s = apply_init_transform(Xt, init_transform)
+    b = Xt.shape[0]
+
+    # initialize the transformation history
+    t_history = []
+    losses = []
+
+    # --- CMA-ME
+    device = Xt.device
+    dtype = Xt.dtype
+
+    def get_torch_RT(x):
+        q_ = x[:, :6]
+        t = x[:, 6:]
+        qq, TT = ensure_tensor(device, dtype, q_, t)
+        RR = rotation_6d_to_matrix(qq)
+        return RR, TT
+
+    q0 = matrix_to_rotation_6d(R[0])
+    T0 = T[0]
+    x0 = torch.cat([q0, T0]).cpu().numpy()
+
+    # extract ranges from the boundaries of the free voxels
+    if ranges is None:
+        if isinstance(volumetric_cost.free_voxels, util.VoxelGrid):
+            ranges = volumetric_cost.free_voxels.range_per_dim[:2]
+        else:
+            raise RuntimeError("Range not given and cannot be inferred from the freespace voxels")
+
+    archive = GridArchive([bins, bins], ranges)
+    emitters = [
+        ImprovementEmitter(archive, x0, 1.0, batch_size=b)
+    ]
+    optimizer = Optimizer(archive, emitters)
+    for i in range(iterations):
+        solutions = optimizer.ask()
+        # evaluate the models and record the objective and behavior
+        # note that objective is -cost
+        R, T = get_torch_RT(np.stack(solutions))
+        cost = volumetric_cost(R, T, s)
+        losses.append(cost)
+        # behavior is the xy translation
+        bcs = solutions[:, 6:8]
+        optimizer.tell(-cost.cpu().numpy(), bcs)
+
+    df = archive.as_pandas()
+    objectives = df.batch_objectives()
+    solutions = df.batch_solutions()
+    if len(solutions) > b:
+        order = np.argpartition(-objectives, b)
+        solutions = solutions[order[:b]]
+    # convert back to R, T
+    R, T = get_torch_RT(solutions)
+    rmse = volumetric_cost(R, T, s)
+
+    if save_loss_plot:
+        plot_cmame_archive(archive)
+
+    if oputil.is_pointclouds(X):
+        Xt = X.update_padded(Xt)  # type: ignore
+
+    return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
 
 
 class CostProb:

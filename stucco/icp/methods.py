@@ -524,6 +524,10 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         res = volumetric.iterative_closest_point_volumetric_cmaes(volumetric_cost, A.repeat(batch, 1, 1),
                                                                   init_transform=given_init_pose,
                                                                   **kwargs)
+    elif optimization == volumetric.Optimization.CMAME:
+        res = volumetric.iterative_closest_point_volumetric_cmame(volumetric_cost, A.repeat(batch, 1, 1),
+                                                                  init_transform=given_init_pose,
+                                                                  **kwargs)
     elif optimization == volumetric.Optimization.SVGD:
         res = volumetric.iterative_closest_point_volumetric_svgd(volumetric_cost, A.repeat(batch, 1, 1),
                                                                  init_transform=given_init_pose,
