@@ -574,6 +574,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     df.loc[df["method"].str.contains("ICP"), "name"] = "non-freespace baseline"
     df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
     df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
+    df.loc[df["method"].str.contains("MEDIAL"), "name"] = "freespace baseline"
 
     method_to_name = df.set_index("method")["name"].to_dict()
     # order the methods should be shown
@@ -582,9 +583,9 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                          "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE",
                          "VOLUMETRIC_LIMITED_REINIT", "VOLUMETRIC_LIMITED_REINIT_FULL",
                          # variants with non-SGD optimization
-                         "VOLUMETRIC_CMAES", "VOLUMETRIC_SVGD",
+                         "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD",
                          # baselines
-                         "ICP", "ICP_REVERSE", "CVO"]
+                         "ICP", "ICP_REVERSE", "CVO", "MEDIAL"]
     # order the categories should be shown
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     methods_order = [m for m in full_method_order if m in method_to_name]
@@ -1491,7 +1492,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     # placeholder for now
     empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
     volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
-                                               scale_known_freespace=20,
+                                               scale_known_freespace=1,
                                                vis=env.vis, debug=False)
 
     rand.seed(seed)
@@ -2112,7 +2113,7 @@ if __name__ == "__main__":
                          logy=True, keep_lowest_y_wrt="rmse",
                          save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
                          show=not args.no_gui,
-                         plot_median=True, x='poke', y='chamfer_err')
+                         plot_median=False, x='poke', y='chamfer_err')
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
