@@ -4,16 +4,17 @@ import os
 from torch import optim
 
 from stucco import cfg
-import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import math
 from arm_pytorch_utilities.rand import seed
 
 from stucco.icp.volumetric import plot_restart_losses
 from stucco.svgd import RBF, SVGD
 import cma
+from ribs.archives import GridArchive
+from ribs.emitters import ImprovementEmitter
+from ribs.optimizers import Optimizer
 
 
 def f(x, y):
@@ -91,9 +92,10 @@ def plot_particles(i):
 class OptimizationMethod(enum.Enum):
     SVGD = 0
     CMAES = 1
+    CMAME = 2
 
 
-method = OptimizationMethod.CMAES
+method = OptimizationMethod.CMAME
 losses = []
 
 if method is OptimizationMethod.SVGD:
@@ -135,7 +137,6 @@ elif method is OptimizationMethod.CMAES:
     i = 0
     while not es.stop():
         solutions = es.ask()
-        # convert back to R, T, s
         particles = torch.tensor(solutions, device=device)
         plot_particles(i)
 
@@ -146,5 +147,41 @@ elif method is OptimizationMethod.CMAES:
 
     # convert ES back to R, T
     solutions = es.ask()
+
+elif method is OptimizationMethod.CMAME:
+    # use x,y as the behavior space we want to optimize over (equal to the actual search space)
+    bins = 50
+    archive = GridArchive([bins, bins], [(-3, 3), (-3, 3)])
+    initial_x = np.zeros(2)
+    emitters = [
+        ImprovementEmitter(archive, initial_x, 1.0, batch_size=B) for _ in range(5)
+    ]
+    optimizer = Optimizer(archive, emitters)
+    for i in range(100):
+        solutions = optimizer.ask()
+        # evaluate the models and record the objective and behavior
+        # note that objective is -cost
+        particles = torch.tensor(solutions, device=device)
+        cost = f(particles[..., 0], particles[..., 1])
+        losses.append(cost)
+
+        # those particles are just random ones found during the search - what we want is a look at the best particles
+        if i > 0:
+            df = archive.as_pandas()
+            o = df.batch_objectives()
+            s = df.batch_solutions()
+            if len(s) > B:
+                order = np.argpartition(-o, B)
+                s = s[order[:B]]
+            particles = torch.tensor(s, device=device)
+            plot_particles(i)
+
+        # behavior is just the solution
+        bcs = solutions
+        optimizer.tell(-cost.cpu().numpy(), bcs)
+
+    # from ribs.visualize import grid_archive_heatmap
+    # plt.figure(figsize=(8,6))
+    # grid_archive_heatmap(archive)
 
 plot_restart_losses(losses)
