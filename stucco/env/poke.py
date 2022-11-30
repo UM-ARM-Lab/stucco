@@ -212,7 +212,7 @@ class PokeEnv(PybulletEnv):
                  reaction_force_strategy=ReactionForceStrategy.MEDIAN_OVER_MINI_STEPS,
                  device="cpu",
                  dtype=torch.float,
-                 sdf_resolution=0.025,
+                 sdf_resolution=0.01,
                  freespace_voxel_resolution=0.025,
                  clean_cache=False,
                  immovable_target=True,
