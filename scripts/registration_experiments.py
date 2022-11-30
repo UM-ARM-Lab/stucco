@@ -1139,7 +1139,8 @@ def predetermined_controls():
     return predetermined_control
 
 
-def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None):
+def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None,
+                           show_only_latest=False):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
         pos, rot = util.matrix_to_pos_rot(m[b])
@@ -1149,7 +1150,7 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
             b = 0
             time.sleep(sequential_delay)
 
-        object_id = obj_id_map.get(b, None)
+        object_id = obj_id_map.get(0 if show_only_latest else b, None)
         object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
         obj_id_map[b] = object_id
 
@@ -1385,6 +1386,7 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
                 contact_pts.append(this_pts)
 
             this_pts = tensor_utils.ensure_tensor(device, dtype, torch.cat(contact_pts))
+            logger.info(this_pts)
             volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
                                                        torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
             # evaluate all the transforms
@@ -1415,7 +1417,8 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
                         all_plausible_transforms.shape[0], gt_cost, gt_cost + plausible_suboptimality)
             # plot plausible transforms
             to_plot = torch.randperm(len(all_plausible_transforms))[:200]
-            draw_pose_distribution(all_plausible_transforms[to_plot], pose_obj_map, env.vis, obj_factory)
+            draw_pose_distribution(all_plausible_transforms[to_plot], pose_obj_map, env.vis, obj_factory,
+                                   show_only_latest=True, sequential_delay=0.1)
 
         if action is not None:
             if torch.is_tensor(action):
@@ -1430,6 +1433,69 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
     logger.info("saving plausible set to %s", filename)
     os.makedirs(filename, exist_ok=True)
     torch.save(plausible_set, filename)
+
+
+def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pokes=4):
+    # load from file
+    dtype = env.dtype
+    device = env.device
+    pc_register_against_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}_{seed}.txt")
+    with open(pc_register_against_file) as f:
+        lines = [[float(v) for v in line.strip().split()] for line in f.readlines()]
+        i = 0
+        while i < len(lines):
+            this_pokes, num_points = lines[i]
+            this_pokes = int(this_pokes)
+            num_points = int(num_points)
+            if this_pokes == pokes:
+                all_pts = torch.tensor(lines[i + 1: i + 1 + num_points], device=device, dtype=dtype)
+                freespace = all_pts[:, -1] == 0
+                freespace_pts = all_pts[freespace, :-1]
+                pts = all_pts[~freespace, :-1]
+                env.free_voxels[freespace_pts] = 1
+
+                if show_free_voxels:
+                    env._debug_visualizations[poke.DebugVisualization.FREE_VOXELS] = True
+                    env._occupy_current_config_as_freespace()
+                break
+            i += num_points + 1
+
+    for i, pt in enumerate(pts):
+        env.vis.draw_point(f"c.{i}", pt.cpu().numpy(), (1, 0, 0))
+
+    empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
+    volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
+                                               scale_known_freespace=1,
+                                               vis=env.vis, debug=True)
+
+    this_pts = tensor_utils.ensure_tensor(device, dtype, pts)
+    volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
+                                               torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
+
+    pose = env.target_pose
+    gt_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(device, dtype, pose[1])),
+                           dtype=dtype, device=device)
+    Hgt = gt_tf.get_matrix()
+    Hgt.requires_grad = True
+    Hgtinv = Hgt.inverse()
+    gt_cost = volumetric_cost(Hgtinv[:, :3, :3], Hgtinv[:, :3, -1], None)
+    gt_cost.mean().backward()
+    volumetric_cost.visualize(Hgtinv[:, :3, :3], Hgtinv[:, :3, -1], None)
+
+    env.draw_user_text("{}".format(gt_cost.item()), xy=(0.5, 0.7, -0.3))
+    pose_obj_map = {}
+    while True:
+        from torch import tensor  # prints will just have tensor rather than torch.tensor so this allows copy pasting
+        H = Hgt.clone()
+        # breakpoint here and change the transform H with respect to the ground truth one to evaluate the cost
+        if H.dim() == 2:
+            H = H.unsqueeze(0)
+            H.requires_grad = True
+        cost = volumetric_cost(H.inverse()[:, :3, :3], H.inverse()[:, :3, -1], None)
+        cost.mean().backward()
+        volumetric_cost.visualize(H.inverse()[:, :3, :3], H.inverse()[:, :3, -1], None)
+        env.draw_user_text("{}".format(cost.item()), xy=(0.5, 0.7, -.5))
+        draw_pose_distribution(H, pose_obj_map, env.vis, obj_factory)
 
 
 def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", seed=0, clean_cache=False,
@@ -1492,7 +1558,7 @@ def run_poke(env: poke.PokeEnv, method: TrackingMethod, reg_method, name="", see
     # placeholder for now
     empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
     volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
-                                               scale_known_freespace=1,
+                                               scale_known_freespace=20,
                                                vis=env.vis, debug=False)
 
     rand.seed(seed)
@@ -1986,10 +2052,39 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0):
             input()
 
 
+def plot_poke_results(args):
+    def filter(df):
+        # df = df[df["level"].str.contains(level.name) & (
+        #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
+        #         df["method"] == "VOLUMETRIC_CMAES"))]
+        # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
+
+        # show each level individually or marginalize over all of them
+        # df = df[(df["level"] == level.name)]
+        df = df[(df["level"].str.contains(level.name))]
+
+        # df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
+
+        return df
+
+    def filter_single(df):
+        # df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
+        df = df[(df["level"] == level.name) & (df["seed"] == args.seed[0])]
+        return df
+
+    plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                     key_columns=("method", "name", "seed", "poke", "level", "batch"),
+                     logy=True, keep_lowest_y_wrt="rmse",
+                     save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
+                     show=not args.no_gui,
+                     plot_median=False, x='poke', y='chamfer_err')
+
+
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
-                             'poke-visualize-sdf', 'poke-visualize-pcd', 'generate-plausible-set', 'debug'],
+                             'poke-visualize-sdf', 'poke-visualize-pcd', 'poke-results', 'generate-plausible-set',
+                             'debug'],
                     help='which experiment to run')
 registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
 parser.add_argument('--registration',
@@ -2086,34 +2181,12 @@ if __name__ == "__main__":
             generate_poke_plausible_set(env, create_tracking_method(env, tracking_method_name), seed=seed)
             env.vis.clear_visualizations()
 
+    elif args.experiment == "poke-results":
+        plot_poke_results(args)
+
     elif args.experiment == "debug":
-        def filter(df):
-            # df = df[df["level"].str.contains(level.name) & (
-            #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
-            #         df["method"] == "VOLUMETRIC_CMAES"))]
-            # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
-
-            # show each level individually or marginalize over all of them
-            # df = df[(df["level"] == level.name)]
-            df = df[(df["level"].str.contains(level.name))]
-
-            # df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
-
-            return df
-
-
-        def filter_single(df):
-            # df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
-            df = df[(df["level"] == level.name) & (df["seed"] == args.seed[0])]
-            return df
-
-
-        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=("method", "name", "seed", "poke", "level", "batch"),
-                         logy=True, keep_lowest_y_wrt="rmse",
-                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
-                         show=not args.no_gui,
-                         plot_median=False, x='poke', y='chamfer_err')
+        env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
+        debug_volumetric_loss(env)
 
         # plot_icp_results(icp_res_file=f"poking_{obj_factory.name}.pkl",
         #                  key_columns=("method", "name", "seed", "poke", "batch"),
