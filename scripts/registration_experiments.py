@@ -1516,10 +1516,11 @@ def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pok
 
 
 class PokeRunner:
-    def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method,
+    def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method, B=30,
                  register_num_points=500, start_at_num_pts=4, eval_num_points=200):
         self.env = env
-        self.fullname = os.path.join(cfg.DATA_DIR, f'poking_{env.obj_factory.name}.pkl')
+        self.B = B
+        self.dbname = os.path.join(cfg.DATA_DIR, f'poking_{env.obj_factory.name}.pkl')
         self.tracking_method_name = tracking_method_name
         self.reg_method = reg_method
         self.start_at_num_pts = start_at_num_pts
@@ -1542,9 +1543,25 @@ class PokeRunner:
         self.model_points_world_frame_eval = self.link_to_current_tf_gt.transform_points(model_points_eval)
         self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_points(model_normals_eval)
 
+        self.draw_pose_distribution_separately = True
         self.method: typing.Optional[TrackingMethod] = None
         self.ctrl: typing.Optional[Controller] = None
         self.volumetric_cost: typing.Optional[icp_costs.VolumetricCost] = None
+        # intermediary data for bookkeeping during a run
+        self.pokes = 0
+        self.best_tsf_guess = None
+        self.num_points_to_T_cache = {}
+        self.best_distance = None
+        self.dist_per_est_obj = []
+        self.transforms_per_object = []
+        self.rmse_per_object = []
+        self.chamfer_err = []
+        self.freespace_violations = []
+        self.num_freespace_voxels = []
+        # for debug rendering of object meshes and keeping track of their object IDs
+        self.pose_obj_map = {}
+        # for exporting out to file, maps poke # -> data
+        self.to_export = {}
 
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
@@ -1553,12 +1570,150 @@ class PokeRunner:
                                                         scale_known_freespace=20,
                                                         vis=self.env.vis, debug=False)
 
+    def register_transforms_with_points(self, init_method, ground_truth_initialization=False, read_stored=False):
+        """Exports best_segment_idx, transforms_per_object, and rmse_per_object"""
+        # note that we update our registration regardless if we're in contact or not
+        self.best_distance = None
+        self.dist_per_est_obj = []
+        self.transforms_per_object = []
+        self.rmse_per_object = []
+        self.best_segment_idx = None
+        for k, this_pts in enumerate(self.method):
+            N = len(this_pts)
+            if N < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
+                continue
+            # this_pts corresponds to tracked contact points that are segmented together
+            this_pts = tensor_utils.ensure_tensor(self.device, self.dtype, this_pts)
+            self.volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
+                                                            torch.zeros(this_pts.shape[0], dtype=self.dtype,
+                                                                        device=self.device))
+
+            if self.best_tsf_guess is None:
+                self.best_tsf_guess = initialize_transform_estimates(self.B, env, init_method, self.method)
+            if ground_truth_initialization:
+                self.best_tsf_guess = self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1)
+
+            # avoid giving methods that don't use freespace more training iterations
+            if registration_method_uses_only_contact_points(self.reg_method) and N in self.num_points_to_T_cache:
+                T, distances = self.num_points_to_T_cache[N]
+            else:
+                if read_stored or self.reg_method == icp.ICPMethod.CVO:
+                    T, distances = read_offline_output(self.reg_method, level, seed, self.pokes)
+                    T = T.to(device=self.device, dtype=self.dtype)
+                    distances = distances.to(device=self.device, dtype=self.dtype)
+                else:
+                    T, distances = do_registration(this_pts, self.model_points_register, self.best_tsf_guess, self.B,
+                                                   self.volumetric_cost,
+                                                   self.reg_method)
+                self.num_points_to_T_cache[N] = T, distances
+
+            self.transforms_per_object.append(T)
+            T = T.inverse()
+            score = distances
+            best_tsf_index = np.argmin(score.detach().cpu())
+
+            # pick object with lowest variance in its translation estimate
+            translations = T[:, :3, 3]
+            best_tsf_distances = (translations.var(dim=0).sum()).item()
+
+            self.dist_per_est_obj.append(best_tsf_distances)
+            self.rmse_per_object.append(distances)
+            if self.best_distance is None or best_tsf_distances < self.best_distance:
+                self.best_distance = best_tsf_distances
+                self.best_tsf_guess = T[best_tsf_index]
+                self.best_segment_idx = k
+
+    def reinitialize_best_tsf_guess(self):
+        # sample rotation and translation around the previous best solution to reinitialize
+        radian_sigma = 0.3
+        translation_sigma = 0.05
+
+        # sample delta rotations in axis angle form
+        temp = torch.eye(4, dtype=self.dtype, device=self.device).repeat(self.B, 1, 1)
+
+        delta_R = torch.randn((self.B, 3), dtype=self.dtype, device=self.device) * radian_sigma
+        delta_R = tf.axis_angle_to_matrix(delta_R)
+        temp[:, :3, :3] = delta_R @ self.best_tsf_guess[:3, :3]
+        temp[:, :3, 3] = self.best_tsf_guess[:3, 3]
+
+        delta_t = torch.randn((self.B, 3), dtype=self.dtype, device=self.device) * translation_sigma
+        temp[:, :3, 3] += delta_t
+        # ensure one of them (first of the batch) has the exact transform
+        temp[0] = self.best_tsf_guess
+        self.best_tsf_guess = temp
+        return self.best_tsf_guess
+
+    def evaluate_registrations(self):
+        """Responsible for populating to_export"""
+        self.method.register_transforms(self.transforms_per_object[self.best_segment_idx], self.best_tsf_guess)
+        logger.debug(f"err each obj {np.round(self.dist_per_est_obj, 4)}")
+        best_T = self.best_tsf_guess
+
+        self.reinitialize_best_tsf_guess()
+
+        T = self.transforms_per_object[self.best_segment_idx]
+
+        # when evaluating, move the best guess pose far away to improve clarity
+        self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
+                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+        if self.draw_pose_distribution_separately:
+            evaluate_chamfer_dist_extra_args = [self.env.vis if self.env.mode == p.GUI else None, self.env.obj_factory,
+                                                0.05,
+                                                False]
+        else:
+            draw_pose_distribution(T.inverse(), self.pose_obj_map, self.env.vis, obj_factory)
+            evaluate_chamfer_dist_extra_args = [None, self.env.obj_factory, 0., False]
+
+        # evaluate with chamfer distance
+        errors_per_batch = evaluate_chamfer_distance(T, self.model_points_world_frame_eval,
+                                                     *evaluate_chamfer_dist_extra_args)
+
+        link_to_current_tf = tf.Transform3d(matrix=T)
+        interior_pts = link_to_current_tf.transform_points(self.volumetric_cost.model_interior_points_orig)
+        occupied = self.env.free_voxels[interior_pts]
+
+        self.chamfer_err.append(errors_per_batch)
+        self.num_freespace_voxels.append(self.env.free_voxels.get_known_pos_and_values()[0].shape[0])
+        self.freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
+        logger.info(f"chamfer distance {self.pokes}: {torch.mean(errors_per_batch)}")
+
+        # draw mesh at where our best guess is
+        guess_pose = util.matrix_to_pos_rot(best_T)
+        self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
+                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+
+    def export_metrics(self, cache, name):
+        """Responsible for populating to_export and saving to database"""
+        _c = np.array(self.chamfer_err[-1].cpu().numpy())
+        _f = np.array(self.freespace_violations[-1])
+        _n = self.num_freespace_voxels[-1]
+        _r = _f / _n
+        batch = np.arange(self.B)
+        rmse = self.rmse_per_object[self.best_segment_idx]
+
+        df = pd.DataFrame(
+            {"date": datetime.today().date(), "method": self.reg_method.name, "level": env.level.name,
+             "name": name,
+             "seed": seed, "poke": self.pokes,
+             "batch": batch,
+             "chamfer_err": _c, 'freespace_violations': _f,
+             'num_freespace_voxels': _n,
+             "freespace_violation_percent": _r,
+             "rmse": rmse.cpu().numpy(),
+             })
+        cache = pd.concat([cache, df])
+        cache.to_pickle(self.dbname)
+        # additional data to export fo file
+        self.to_export[self.pokes] = {
+            'T': self.transforms_per_object[self.best_segment_idx],
+            'rmse': rmse,
+        }
+        return cache
+
     def run(self, name="", seed=0, ctrl_noise_max=0.005, ground_truth_initialization=False,
-            draw_pose_distribution_separately=True, init_method=icp.InitMethod.RANDOM,
-            draw_text=None,
-            read_stored=False):
-        if os.path.exists(self.fullname):
-            cache = pd.read_pickle(self.fullname)
+            init_method=icp.InitMethod.RANDOM, draw_text=None, read_stored=False):
+        if os.path.exists(self.dbname):
+            cache = pd.read_pickle(self.dbname)
         else:
             cache = pd.DataFrame()
 
@@ -1578,20 +1733,15 @@ class PokeRunner:
 
         info = None
         simTime = 0
-        pokes = 0
-
-        B = 30
-        best_tsf_guess = None
-        chamfer_err = []
-        freespace_violations = []
-        num_freespace_voxels = []
+        self.pokes = 0
+        self.best_tsf_guess = None
+        self.chamfer_err = []
+        self.freespace_violations = []
+        self.num_freespace_voxels = []
         # for debug rendering of object meshes and keeping track of their object IDs
-        pose_obj_map = {}
+        self.pose_obj_map = {}
         # for exporting out to file, maps poke # -> data
-        to_export = {}
-
-        num_points_to_T_cache = {}
-        contact_id = []
+        self.to_export = {}
 
         rand.seed(seed)
         # create the action noise before sampling to ensure they are the same across methods
@@ -1605,166 +1755,36 @@ class PokeRunner:
         # exporting data for offline baselines, remove the stale file
         if self.reg_method == icp.ICPMethod.NONE:
             export_pc_register_against(pc_register_against_file, env)
-            export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(B, 1, 1))
+            export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
             try:
                 os.remove(pc_to_register_file)
             except OSError:
                 pass
 
         while not self.ctrl.done():
-            best_distance = None
             simTime += 1
             env.draw_user_text("{}".format(simTime), xy=(0.5, 0.7, -1))
 
             action = self.ctrl.command(obs, info)
             self.method.visualize_contact_points(env)
 
-            if env.contact_detector.in_contact():
-                contact_id.append(info[InfoKeys.CONTACT_ID])
-            else:
-                contact_id.append(NO_CONTACT_ID)
-
             if self.reg_method != icp.ICPMethod.NONE and action is None:
-                pokes += 1
-                # note that we update our registration regardless if we're in contact or not
-                dist_per_est_obj = []
-                transforms_per_object = []
-                rmse_per_object = []
-                best_segment_idx = None
-                for k, this_pts in enumerate(self.method):
-                    N = len(this_pts)
-                    if N < self.start_at_num_pts or pokes < self.start_at_num_pts:
-                        continue
-                    # this_pts corresponds to tracked contact points that are segmented together
-                    this_pts = tensor_utils.ensure_tensor(self.device, self.dtype, this_pts)
-                    self.volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
-                                                                    torch.zeros(this_pts.shape[0], dtype=self.dtype,
-                                                                                device=self.device))
-
-                    if best_tsf_guess is None:
-                        best_tsf_guess = initialize_transform_estimates(B, env, init_method, self.method)
-                    if ground_truth_initialization:
-                        best_tsf_guess = self.link_to_current_tf_gt.get_matrix().repeat(B, 1, 1)
-
-                    # avoid giving methods that don't use freespace more training iterations
-                    if registration_method_uses_only_contact_points(self.reg_method) and N in num_points_to_T_cache:
-                        T, distances = num_points_to_T_cache[N]
-                    else:
-                        if read_stored or self.reg_method == icp.ICPMethod.CVO:
-                            T, distances = read_offline_output(self.reg_method, level, seed, pokes)
-                            T = T.to(device=self.device, dtype=self.dtype)
-                            distances = distances.to(device=self.device, dtype=self.dtype)
-                        else:
-                            T, distances = do_registration(this_pts, self.model_points_register, best_tsf_guess, B,
-                                                           self.volumetric_cost,
-                                                           self.reg_method)
-                        num_points_to_T_cache[N] = T, distances
-
-                    transforms_per_object.append(T)
-                    T = T.inverse()
-                    score = distances
-                    best_tsf_index = np.argmin(score.detach().cpu())
-
-                    # pick object with lowest variance in its translation estimate
-                    translations = T[:, :3, 3]
-                    best_tsf_distances = (translations.var(dim=0).sum()).item()
-
-                    dist_per_est_obj.append(best_tsf_distances)
-                    rmse_per_object.append(distances)
-                    if best_distance is None or best_tsf_distances < best_distance:
-                        best_distance = best_tsf_distances
-                        best_tsf_guess = T[best_tsf_index]
-                        best_segment_idx = k
-
+                self.pokes += 1
+                self.register_transforms_with_points(init_method, ground_truth_initialization, read_stored)
                 # has at least one contact segment
-                if best_segment_idx is not None:
-                    self.method.register_transforms(transforms_per_object[best_segment_idx], best_tsf_guess)
-                    logger.debug(f"err each obj {np.round(dist_per_est_obj, 4)}")
-                    best_T = best_tsf_guess
+                if self.best_segment_idx is not None:
+                    self.evaluate_registrations()
+                    cache = self.export_metrics(cache, name)
 
-                    # sample rotation and translation around the previous best solution to reinitialize
-                    radian_sigma = 0.3
-                    translation_sigma = 0.05
-
-                    # sample delta rotations in axis angle form
-                    temp = torch.eye(4, dtype=self.dtype, device=self.device).repeat(B, 1, 1)
-
-                    delta_R = torch.randn((B, 3), dtype=self.dtype, device=self.device) * radian_sigma
-                    delta_R = tf.axis_angle_to_matrix(delta_R)
-                    temp[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
-                    temp[:, :3, 3] = best_tsf_guess[:3, 3]
-
-                    delta_t = torch.randn((B, 3), dtype=self.dtype, device=self.device) * translation_sigma
-                    temp[:, :3, 3] += delta_t
-                    # ensure one of them (first of the batch) has the exact transform
-                    temp[0] = best_tsf_guess
-                    best_tsf_guess = temp
-
-                    T = transforms_per_object[best_segment_idx]
-
-                    # when evaluating, move the best guess pose far away to improve clarity
-                    env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
-                                  object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
-                    if draw_pose_distribution_separately:
-                        evaluate_chamfer_dist_extra_args = [env.vis if env.mode == p.GUI else None, env.obj_factory,
-                                                            0.05,
-                                                            False]
-                    else:
-                        draw_pose_distribution(T.inverse(), pose_obj_map, env.vis, obj_factory)
-                        evaluate_chamfer_dist_extra_args = [None, env.obj_factory, 0., False]
-
-                    # evaluate with chamfer distance
-                    errors_per_batch = evaluate_chamfer_distance(T, self.model_points_world_frame_eval,
-                                                                 *evaluate_chamfer_dist_extra_args)
-
-                    link_to_current_tf = tf.Transform3d(matrix=T)
-                    interior_pts = link_to_current_tf.transform_points(self.volumetric_cost.model_interior_points_orig)
-                    occupied = env.free_voxels[interior_pts]
-
-                    chamfer_err.append(errors_per_batch)
-                    num_freespace_voxels.append(env.free_voxels.get_known_pos_and_values()[0].shape[0])
-                    freespace_violations.append(occupied.sum(dim=-1).detach().cpu())
-                    logger.info(f"chamfer distance {simTime}: {torch.mean(errors_per_batch)}")
-
-                    # draw mesh at where our best guess is
-                    guess_pose = util.matrix_to_pos_rot(best_T)
-                    env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
-                                  object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
-
-                if len(chamfer_err) > 0:
-                    _c = np.array(chamfer_err[-1].cpu().numpy())
-                    _f = np.array(freespace_violations[-1])
-                    _n = num_freespace_voxels[-1]
-                    _r = _f / _n
-                    batch = np.arange(B)
-                    rmse = rmse_per_object[best_segment_idx]
-
-                    df = pd.DataFrame(
-                        {"date": datetime.today().date(), "method": self.reg_method.name, "level": env.level.name,
-                         "name": name,
-                         "seed": seed, "poke": pokes,
-                         "batch": batch,
-                         "chamfer_err": _c, 'freespace_violations': _f,
-                         'num_freespace_voxels': _n,
-                         "freespace_violation_percent": _r,
-                         "rmse": rmse.cpu().numpy(),
-                         })
-                    cache = pd.concat([cache, df])
-                    cache.to_pickle(self.fullname)
-                    # additional data to export fo file
-                    to_export[pokes] = {
-                        'T': transforms_per_object[best_segment_idx],
-                        'rmse': rmse,
-                    }
             elif self.reg_method == icp.ICPMethod.NONE and action is None:
                 # export data for offline baselines
-                pokes += 1
-                if pokes >= self.start_at_num_pts:
-                    if best_tsf_guess is None:
-                        best_tsf_guess = initialize_transform_estimates(B, env, init_method, self.method)
-                        export_init_transform(transform_file, best_tsf_guess)
+                self.pokes += 1
+                if self.pokes >= self.start_at_num_pts:
+                    if self.best_tsf_guess is None:
+                        self.best_tsf_guess = initialize_transform_estimates(self.B, env, init_method, self.method)
+                        export_init_transform(transform_file, self.best_tsf_guess)
 
-                    export_pc_to_register(pc_to_register_file, pokes, env, self.method)
+                    export_pc_to_register(pc_to_register_file, self.pokes, env, self.method)
 
             if action is not None:
                 if torch.is_tensor(action):
@@ -1775,7 +1795,7 @@ class PokeRunner:
                 obs, rew, done, info = env.step(action)
 
         if not read_stored:
-            export_registration(saved_traj_file(self.reg_method, level, seed), to_export)
+            export_registration(saved_traj_file(self.reg_method, level, seed), self.to_export)
         self.env.vis.clear_visualizations()
 
 
