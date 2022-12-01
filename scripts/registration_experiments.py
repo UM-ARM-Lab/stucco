@@ -1351,7 +1351,7 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
     # uniformly sample rotations
     rot = tf.random_rotations(N_rot, device=env.device)
     # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-    N_upright = 100
+    N_upright = min(100, N_rot)
     axis_angle = torch.zeros((N_upright, 3), dtype=dtype, device=device)
     axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
     rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
@@ -1393,23 +1393,28 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
             plausible_transforms = []
             gt_cost = volumetric_cost(Hgtinv[:, :3, :3], Hgtinv[:, :3, -1], None)
             # evaluate the pts in chunks since we can't load all points in memory at the same time
-            chunk_size = 25
-            for i in range(0, N_rot, chunk_size):
+            rot_chunk = 1
+            pos_chunk = 1000
+            for i in range(0, N_rot, rot_chunk):
                 logger.debug(f"chunked {i}/{N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
-                R = rot[i:i + chunk_size]
-                T = pos.repeat(len(R), 1)
-                R = R.repeat_interleave(N_pos, 0)
-                H = torch.eye(4, device=device).repeat(len(R), 1, 1)
-                H[:, :3, :3] = R
-                H[:, :3, -1] = T
-                Hinv = H.inverse()
+                for j in range(0, N_pos, pos_chunk):
+                    R = rot[i:i + rot_chunk]
+                    T = pos[j:j + pos_chunk]
+                    r_chunk_actual = len(R)
+                    t_chunk_actual = len(T)
+                    T = T.repeat(r_chunk_actual, 1)
+                    R = R.repeat_interleave(t_chunk_actual, 0)
+                    H = torch.eye(4, device=device).repeat(len(R), 1, 1)
+                    H[:, :3, :3] = R
+                    H[:, :3, -1] = T
+                    Hinv = H.inverse()
 
-                costs = volumetric_cost(Hinv[:, :3, :3], Hinv[:, :3, -1], None)
-                plausible = costs < plausible_suboptimality + gt_cost
+                    costs = volumetric_cost(Hinv[:, :3, :3], Hinv[:, :3, -1], None)
+                    plausible = costs < plausible_suboptimality + gt_cost
 
-                if torch.any(plausible):
-                    Hp = H[plausible]
-                    plausible_transforms.append(Hp)
+                    if torch.any(plausible):
+                        Hp = H[plausible]
+                        plausible_transforms.append(Hp)
 
             all_plausible_transforms = torch.cat(plausible_transforms)
             plausible_set[pokes] = all_plausible_transforms
@@ -1431,7 +1436,7 @@ def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=
     # export plausible set to file
     filename = os.path.join(cfg.DATA_DIR, f"poke/{level.name}_plausible_set_{seed}.pkl")
     logger.info("saving plausible set to %s", filename)
-    os.makedirs(filename, exist_ok=True)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     torch.save(plausible_set, filename)
 
 
