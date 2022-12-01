@@ -1328,130 +1328,6 @@ def export_init_transform(transform_file: str, T: torch.tensor):
             f.write("\n")
 
 
-def generate_poke_plausible_set(env: poke.PokeEnv, method: TrackingMethod, seed=0, ctrl_noise_max=0.005,
-                                plausible_suboptimality=0.001,
-                                gt_position_max_offset=0.2, position_steps=10, N_rot=10000):
-    y_order, z_order = predetermined_poke_range().get(env.level,
-                                                      ((0, 0.2, 0.3, -0.2, -0.3), (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
-    ctrl = PokingController(env.contact_detector, method.contact_set, y_order=y_order, z_order=z_order)
-    obs = env.reset()
-    info = None
-
-    device = env.device
-    dtype = env.dtype
-
-    # placeholder for now
-    empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
-    # TODO use exact SDF when evaluating costs rather than voxelized
-    volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
-                                               scale_known_freespace=20,
-                                               vis=env.vis, debug=False)
-
-    rand.seed(0)
-    # maps poke number to a set of plausible transforms
-    plausible_set = {}
-    # assume that there can only be plausible completions close enough to the ground truth
-    target_pos = env.target_pose[0]
-    x = torch.linspace(target_pos[0] - gt_position_max_offset * 0.5, target_pos[0] + gt_position_max_offset * 1.5,
-                       steps=position_steps, device=env.device)
-    y = torch.linspace(target_pos[1] - gt_position_max_offset, target_pos[1] + gt_position_max_offset,
-                       steps=position_steps, device=env.device)
-    z = torch.linspace(target_pos[2], target_pos[2] + gt_position_max_offset,
-                       steps=position_steps, device=env.device)
-    pos = torch.cartesian_prod(x, y, z)
-    N_pos = len(pos)
-    # uniformly sample rotations
-    rot = tf.random_rotations(N_rot, device=env.device)
-    # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-    N_upright = min(100, N_rot)
-    axis_angle = torch.zeros((N_upright, 3), dtype=dtype, device=device)
-    axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
-    rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
-
-    pose = env.target_pose
-    gt_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(device, dtype, pose[1])),
-                           dtype=dtype, device=device)
-    Hgt = gt_tf.get_matrix()
-    Hgtinv = Hgt.inverse()
-    rand.seed(seed)
-
-    # create the action noise before sampling to ensure they are the same across methods
-    action_noise = np.random.randn(5000, 3) * ctrl_noise_max
-    simTime = 0
-    pokes = 0
-    pose_obj_map = {}
-    while not ctrl.done():
-        simTime += 1
-        env.draw_user_text("{}".format(simTime), xy=(0.5, 0.7, -1))
-
-        action = ctrl.command(obs, info)
-        method.visualize_contact_points(env)
-
-        if action is None:
-            # export data for offline baselines
-            pokes += 1
-            if pokes < 4:
-                continue
-            # assume all contact points belong to the object
-            contact_pts = []
-            for k, this_pts in enumerate(method):
-                contact_pts.append(this_pts)
-
-            this_pts = tensor_utils.ensure_tensor(device, dtype, torch.cat(contact_pts))
-            logger.info(this_pts)
-            volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
-                                                       torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
-            # evaluate all the transforms
-            plausible_transforms = []
-            gt_cost = volumetric_cost(Hgtinv[:, :3, :3], Hgtinv[:, :3, -1], None)
-            # evaluate the pts in chunks since we can't load all points in memory at the same time
-            rot_chunk = 1
-            pos_chunk = 1000
-            for i in range(0, N_rot, rot_chunk):
-                logger.debug(f"chunked {i}/{N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
-                for j in range(0, N_pos, pos_chunk):
-                    R = rot[i:i + rot_chunk]
-                    T = pos[j:j + pos_chunk]
-                    r_chunk_actual = len(R)
-                    t_chunk_actual = len(T)
-                    T = T.repeat(r_chunk_actual, 1)
-                    R = R.repeat_interleave(t_chunk_actual, 0)
-                    H = torch.eye(4, device=device).repeat(len(R), 1, 1)
-                    H[:, :3, :3] = R
-                    H[:, :3, -1] = T
-                    Hinv = H.inverse()
-
-                    costs = volumetric_cost(Hinv[:, :3, :3], Hinv[:, :3, -1], None)
-                    plausible = costs < plausible_suboptimality + gt_cost
-
-                    if torch.any(plausible):
-                        Hp = H[plausible]
-                        plausible_transforms.append(Hp)
-
-            all_plausible_transforms = torch.cat(plausible_transforms)
-            plausible_set[pokes] = all_plausible_transforms
-            logger.info("poke %d with %d plausible completions gt cost: %f allowable cost: %f", pokes,
-                        all_plausible_transforms.shape[0], gt_cost, gt_cost + plausible_suboptimality)
-            # plot plausible transforms
-            to_plot = torch.randperm(len(all_plausible_transforms))[:200]
-            draw_pose_distribution(all_plausible_transforms[to_plot], pose_obj_map, env.vis, obj_factory,
-                                   show_only_latest=True, sequential_delay=0.1)
-
-        if action is not None:
-            if torch.is_tensor(action):
-                action = action.cpu()
-
-            action = np.array(action).flatten()
-            action += action_noise[simTime]
-            obs, rew, done, info = env.step(action)
-
-    # export plausible set to file
-    filename = os.path.join(cfg.DATA_DIR, f"poke/{level.name}_plausible_set_{seed}.pkl")
-    logger.info("saving plausible set to %s", filename)
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-    torch.save(plausible_set, filename)
-
-
 def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pokes=4):
     # load from file
     dtype = env.dtype
@@ -1517,6 +1393,7 @@ def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pok
 
 class PokeRunner:
     def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method, B=30,
+                 read_stored=False, ground_truth_initialization=False, init_method=icp.InitMethod.RANDOM,
                  register_num_points=500, start_at_num_pts=4, eval_num_points=200):
         self.env = env
         self.B = B
@@ -1524,6 +1401,9 @@ class PokeRunner:
         self.tracking_method_name = tracking_method_name
         self.reg_method = reg_method
         self.start_at_num_pts = start_at_num_pts
+        self.read_stored = read_stored
+        self.ground_truth_initialization = ground_truth_initialization
+        self.init_method = init_method
 
         model_name = self.env.target_model_name
         # get a fixed number of model points to evaluate against (this will be independent on points used to register)
@@ -1562,6 +1442,7 @@ class PokeRunner:
         self.pose_obj_map = {}
         # for exporting out to file, maps poke # -> data
         self.to_export = {}
+        self.cache = None
 
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
@@ -1570,7 +1451,7 @@ class PokeRunner:
                                                         scale_known_freespace=20,
                                                         vis=self.env.vis, debug=False)
 
-    def register_transforms_with_points(self, init_method, ground_truth_initialization=False, read_stored=False):
+    def register_transforms_with_points(self):
         """Exports best_segment_idx, transforms_per_object, and rmse_per_object"""
         # note that we update our registration regardless if we're in contact or not
         self.best_distance = None
@@ -1589,15 +1470,15 @@ class PokeRunner:
                                                                         device=self.device))
 
             if self.best_tsf_guess is None:
-                self.best_tsf_guess = initialize_transform_estimates(self.B, env, init_method, self.method)
-            if ground_truth_initialization:
+                self.best_tsf_guess = initialize_transform_estimates(self.B, env, self.init_method, self.method)
+            if self.ground_truth_initialization:
                 self.best_tsf_guess = self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1)
 
             # avoid giving methods that don't use freespace more training iterations
             if registration_method_uses_only_contact_points(self.reg_method) and N in self.num_points_to_T_cache:
                 T, distances = self.num_points_to_T_cache[N]
             else:
-                if read_stored or self.reg_method == icp.ICPMethod.CVO:
+                if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
                     T, distances = read_offline_output(self.reg_method, level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
@@ -1682,7 +1563,7 @@ class PokeRunner:
         self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
                            object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
 
-    def export_metrics(self, cache, name):
+    def export_metrics(self, cache, name, seed):
         """Responsible for populating to_export and saving to database"""
         _c = np.array(self.chamfer_err[-1].cpu().numpy())
         _f = np.array(self.freespace_violations[-1])
@@ -1692,7 +1573,7 @@ class PokeRunner:
         rmse = self.rmse_per_object[self.best_segment_idx]
 
         df = pd.DataFrame(
-            {"date": datetime.today().date(), "method": self.reg_method.name, "level": env.level.name,
+            {"date": datetime.today().date(), "method": self.reg_method.name, "level": self.env.level.name,
              "name": name,
              "seed": seed, "poke": self.pokes,
              "batch": batch,
@@ -1710,12 +1591,11 @@ class PokeRunner:
         }
         return cache
 
-    def run(self, name="", seed=0, ctrl_noise_max=0.005, ground_truth_initialization=False,
-            init_method=icp.InitMethod.RANDOM, draw_text=None, read_stored=False):
+    def run(self, name="", seed=0, ctrl_noise_max=0.005, draw_text=None):
         if os.path.exists(self.dbname):
-            cache = pd.read_pickle(self.dbname)
+            self.cache = pd.read_pickle(self.dbname)
         else:
-            cache = pd.DataFrame()
+            self.cache = pd.DataFrame()
 
         env = self.env
         if draw_text is None:
@@ -1729,6 +1609,7 @@ class PokeRunner:
         y_order, z_order = predetermined_poke_range().get(env.level,
                                                           ((0, 0.2, 0.3, -0.2, -0.3),
                                                            (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
+        assert isinstance(self.method, OurSoftTrackingMethod)
         self.ctrl = PokingController(env.contact_detector, self.method.contact_set, y_order=y_order, z_order=z_order)
 
         info = None
@@ -1747,20 +1628,7 @@ class PokeRunner:
         # create the action noise before sampling to ensure they are the same across methods
         action_noise = np.random.randn(5000, 3) * ctrl_noise_max
 
-        data_dir = cfg.DATA_DIR
-        pc_to_register_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}.txt")
-        pc_register_against_file = os.path.join(data_dir, f"poke/{env.level.name}.txt")
-        transform_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}_trans.txt")
-        transform_gt_file = os.path.join(data_dir, f"poke/{env.level.name}_{seed}_gt_trans.txt")
-        # exporting data for offline baselines, remove the stale file
-        if self.reg_method == icp.ICPMethod.NONE:
-            export_pc_register_against(pc_register_against_file, env)
-            export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
-            try:
-                os.remove(pc_to_register_file)
-            except OSError:
-                pass
-
+        self.hook_before_first_poke(seed)
         while not self.ctrl.done():
             simTime += 1
             env.draw_user_text("{}".format(simTime), xy=(0.5, 0.7, -1))
@@ -1768,23 +1636,9 @@ class PokeRunner:
             action = self.ctrl.command(obs, info)
             self.method.visualize_contact_points(env)
 
-            if self.reg_method != icp.ICPMethod.NONE and action is None:
+            if action is None:
                 self.pokes += 1
-                self.register_transforms_with_points(init_method, ground_truth_initialization, read_stored)
-                # has at least one contact segment
-                if self.best_segment_idx is not None:
-                    self.evaluate_registrations()
-                    cache = self.export_metrics(cache, name)
-
-            elif self.reg_method == icp.ICPMethod.NONE and action is None:
-                # export data for offline baselines
-                self.pokes += 1
-                if self.pokes >= self.start_at_num_pts:
-                    if self.best_tsf_guess is None:
-                        self.best_tsf_guess = initialize_transform_estimates(self.B, env, init_method, self.method)
-                        export_init_transform(transform_file, self.best_tsf_guess)
-
-                    export_pc_to_register(pc_to_register_file, self.pokes, env, self.method)
+                self.hook_after_poke(name, poke)
 
             if action is not None:
                 if torch.is_tensor(action):
@@ -1794,9 +1648,160 @@ class PokeRunner:
                 action += action_noise[simTime]
                 obs, rew, done, info = env.step(action)
 
-        if not read_stored:
-            export_registration(saved_traj_file(self.reg_method, level, seed), self.to_export)
+        if not self.read_stored:
+            export_registration(saved_traj_file(self.reg_method, self.env.level, seed), self.to_export)
         self.env.vis.clear_visualizations()
+        self.hook_after_last_poke(seed)
+
+    # hooks for derived classes to add behavior at specific locations
+    def hook_before_first_poke(self, seed):
+        pass
+
+    def hook_after_poke(self, name, seed):
+        self.register_transforms_with_points()
+        # has at least one contact segment
+        if self.best_segment_idx is not None:
+            self.evaluate_registrations()
+            self.cache = self.export_metrics(self.cache, name, seed)
+
+    def hook_after_last_poke(self, seed):
+        pass
+
+
+class ExportProblemRunner(PokeRunner):
+    """If registration method is None, export the point clouds, initial transforms, and ground truth transforms"""
+
+    def __init__(self, *args, **kwargs):
+        super(ExportProblemRunner, self).__init__(*args, **kwargs)
+        self.reg_method = icp.ICPMethod.NONE
+        self.pc_to_register_file = None
+        self.transform_file = None
+
+    def hook_before_first_poke(self, seed):
+        data_dir = cfg.DATA_DIR
+        self.pc_to_register_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}.txt")
+        pc_register_against_file = os.path.join(data_dir, f"poke/{self.env.level.name}.txt")
+        self.transform_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_trans.txt")
+        transform_gt_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_gt_trans.txt")
+        # exporting data for offline baselines, remove the stale file
+        export_pc_register_against(pc_register_against_file, self.env)
+        export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
+        try:
+            os.remove(self.pc_to_register_file)
+        except OSError:
+            pass
+
+    def hook_after_poke(self, name, seed):
+        if self.pokes >= self.start_at_num_pts:
+            if self.best_tsf_guess is None:
+                self.best_tsf_guess = initialize_transform_estimates(self.B, env, self.init_method, self.method)
+                export_init_transform(self.transform_file, self.best_tsf_guess)
+            export_pc_to_register(self.pc_to_register_file, self.pokes, env, self.method)
+
+
+class GeneratePlausibleSetRunner(PokeRunner):
+    def __init__(self, *args, plausible_suboptimality=0.001, gt_position_max_offset=0.2, position_steps=10, N_rot=10000,
+                 **kwargs):
+        super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
+        self.plausible_suboptimality = plausible_suboptimality
+        # self.gt_position_max_offset = gt_position_max_offset
+        # self.position_steps = position_steps
+        self.N_rot = N_rot
+
+        rand.seed(0)
+        # maps poke number to a set of plausible transforms
+        self.plausible_set = {}
+        # assume that there can only be plausible completions close enough to the ground truth
+        target_pos = self.env.target_pose[0]
+        x = torch.linspace(target_pos[0] - gt_position_max_offset * 0.5, target_pos[0] + gt_position_max_offset * 1.5,
+                           steps=position_steps, device=self.device)
+        y = torch.linspace(target_pos[1] - gt_position_max_offset, target_pos[1] + gt_position_max_offset,
+                           steps=position_steps, device=self.device)
+        z = torch.linspace(target_pos[2], target_pos[2] + gt_position_max_offset,
+                           steps=position_steps, device=self.device)
+        self.pos = torch.cartesian_prod(x, y, z)
+        self.N_pos = len(self.pos)
+        # uniformly sample rotations
+        self.rot = tf.random_rotations(N_rot, device=self.device)
+        # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
+        N_upright = min(100, N_rot)
+        axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
+        axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
+        self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
+
+        pose = self.env.target_pose
+        gt_tf = tf.Transform3d(pos=pose[0],
+                               rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
+                               dtype=self.dtype, device=self.device)
+        self.Hgt = gt_tf.get_matrix()
+        self.Hgtinv = self.Hgt.inverse()
+
+    def create_volumetric_cost(self):
+        # TODO use exact SDF when evaluating costs rather than voxelized
+        return super(GeneratePlausibleSetRunner, self).create_volumetric_cost()
+
+    def hook_after_poke(self, name, seed):
+        # assume all contact points belong to the object
+        contact_pts = []
+        for k, this_pts in enumerate(self.method):
+            contact_pts.append(this_pts)
+        contact_pts = tensor_utils.ensure_tensor(self.device, self.dtype, torch.cat(contact_pts))
+        if len(contact_pts) < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
+            return
+
+        self.volumetric_cost.sdf_voxels = util.VoxelSet(contact_pts, torch.zeros(contact_pts.shape[0], dtype=self.dtype,
+                                                                                 device=self.device))
+        self.evaluate_registrations()
+
+    def evaluate_registrations(self):
+        # evaluate all the transforms
+        plausible_transforms = []
+        gt_cost = self.volumetric_cost(self.Hgtinv[:, :3, :3], self.Hgtinv[:, :3, -1], None)
+        # evaluate the pts in chunks since we can't load all points in memory at the same time
+        rot_chunk = 1
+        pos_chunk = 1000
+        for i in range(0, self.N_rot, rot_chunk):
+            logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
+            for j in range(0, self.N_pos, pos_chunk):
+                R = self.rot[i:i + rot_chunk]
+                T = self.pos[j:j + pos_chunk]
+                r_chunk_actual = len(R)
+                t_chunk_actual = len(T)
+                T = T.repeat(r_chunk_actual, 1)
+                R = R.repeat_interleave(t_chunk_actual, 0)
+                H = torch.eye(4, device=self.device).repeat(len(R), 1, 1)
+                H[:, :3, :3] = R
+                H[:, :3, -1] = T
+                Hinv = H.inverse()
+
+                costs = self.volumetric_cost(Hinv[:, :3, :3], Hinv[:, :3, -1], None)
+                plausible = costs < self.plausible_suboptimality + gt_cost
+
+                if torch.any(plausible):
+                    Hp = H[plausible]
+                    plausible_transforms.append(Hp)
+
+        all_plausible_transforms = torch.cat(plausible_transforms)
+        self.plausible_set[self.pokes] = all_plausible_transforms
+        logger.info("poke %d with %d plausible completions gt cost: %f allowable cost: %f", self.pokes,
+                    all_plausible_transforms.shape[0], gt_cost, gt_cost + self.plausible_suboptimality)
+        # plot plausible transforms
+        to_plot = torch.randperm(len(all_plausible_transforms))[:200]
+        draw_pose_distribution(all_plausible_transforms[to_plot], self.pose_obj_map, self.env.vis, self.env.obj_factory,
+                               show_only_latest=True, sequential_delay=0.1)
+
+    def hook_after_last_poke(self, seed):
+        # export plausible set to file
+        filename = os.path.join(cfg.DATA_DIR, f"poke/{self.env.level.name}_plausible_set_{seed}.pkl")
+        logger.info("saving plausible set to %s", filename)
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        torch.save(self.plausible_set, filename)
+
+
+class EvaluatePlausibleSetRunner(PokeRunner):
+    def hook_before_first_poke(self, seed):
+        # TODO load plausible set
+        pass
 
 
 def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
@@ -2219,20 +2224,24 @@ if __name__ == "__main__":
         env.close()
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False, device="cuda")
-        runner = PokeRunner(env, tracking_method_name, registration_method)
+        if registration_method == icp.ICPMethod.NONE:
+            runner = ExportProblemRunner(env, tracking_method_name, registration_method, read_stored=False)
+        else:
+            runner = PokeRunner(env, tracking_method_name, registration_method, ground_truth_initialization=False,
+                                read_stored=args.read_stored)
         # backup video logging in case ffmpeg and nvidia driver are not compatible
         # with WindowRecorder(window_names=("Bullet Physics ExampleBrowser using OpenGL3+ [btgl] Release build",),
         #                     name_suffix="sim", frame_rate=30.0, save_dir=cfg.VIDEO_DIR):
         for seed in args.seed:
-            runner.run(name=args.name, seed=seed, ground_truth_initialization=False, read_stored=args.read_stored)
+            runner.run(name=args.name, seed=seed)
 
         env.close()
     elif args.experiment == "generate-plausible-set":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False, device="cuda")
+        runner = GeneratePlausibleSetRunner(env, tracking_method_name, registration_method,
+                                            ground_truth_initialization=False, read_stored=args.read_stored)
         for seed in args.seed:
-            env.draw_user_text(f"seed {seed} plausible set", xy=[-0.3, 1., -0.5])
-            generate_poke_plausible_set(env, create_tracking_method(env, tracking_method_name), seed=seed)
-            env.vis.clear_visualizations()
+            runner.run(name=args.name, seed=seed, draw_text=f"seed {seed} plausible set")
 
     elif args.experiment == "poke-results":
         plot_poke_results(args)
