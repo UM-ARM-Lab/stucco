@@ -1640,7 +1640,7 @@ class PokeRunner:
 
             if action is None:
                 self.pokes += 1
-                self.hook_after_poke(name, poke)
+                self.hook_after_poke(name, seed)
 
             if action is not None:
                 if torch.is_tensor(action):
