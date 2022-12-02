@@ -1826,6 +1826,108 @@ class PlotPlausibleSetRunner(PlausibleSetRunner):
                                    show_only_latest=self.show_only_latest, sequential_delay=self.sequential_delay)
 
 
+class EvaluatePlausibleSetRunner(PlausibleSetRunner):
+    def __init__(self, *args, **kwargs):
+        super(EvaluatePlausibleSetRunner, self).__init__(*args, **kwargs)
+        # always read stored with the plausible set evaluation
+        self.read_stored = True
+        self.plausible_set = {}
+
+    def hook_before_first_poke(self, seed):
+        # TODO actually pass seed in if we're generating different plausible sets per seed
+        # they are different trajectories due to control noise, but they are almost the exact same
+        filename = self.plausible_set_filename(0)
+        self.plausible_set = torch.load(filename)
+
+    def hook_after_poke(self, name, seed):
+        if self.pokes in self.plausible_set:
+            self.register_transforms_with_points()
+            # has at least one contact segment
+            assert self.best_segment_idx is not None
+            self.evaluate_registrations()
+            self.cache = self.export_metrics(self.cache, name, seed)
+
+    def evaluate_registrations(self):
+        """Responsible for populating to_export"""
+        self.method.register_transforms(self.transforms_per_object[self.best_segment_idx], self.best_tsf_guess)
+        logger.debug(f"err each obj {np.round(self.dist_per_est_obj, 4)}")
+
+        # sampled transforms and all plausible transforms
+        T = self.transforms_per_object[self.best_segment_idx]
+        Tp = self.plausible_set[self.pokes]
+
+        # effectively can apply one transform then take the inverse using the other one; if they are the same, then
+        # we should end up in the base frame if that T == Tp
+        # TODO try different multiplication order
+        # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
+        Iapprox = torch.einsum("bij,pjk->bpik", T.inverse(), Tp)
+        # the einsum does the multiplication below and is about twice as fast
+        # Iapprox = T.inverse().view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
+
+        # evaluate_chamfer_distance()
+
+        # find pairwise chamfer distance between the sampled transforms
+        # when evaluating, move the best guess pose far away to improve clarity
+        self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
+                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+        if self.draw_pose_distribution_separately:
+            evaluate_chamfer_dist_extra_args = [self.env.vis if self.env.mode == p.GUI else None, self.env.obj_factory,
+                                                0.05,
+                                                False]
+        else:
+            draw_pose_distribution(T.inverse(), self.pose_obj_map, self.env.vis, obj_factory)
+            evaluate_chamfer_dist_extra_args = [None, self.env.obj_factory, 0., False]
+        B, P = Iapprox.shape[:2]
+        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B*P, 4, 4), self.model_points_world_frame_eval,
+                                                     *evaluate_chamfer_dist_extra_args)
+        errors_per_batch = errors_per_batch.view(B, P)
+
+        best_per_sampled = errors_per_batch.min(dim=1)
+        best_per_plausible = errors_per_batch.min(dim=0)
+
+        coverage_of_plausible_set = best_per_sampled
+        # evaluate with chamfer distance
+
+        link_to_current_tf = tf.Transform3d(matrix=T)
+
+        # self.chamfer_err.append(errors_per_batch)
+        # self.num_freespace_voxels.append(self.env.free_voxels.get_known_pos_and_values()[0].shape[0])
+        # logger.info(f"chamfer distance {self.pokes}: {torch.mean(errors_per_batch)}")
+
+        # draw mesh at where our best guess is
+        # guess_pose = util.matrix_to_pos_rot(best_T)
+        # self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
+        #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+
+    def export_metrics(self, cache, name, seed):
+        """Responsible for populating to_export and saving to database"""
+        # TODO
+        _c = np.array(self.chamfer_err[-1].cpu().numpy())
+        _f = np.array(self.freespace_violations[-1])
+        _n = self.num_freespace_voxels[-1]
+        _r = _f / _n
+        batch = np.arange(self.B)
+        rmse = self.rmse_per_object[self.best_segment_idx]
+
+        df = pd.DataFrame(
+            {"date": datetime.today().date(), "method": self.reg_method.name, "level": self.env.level.name,
+             "name": name,
+             "seed": seed, "poke": self.pokes,
+             "batch": batch,
+             "chamfer_err": _c, 'freespace_violations': _f,
+             'num_freespace_voxels': _n,
+             "freespace_violation_percent": _r,
+             "rmse": rmse.cpu().numpy(),
+             })
+        cache = pd.concat([cache, df])
+        cache.to_pickle(self.dbname)
+        # additional data to export fo file
+        self.to_export[self.pokes] = {
+            'T': self.transforms_per_object[self.best_segment_idx],
+            'rmse': rmse,
+        }
+        return cache
+
 def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
     dtype = env.dtype
     device = env.device
@@ -2270,6 +2372,12 @@ if __name__ == "__main__":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
         runner = PlotPlausibleSetRunner(env, tracking_method_name, registration_method)
         runner.run(seed=0, draw_text=f"plausible set seed 0")
+
+    elif args.experiment == "evaluate-plausible-diversity":
+        env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, device="cuda")
+        runner = EvaluatePlausibleSetRunner(env, tracking_method_name, registration_method, read_stored=True)
+        for seed in args.seed:
+            runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
     elif args.experiment == "poke-results":
         plot_poke_results(args)
