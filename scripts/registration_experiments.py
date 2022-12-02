@@ -1143,14 +1143,16 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
                            show_only_latest=False):
     m = link_to_world_tf_matrix
     for b in range(len(m)):
-        pos, rot = util.matrix_to_pos_rot(m[b])
+        mm = m[b]
+        pos, rot = util.matrix_to_pos_rot(mm)
         # if we're given a sequential delay, then instead of drawing the distribution simultaneously, we render them
         # sequentially
-        if sequential_delay is not None:
+        if show_only_latest:
             b = 0
-            time.sleep(sequential_delay)
+            if sequential_delay is not None and sequential_delay > 0:
+                time.sleep(sequential_delay)
 
-        object_id = obj_id_map.get(0 if show_only_latest else b, None)
+        object_id = obj_id_map.get(b, None)
         object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
         obj_id_map[b] = object_id
 
@@ -1699,7 +1701,12 @@ class ExportProblemRunner(PokeRunner):
             export_pc_to_register(self.pc_to_register_file, self.pokes, env, self.method)
 
 
-class GeneratePlausibleSetRunner(PokeRunner):
+class PlausibleSetRunner(PokeRunner):
+    def plausible_set_filename(self, seed):
+        return os.path.join(cfg.DATA_DIR, f"poke/{self.env.level.name}_plausible_set_{seed}.pkl")
+
+
+class GeneratePlausibleSetRunner(PlausibleSetRunner):
     def __init__(self, *args, plausible_suboptimality=0.001, gt_position_max_offset=0.2, position_steps=10, N_rot=10000,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
@@ -1792,16 +1799,31 @@ class GeneratePlausibleSetRunner(PokeRunner):
 
     def hook_after_last_poke(self, seed):
         # export plausible set to file
-        filename = os.path.join(cfg.DATA_DIR, f"poke/{self.env.level.name}_plausible_set_{seed}.pkl")
+        filename = self.plausible_set_filename(seed)
         logger.info("saving plausible set to %s", filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         torch.save(self.plausible_set, filename)
 
 
-class EvaluatePlausibleSetRunner(PokeRunner):
+class PlotPlausibleSetRunner(PlausibleSetRunner):
+    def __init__(self, *args, show_only_latest=True, sequential_delay=0.1, **kwargs):
+        super(PlotPlausibleSetRunner, self).__init__(*args, **kwargs)
+        self.plausible_set = {}
+        self.show_only_latest = show_only_latest
+        self.sequential_delay = sequential_delay
+
     def hook_before_first_poke(self, seed):
-        # TODO load plausible set
-        pass
+        filename = self.plausible_set_filename(seed)
+        self.plausible_set = torch.load(filename)
+
+    def hook_after_poke(self, name, seed):
+        if self.pokes in self.plausible_set:
+            ps = self.plausible_set[self.pokes]
+            if not self.show_only_latest:
+                self.env.vis.clear_visualizations()
+                self.pose_obj_map = {}
+            draw_pose_distribution(ps, self.pose_obj_map, self.env.vis, self.env.obj_factory,
+                                   show_only_latest=self.show_only_latest, sequential_delay=self.sequential_delay)
 
 
 def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
@@ -2143,7 +2165,8 @@ def plot_poke_results(args):
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
-                             'poke-visualize-sdf', 'poke-visualize-pcd', 'poke-results', 'generate-plausible-set',
+                             'poke-visualize-sdf', 'poke-visualize-pcd', 'poke-results',
+                             'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
                              'debug'],
                     help='which experiment to run')
 registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
@@ -2242,6 +2265,11 @@ if __name__ == "__main__":
                                             ground_truth_initialization=False, read_stored=args.read_stored)
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed} plausible set")
+
+    elif args.experiment == "plot-plausible-set":
+        env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
+        runner = PlotPlausibleSetRunner(env, tracking_method_name, registration_method)
+        runner.run(seed=0, draw_text=f"plausible set seed 0")
 
     elif args.experiment == "poke-results":
         plot_poke_results(args)
