@@ -770,14 +770,16 @@ class PokeEnv(PybulletEnv):
     def _move_pusher(self, end):
         p.changeConstraint(self.gripperConstraint, end, self.endEffectorOrientation, maxForce=self.MAX_FORCE)
 
+    def _setup_camera(self):
+        self.set_camera_position([0.3, 0.1, 0.1], -40, -50)
+
     def _setup_experiment(self):
         # set gravity
         p.setGravity(0, 0, -10)
         # add plane to push on (slightly below the base of the robot)
         self.planeId = p.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
 
-        self.set_camera_position([0.3, 0.1, 0.1], -40, -50)
-
+        self._setup_camera()
         self._setup_gripper()
         self._setup_objects()
 
@@ -925,6 +927,7 @@ class PokeEnv(PybulletEnv):
         for _ in range(1000):
             p.stepSimulation()
 
+        self._setup_camera()
         self.open_gripper()
         if self.gripperConstraint:
             p.removeConstraint(self.gripperConstraint)
