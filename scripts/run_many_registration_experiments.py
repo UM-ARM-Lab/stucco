@@ -6,7 +6,8 @@ from stucco import cfg
 
 parser = argparse.ArgumentParser(description='Run many registration poking experiments')
 parser.add_argument('--experiment',
-                    choices=['build', 'baseline', 'poke', 'generate-plausible-set', 'debug'],
+                    choices=['build', 'baseline', 'poke', 'generate-plausible-set', 'evaluate-plausible-diversity',
+                             'debug'],
                     default='poke',
                     help='which experiment to run')
 parser.add_argument('--registration', nargs='+',

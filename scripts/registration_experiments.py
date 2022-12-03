@@ -1394,6 +1394,8 @@ def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pok
 
 
 class PokeRunner:
+    KEY_COLUMNS = ("method", "name", "seed", "poke", "level", "batch")
+
     def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method, B=30,
                  read_stored=False, ground_truth_initialization=False, init_method=icp.InitMethod.RANDOM,
                  register_num_points=500, start_at_num_pts=4, eval_num_points=200):
@@ -1409,10 +1411,11 @@ class PokeRunner:
 
         model_name = self.env.target_model_name
         # get a fixed number of model points to evaluate against (this will be independent on points used to register)
-        model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=model_name,
-                                                                      seed=0,
-                                                                      device=env.device)
-        self.device, self.dtype = model_points_eval.device, model_points_eval.dtype
+        self.model_points_eval, self.model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points,
+                                                                                name=model_name,
+                                                                                seed=0,
+                                                                                device=env.device)
+        self.device, self.dtype = self.model_points_eval.device, self.model_points_eval.dtype
 
         # get a large number of model points to register to
         self.model_points_register, self.model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
@@ -1422,8 +1425,8 @@ class PokeRunner:
         pose = p.getBasePositionAndOrientation(self.env.target_object_id())
         self.link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
             tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
-        self.model_points_world_frame_eval = self.link_to_current_tf_gt.transform_points(model_points_eval)
-        self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_points(model_normals_eval)
+        self.model_points_world_frame_eval = self.link_to_current_tf_gt.transform_points(self.model_points_eval)
+        self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_points(self.model_normals_eval)
 
         self.draw_pose_distribution_separately = True
         self.method: typing.Optional[TrackingMethod] = None
@@ -1633,7 +1636,7 @@ class PokeRunner:
         self.hook_before_first_poke(seed)
         while not self.ctrl.done():
             simTime += 1
-            env.draw_user_text("{}".format(simTime), xy=(0.5, 0.7, -1))
+            env.draw_user_text("{}".format(self.pokes), xy=(0.5, 0.4, -0.5))
 
             action = self.ctrl.command(obs, info)
             self.method.visualize_contact_points(env)
@@ -1650,8 +1653,6 @@ class PokeRunner:
                 action += action_noise[simTime]
                 obs, rew, done, info = env.step(action)
 
-        if not self.read_stored:
-            export_registration(saved_traj_file(self.reg_method, self.env.level, seed), self.to_export)
         self.env.vis.clear_visualizations()
         self.hook_after_last_poke(seed)
 
@@ -1667,7 +1668,8 @@ class PokeRunner:
             self.cache = self.export_metrics(self.cache, name, seed)
 
     def hook_after_last_poke(self, seed):
-        pass
+        if not self.read_stored:
+            export_registration(saved_traj_file(self.reg_method, self.env.level, seed), self.to_export)
 
 
 class ExportProblemRunner(PokeRunner):
@@ -1825,19 +1827,27 @@ class PlotPlausibleSetRunner(PlausibleSetRunner):
             draw_pose_distribution(ps, self.pose_obj_map, self.env.vis, self.env.obj_factory,
                                    show_only_latest=self.show_only_latest, sequential_delay=self.sequential_delay)
 
+    def hook_after_last_poke(self, seed):
+        pass
+
 
 class EvaluatePlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, plot_meshes=True, sleep_between_plots=0.1, **kwargs):
         super(EvaluatePlausibleSetRunner, self).__init__(*args, **kwargs)
+        self.plot_meshes = plot_meshes
+        self.sleep_between_plots = sleep_between_plots
         # always read stored with the plausible set evaluation
         self.read_stored = True
         self.plausible_set = {}
+        self.plausibility = None
+        self.coverage = None
 
     def hook_before_first_poke(self, seed):
         # TODO actually pass seed in if we're generating different plausible sets per seed
         # they are different trajectories due to control noise, but they are almost the exact same
         filename = self.plausible_set_filename(0)
         self.plausible_set = torch.load(filename)
+        self.cache = self.cache.drop_duplicates(subset=self.KEY_COLUMNS, keep='last')
 
     def hook_after_poke(self, name, seed):
         if self.pokes in self.plausible_set:
@@ -1846,6 +1856,9 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
             assert self.best_segment_idx is not None
             self.evaluate_registrations()
             self.cache = self.export_metrics(self.cache, name, seed)
+
+    def hook_after_last_poke(self, seed):
+        pass
 
     def evaluate_registrations(self):
         """Responsible for populating to_export"""
@@ -1856,13 +1869,16 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         T = self.transforms_per_object[self.best_segment_idx]
         Tp = self.plausible_set[self.pokes]
 
+        # NOTE that T is already inverted, so no need for T.inverse() * T
+        # however, Tinv is useful for plotting purposes
+        Tinv = T.inverse()
+
         # effectively can apply one transform then take the inverse using the other one; if they are the same, then
         # we should end up in the base frame if that T == Tp
-        # TODO try different multiplication order
         # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
-        Iapprox = torch.einsum("bij,pjk->bpik", T.inverse(), Tp)
+        # Iapprox = torch.einsum("bij,pjk->bpik", T, Tp)
         # the einsum does the multiplication below and is about twice as fast
-        # Iapprox = T.inverse().view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
+        Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
 
         # evaluate_chamfer_distance()
 
@@ -1870,63 +1886,82 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         # when evaluating, move the best guess pose far away to improve clarity
         self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                            object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-        if self.draw_pose_distribution_separately:
-            evaluate_chamfer_dist_extra_args = [self.env.vis if self.env.mode == p.GUI else None, self.env.obj_factory,
-                                                0.05,
-                                                False]
-        else:
-            draw_pose_distribution(T.inverse(), self.pose_obj_map, self.env.vis, obj_factory)
-            evaluate_chamfer_dist_extra_args = [None, self.env.obj_factory, 0., False]
         B, P = Iapprox.shape[:2]
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B*P, 4, 4), self.model_points_world_frame_eval,
-                                                     *evaluate_chamfer_dist_extra_args)
+        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
+                                                     self.env.obj_factory, 0)
         errors_per_batch = errors_per_batch.view(B, P)
 
         best_per_sampled = errors_per_batch.min(dim=1)
         best_per_plausible = errors_per_batch.min(dim=0)
 
-        coverage_of_plausible_set = best_per_sampled
-        # evaluate with chamfer distance
+        bp_plausibility = best_per_sampled.values.sum() / B
+        bp_coverage = best_per_plausible.values.sum() / P
 
-        link_to_current_tf = tf.Transform3d(matrix=T)
+        # sampled vs closest plausible transform
+        if self.plot_meshes:
+            self.env.draw_user_text("sampled (green) vs closest plausible (blue)", xy=[-0.1, -0.1, -0.5])
+            for b in range(B):
+                p = best_per_sampled.indices[b]
+                self.env.draw_user_text(f"{best_per_sampled.values[b].item():.0f}", xy=[-0.1, -0.2, -0.5])
+                self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                time.sleep(self.sleep_between_plots)
 
-        # self.chamfer_err.append(errors_per_batch)
-        # self.num_freespace_voxels.append(self.env.free_voxels.get_known_pos_and_values()[0].shape[0])
-        # logger.info(f"chamfer distance {self.pokes}: {torch.mean(errors_per_batch)}")
+            self.env.draw_user_text("plausible (blue) vs closest sampled (blue)", xy=[-0.1, -0.1, -0.5])
+            for p in range(P):
+                b = best_per_plausible.indices[p]
+                self.env.draw_user_text(f"{best_per_plausible.values[p].item():.0f}", xy=[-0.1, -0.2, -0.5])
+                self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                time.sleep(self.sleep_between_plots)
 
-        # draw mesh at where our best guess is
-        # guess_pose = util.matrix_to_pos_rot(best_T)
-        # self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
-        #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+        # NOTE different multiplication order Tp @ T is also valid
+        Iapprox = Tp.view(-1, 1, 4, 4) @ T.view(1, -1, 4, 4)
+        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
+                                                     self.env.obj_factory, 0)
+        errors_per_batch = errors_per_batch.view(P, B)
+        best_per_sampled = errors_per_batch.min(dim=0)
+        best_per_plausible = errors_per_batch.min(dim=1)
+        pb_plausibility = best_per_sampled.values.sum() / B
+        pb_coverage = best_per_plausible.values.sum() / P
+
+        logger.info(
+            f"pokes {self.pokes} BP plausibility {bp_plausibility.item():.0f} coverage {bp_coverage.item():.0f} "
+            f"PB plausibility {pb_plausibility.item():.0f} coverage {pb_coverage.item():.0f}")
+        self.plausibility = bp_plausibility
+        self.coverage = bp_coverage
 
     def export_metrics(self, cache, name, seed):
         """Responsible for populating to_export and saving to database"""
-        # TODO
-        _c = np.array(self.chamfer_err[-1].cpu().numpy())
-        _f = np.array(self.freespace_violations[-1])
-        _n = self.num_freespace_voxels[-1]
-        _r = _f / _n
         batch = np.arange(self.B)
-        rmse = self.rmse_per_object[self.best_segment_idx]
-
         df = pd.DataFrame(
-            {"date": datetime.today().date(), "method": self.reg_method.name, "level": self.env.level.name,
+            {"method": self.reg_method.name, "level": self.env.level.name,
              "name": name,
              "seed": seed, "poke": self.pokes,
              "batch": batch,
-             "chamfer_err": _c, 'freespace_violations': _f,
-             'num_freespace_voxels': _n,
-             "freespace_violation_percent": _r,
-             "rmse": rmse.cpu().numpy(),
+             "plausibility": self.plausibility.item(),
+             "coverage": self.coverage.item(),
+             "plausible_diversity": (self.plausibility + self.coverage).item(),
              })
-        cache = pd.concat([cache, df])
-        cache.to_pickle(self.dbname)
-        # additional data to export fo file
-        self.to_export[self.pokes] = {
-            'T': self.transforms_per_object[self.best_segment_idx],
-            'rmse': rmse,
-        }
-        return cache
+
+        cols = list(cache.columns)
+        cols_next = [c for c in df.columns if c not in cols]
+        if "plausibility" not in cols:
+            dd = pd.merge(cache, df, how="outer", suffixes=('', '_y'))
+        else:
+            # this will replace values that are shared between cache and df with those of df
+            dd = df.combine_first(cache)
+
+        # rearrange back in proper order
+        dd = dd[cols + cols_next]
+        dd.to_pickle(self.dbname)
+
+        return dd
+
 
 def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
     dtype = env.dtype
@@ -2247,8 +2282,6 @@ def plot_poke_results(args):
         # df = df[(df["level"] == level.name)]
         df = df[(df["level"].str.contains(level.name))]
 
-        # df = df[(df["method"] == "VOLUMETRIC_LIMITED_REINIT_FULL") | (df["method"] == "VOLUMETRIC_LIMITED_REINIT")]
-
         return df
 
     def filter_single(df):
@@ -2257,7 +2290,7 @@ def plot_poke_results(args):
         return df
 
     plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                     key_columns=("method", "name", "seed", "poke", "level", "batch"),
+                     key_columns=PokeRunner.KEY_COLUMNS,
                      logy=True, keep_lowest_y_wrt="rmse",
                      save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
                      show=not args.no_gui,
