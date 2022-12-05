@@ -1111,26 +1111,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # self.position_steps = position_steps
         self.N_rot = N_rot
 
-        rand.seed(0)
         # maps poke number to a set of plausible transforms
         self.plausible_set = {}
-        # assume that there can only be plausible completions close enough to the ground truth
-        target_pos = self.env.target_pose[0]
-        x = torch.linspace(target_pos[0] - gt_position_max_offset * 0.5, target_pos[0] + gt_position_max_offset * 1.5,
-                           steps=position_steps, device=self.device)
-        y = torch.linspace(target_pos[1] - gt_position_max_offset, target_pos[1] + gt_position_max_offset,
-                           steps=position_steps, device=self.device)
-        z = torch.linspace(target_pos[2], target_pos[2] + gt_position_max_offset,
-                           steps=position_steps, device=self.device)
-        self.pos = torch.cartesian_prod(x, y, z)
-        self.N_pos = len(self.pos)
-        # uniformly sample rotations
-        self.rot = tf.random_rotations(N_rot, device=self.device)
-        # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-        N_upright = min(100, N_rot)
-        axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
-        axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
-        self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
+        self.gt_position_max_offset = gt_position_max_offset
+        self.position_steps = position_steps
+
+        # variations
+        self.pos = None
+        self.rot = None
 
         # ground truth transforms - need the environment to reset first to simulate what happens in a run
         # therefore need to get them inside the hook before first poke rather than in the constructor
@@ -1138,12 +1126,41 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         self.Hgtinv = None
 
     def hook_before_first_poke(self, seed):
-        pose = self.env.target_pose
-        gt_tf = tf.Transform3d(pos=pose[0],
-                               rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
-                               dtype=self.dtype, device=self.device)
-        self.Hgt = gt_tf.get_matrix()
-        self.Hgtinv = self.Hgt.inverse()
+        with rand.SavedRNG():
+            rand.seed(0)
+            # assume that there can only be plausible completions close enough to the ground truth
+            target_pos = self.env.target_pose[0]
+            offset = self.gt_position_max_offset / self.position_steps
+            x1 = torch.linspace(target_pos[0] - self.gt_position_max_offset * 0.5,
+                                target_pos[0],
+                                steps=self.position_steps // 3, device=self.device)
+            x2 = torch.linspace(target_pos[0] + offset,
+                                target_pos[0] + self.gt_position_max_offset * 1.5,
+                                steps=self.position_steps // 3 * 2, device=self.device)
+            x = torch.cat((x1, x2))
+            y1 = torch.linspace(target_pos[1] - self.gt_position_max_offset, target_pos[1],
+                                steps=self.position_steps // 2, device=self.device)
+            y2 = torch.linspace(target_pos[1] + offset, target_pos[1] + self.gt_position_max_offset,
+                                steps=self.position_steps // 2, device=self.device)
+            y = torch.cat((y1, y2))
+            z = torch.linspace(target_pos[2], target_pos[2] + self.gt_position_max_offset * 0.5,
+                               steps=self.position_steps, device=self.device)
+            self.pos = torch.cartesian_prod(x, y, z)
+            self.N_pos = len(self.pos)
+            # uniformly sample rotations
+            self.rot = tf.random_rotations(self.N_rot, device=self.device)
+            # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
+            N_upright = min(100, self.N_rot)
+            axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
+            axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
+            self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
+
+            pose = self.env.target_pose
+            gt_tf = tf.Transform3d(pos=pose[0],
+                                   rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
+                                   dtype=self.dtype, device=self.device)
+            self.Hgt = gt_tf.get_matrix()
+            self.Hgtinv = self.Hgt.inverse()
 
     def create_volumetric_cost(self):
         # TODO use exact SDF when evaluating costs rather than voxelized
