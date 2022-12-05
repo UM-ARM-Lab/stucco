@@ -1119,7 +1119,7 @@ class PlausibleSetRunner(PokeRunner):
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, plausible_suboptimality=0.005, gt_position_max_offset=0.2, position_steps=10, N_rot=10000,
+    def __init__(self, *args, plausible_suboptimality=0.005, gt_position_max_offset=0.2, position_steps=15, N_rot=20000,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_suboptimality = plausible_suboptimality
@@ -1220,32 +1220,45 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # evaluate all the transforms
         plausible_transforms = []
         gt_cost = self._evaluate_transforms(self.Hgtinv)
-        # evaluate the pts in chunks since we can't load all points in memory at the same time
-        rot_chunk = 10
-        pos_chunk = 1000
-        for i in range(0, self.N_rot, rot_chunk):
-            logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
-            min_cost_per_chunk = 100000
-            for j in range(0, self.N_pos, pos_chunk):
-                R = self.rot[i:i + rot_chunk]
-                T = self.pos[j:j + pos_chunk]
-                r_chunk_actual = len(R)
-                t_chunk_actual = len(T)
-                T = T.repeat(r_chunk_actual, 1)
-                R = R.repeat_interleave(t_chunk_actual, 0)
-                H = torch.eye(4, device=self.device).repeat(len(R), 1, 1)
-                H[:, :3, :3] = R
-                H[:, :3, -1] = T
-                Hinv = H.inverse()
 
-                costs = self._evaluate_transforms(Hinv)
-                plausible = costs < self.plausible_suboptimality + gt_cost
-                min_cost_per_chunk = min(min_cost_per_chunk, costs.min())
+        # if we're doing it for the first time we need to evaluate over everything
+        # if we've narrowed it down to a small number of plausible transforms, we only need to keep evaluating those
+        # since new pokes can only prune previously plausible transforms
+        if len(self.plausible_set) > 0:
+            H = self.plausible_set[self.pokes - 1]
+            costs = self._evaluate_transforms(H.inverse())
+            plausible = costs < self.plausible_suboptimality + gt_cost
 
-                if torch.any(plausible):
-                    Hp = H[plausible]
-                    plausible_transforms.append(Hp)
-            logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
+            if torch.any(plausible):
+                Hp = H[plausible]
+                plausible_transforms.append(Hp)
+        else:
+            # evaluate the pts in chunks since we can't load all points in memory at the same time
+            rot_chunk = 10
+            pos_chunk = 1000
+            for i in range(0, self.N_rot, rot_chunk):
+                logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
+                min_cost_per_chunk = 100000
+                for j in range(0, self.N_pos, pos_chunk):
+                    R = self.rot[i:i + rot_chunk]
+                    T = self.pos[j:j + pos_chunk]
+                    r_chunk_actual = len(R)
+                    t_chunk_actual = len(T)
+                    T = T.repeat(r_chunk_actual, 1)
+                    R = R.repeat_interleave(t_chunk_actual, 0)
+                    H = torch.eye(4, device=self.device).repeat(len(R), 1, 1)
+                    H[:, :3, :3] = R
+                    H[:, :3, -1] = T
+                    Hinv = H.inverse()
+
+                    costs = self._evaluate_transforms(Hinv)
+                    plausible = costs < self.plausible_suboptimality + gt_cost
+                    min_cost_per_chunk = min(min_cost_per_chunk, costs.min())
+
+                    if torch.any(plausible):
+                        Hp = H[plausible]
+                        plausible_transforms.append(Hp)
+                logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
 
         all_plausible_transforms = torch.cat(plausible_transforms)
         self.plausible_set[self.pokes] = all_plausible_transforms
