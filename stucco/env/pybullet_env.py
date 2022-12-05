@@ -109,8 +109,9 @@ class PybulletEnv(Env):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, mode=Mode.DIRECT, log_video=False, default_debug_height=0, camera_dist=1.5):
+    def __init__(self, mode=Mode.DIRECT, log_video=False, video_name="", default_debug_height=0, camera_dist=1.5):
         self.log_video = log_video
+        self.video_name = video_name
         self.mode = mode
         self.realtime = False
         self.sim_step_s = 1. / 240.
@@ -139,7 +140,7 @@ class PybulletEnv(Env):
         if self.log_video:
             self.logging_id = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4,
                                                   "{}_{}.mp4".format(datetime.now().strftime('%Y_%m_%d_%H_%M_%S'),
-                                                                     self.randseed))
+                                                                     self.video_name))
 
         # use data provided by PyBullet
         p.setAdditionalSearchPath(pybullet_data.getDataPath())  # optionally

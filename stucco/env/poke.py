@@ -235,9 +235,9 @@ class PokeEnv(PybulletEnv):
         :param reaction_force_strategy how to aggregate measured reaction forces over control step into 1 value
         :param kwargs:
         """
-        super().__init__(**kwargs, default_debug_height=0.1, camera_dist=camera_dist)
-        self._dd.toggle_3d(True)
         self.level = Levels(environment_level)
+        super().__init__(**kwargs, default_debug_height=0.1, camera_dist=camera_dist, video_name=self.level.name)
+        self._dd.toggle_3d(True)
         self.sim_step_wait = sim_step_wait
         # as long as this is above a certain amount we won't exceed it in freespace pushing if we have many mini steps
         self.mini_steps = mini_steps
