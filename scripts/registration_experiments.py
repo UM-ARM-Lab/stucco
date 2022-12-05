@@ -724,6 +724,7 @@ def export_init_transform(transform_file: str, T: torch.tensor):
 
 
 def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pokes=4):
+    from torch import tensor
     # load from file
     env.reset()
     dtype = env.dtype
@@ -1131,6 +1132,12 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
         self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
 
+        # ground truth transforms - need the environment to reset first to simulate what happens in a run
+        # therefore need to get them inside the hook before first poke rather than in the constructor
+        self.Hgt = None
+        self.Hgtinv = None
+
+    def hook_before_first_poke(self, seed):
         pose = self.env.target_pose
         gt_tf = tf.Transform3d(pos=pose[0],
                                rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
