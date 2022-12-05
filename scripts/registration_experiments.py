@@ -1853,7 +1853,10 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         if self.pokes in self.plausible_set:
             self.register_transforms_with_points()
             # has at least one contact segment
-            assert self.best_segment_idx is not None
+            if self.best_segment_idx is not None:
+                logger.warning("No sufficient contact segment on poke %d despite having data for the plausible set",
+                               self.pokes)
+                return
             self.evaluate_registrations()
             self.cache = self.export_metrics(self.cache, name, seed)
 
