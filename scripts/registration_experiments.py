@@ -291,7 +291,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
         model_points_world_frame = link_to_current_tf_gt.transform_points(model_points)
         model_normals_world_frame = link_to_current_tf_gt.transform_normals(model_normals)
         model_points_world_frame_eval = link_to_current_tf_gt.transform_points(model_points_eval)
-        model_normals_world_frame_eval = link_to_current_tf_gt.transform_points(model_normals_eval)
+        model_normals_world_frame_eval = link_to_current_tf_gt.transform_normals(model_normals_eval)
 
         i = 0
         for i, pt in enumerate(model_points_world_frame):
@@ -830,11 +830,9 @@ class PokeRunner:
                                                                                         name=model_name, seed=0,
                                                                                         device=env.device)
 
-        pose = p.getBasePositionAndOrientation(self.env.target_object_id())
-        self.link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
-            tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
-        self.model_points_world_frame_eval = self.link_to_current_tf_gt.transform_points(self.model_points_eval)
-        self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_points(self.model_normals_eval)
+        # need to get these after
+        self.model_points_world_frame_eval = None
+        self.model_normals_world_frame_eval = None
 
         self.draw_pose_distribution_separately = True
         self.method: typing.Optional[TrackingMethod] = None
@@ -1066,7 +1064,11 @@ class PokeRunner:
 
     # hooks for derived classes to add behavior at specific locations
     def hook_before_first_poke(self, seed):
-        pass
+        pose = p.getBasePositionAndOrientation(self.env.target_object_id())
+        self.link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+        self.model_points_world_frame_eval = self.link_to_current_tf_gt.transform_points(self.model_points_eval)
+        self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_normals(self.model_normals_eval)
 
     def hook_after_poke(self, name, seed):
         self.register_transforms_with_points()
@@ -1117,7 +1119,7 @@ class PlausibleSetRunner(PokeRunner):
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, plausible_suboptimality=0.001, gt_position_max_offset=0.2, position_steps=10, N_rot=10000,
+    def __init__(self, *args, plausible_suboptimality=0.005, gt_position_max_offset=0.2, position_steps=10, N_rot=10000,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_suboptimality = plausible_suboptimality
@@ -1139,11 +1141,22 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         self.Hgt = None
         self.Hgtinv = None
 
+        self.contact_pts = None
+
     def hook_before_first_poke(self, seed):
+        super(GeneratePlausibleSetRunner, self).hook_before_first_poke(seed)
         with rand.SavedRNG():
             rand.seed(0)
+
+            pose = self.env.target_pose
+            gt_tf = tf.Transform3d(pos=pose[0],
+                                   rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
+                                   dtype=self.dtype, device=self.device)
+            self.Hgt = gt_tf.get_matrix()
+            self.Hgtinv = self.Hgt.inverse()
+
             # assume that there can only be plausible completions close enough to the ground truth
-            target_pos = self.env.target_pose[0]
+            target_pos = pose[0]
             offset = self.gt_position_max_offset / self.position_steps
             x1 = torch.linspace(target_pos[0] - self.gt_position_max_offset * 0.5,
                                 target_pos[0],
@@ -1168,40 +1181,51 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
             axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
             axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
             self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
-
-            pose = self.env.target_pose
-            gt_tf = tf.Transform3d(pos=pose[0],
-                                   rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
-                                   dtype=self.dtype, device=self.device)
-            self.Hgt = gt_tf.get_matrix()
-            self.Hgtinv = self.Hgt.inverse()
+            # ensure the ground truth rotation is sampled
+            self.rot[N_upright] = self.Hgt[:, :3, :3]
 
     def create_volumetric_cost(self):
-        # TODO use exact SDF when evaluating costs rather than voxelized
-        return super(GeneratePlausibleSetRunner, self).create_volumetric_cost()
+        # placeholder for now; have to be filled manually
+        empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
+        # use just to get freespace violation
+        self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
+                                                        scale_known_freespace=20, scale_known_sdf=0,
+                                                        vis=self.env.vis, debug=False)
 
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object
         contact_pts = []
         for k, this_pts in enumerate(self.method):
             contact_pts.append(this_pts)
-        contact_pts = tensor_utils.ensure_tensor(self.device, self.dtype, torch.cat(contact_pts))
-        if len(contact_pts) < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
+        self.contact_pts = tensor_utils.ensure_tensor(self.device, self.dtype, torch.cat(contact_pts))
+        if len(self.contact_pts) < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
             return
 
-        self.volumetric_cost.sdf_voxels = util.VoxelSet(contact_pts, torch.zeros(contact_pts.shape[0], dtype=self.dtype,
-                                                                                 device=self.device))
+        self.volumetric_cost.sdf_voxels = util.VoxelSet(self.contact_pts,
+                                                        torch.zeros(self.contact_pts.shape[0], dtype=self.dtype,
+                                                                    device=self.device))
         self.evaluate_registrations()
+
+    def _evaluate_transforms(self, transforms):
+        # use exact SDF when evaluating costs rather than voxelized
+        Tp = tf.Transform3d(matrix=transforms)
+        pts = Tp.transform_points(self.contact_pts)
+        closest = self.env.obj_factory.object_frame_closest_point(pts)
+        cost = closest.distance.abs().mean(dim=-1)
+        # reject any that violates freespace
+        freespace_violation = self.volumetric_cost(transforms[:, :3, :3], transforms[:, :3, 3], None)
+        return cost + freespace_violation
 
     def evaluate_registrations(self):
         # evaluate all the transforms
         plausible_transforms = []
-        gt_cost = self.volumetric_cost(self.Hgtinv[:, :3, :3], self.Hgtinv[:, :3, -1], None)
+        gt_cost = self._evaluate_transforms(self.Hgtinv)
         # evaluate the pts in chunks since we can't load all points in memory at the same time
-        rot_chunk = 1
+        rot_chunk = 10
         pos_chunk = 1000
         for i in range(0, self.N_rot, rot_chunk):
             logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
+            min_cost_per_chunk = 100000
             for j in range(0, self.N_pos, pos_chunk):
                 R = self.rot[i:i + rot_chunk]
                 T = self.pos[j:j + pos_chunk]
@@ -1214,12 +1238,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                 H[:, :3, -1] = T
                 Hinv = H.inverse()
 
-                costs = self.volumetric_cost(Hinv[:, :3, :3], Hinv[:, :3, -1], None)
+                costs = self._evaluate_transforms(Hinv)
                 plausible = costs < self.plausible_suboptimality + gt_cost
+                min_cost_per_chunk = min(min_cost_per_chunk, costs.min())
 
                 if torch.any(plausible):
                     Hp = H[plausible]
                     plausible_transforms.append(Hp)
+            logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
 
         all_plausible_transforms = torch.cat(plausible_transforms)
         self.plausible_set[self.pokes] = all_plausible_transforms
@@ -1274,6 +1300,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         self.coverage = None
 
     def hook_before_first_poke(self, seed):
+        super(EvaluatePlausibleSetRunner, self).hook_before_first_poke(seed)
         # TODO actually pass seed in if we're generating different plausible sets per seed
         # they are different trajectories due to control noise, but they are almost the exact same
         filename = self.plausible_set_filename(0)
