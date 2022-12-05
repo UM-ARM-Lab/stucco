@@ -718,11 +718,14 @@ class PokeEnv(PybulletEnv):
         self.free_voxels[robot_interior_points_world] = 1
 
         if self._debug_visualizations[DebugVisualization.FREE_VOXELS]:
-            i = 0
-            free_space_world_frame_points, _ = self.free_voxels.get_known_pos_and_values()
-            for i, pt in enumerate(free_space_world_frame_points):
-                self.vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=2, length=0.003)
-            self.vis.clear_visualization_after("fspt", i + 1)
+            self.draw_freespace_voxels()
+
+    def draw_freespace_voxels(self):
+        i = 0
+        free_space_world_frame_points, _ = self.free_voxels.get_known_pos_and_values()
+        for i, pt in enumerate(free_space_world_frame_points):
+            self.vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=2, length=0.003)
+        self.vis.clear_visualization_after("fspt", i + 1)
 
     # --- control (commonly overridden)
     def _move_and_wait(self, eePos, steps_to_wait=50):
@@ -865,7 +868,7 @@ class PokeEnv(PybulletEnv):
         robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id)
         robot_range = pybullet_obj_range(self.robot_id, 0.02)
         # TODO consider if need the fingers of the gripper to sweep out freespace, or if that's too close
-        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.01, robot_range,
+        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.005, robot_range,
                                               robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
