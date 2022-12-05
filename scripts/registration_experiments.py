@@ -257,7 +257,6 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
         cache = pd.read_pickle(fullname)
     else:
         cache = pd.DataFrame()
-
     target_obj_id = env.target_object_id()
     vis = env.vis
     freespace_ranges = env.freespace_ranges
@@ -276,6 +275,8 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
     # # test ICP using fixed set of points
     # can incrementally increase the number of model points used to evaluate how efficient the ICP is
     errors = []
+    points = []
+    points_free = []
     B = 30
 
     best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
@@ -315,6 +316,9 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
                                         :num_freespace] * surface_delta
         free_voxels[free_space_world_frame_points] = 1
 
+        points.append(model_points_world_frame)
+        points_free.append(free_space_world_frame_points)
+
         i = 0
         for i, pt in enumerate(free_space_world_frame_points):
             vis.draw_point(f"fspt.{i}", pt, color=(1, 0, 1), scale=2, length=0.003)
@@ -347,6 +351,14 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
     cache.to_pickle(fullname)
     for i in range(len(num_points_list)):
         print(f"num {num_points_list[i]} err {errors[i]}")
+
+    # export point cloud per "poke" similar to the actual poking experiment
+    export_traj_filename = os.path.join(cfg.DATA_DIR, f"icp_sample/{obj_name}_{seed}.txt")
+    os.makedirs(os.path.dirname(export_traj_filename), exist_ok=True)
+    with open(export_traj_filename, "w") as f:
+        for i in range(len(points)):
+            f.write(f"{i} {len(points_free[i]) + len(points[i])}\n")
+            _export_pcs(f, points_free[i], points[i])
 
 
 def marginalize_over_suffix(name):
@@ -655,12 +667,14 @@ class PokingController(Controller):
 
 
 def _export_pcs(f, pc_free, pc_occ):
-    pc_free_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 0" for pt in pc_free]
-    pc_occ_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 1" for pt in pc_occ]
-    f.write("\n".join(pc_free_serialized))
-    f.write("\n")
-    f.write("\n".join(pc_occ_serialized))
-    f.write("\n")
+    if len(pc_free):
+        pc_free_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 0" for pt in pc_free]
+        f.write("\n".join(pc_free_serialized))
+        f.write("\n")
+    if len(pc_occ):
+        pc_occ_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 1" for pt in pc_occ]
+        f.write("\n".join(pc_occ_serialized))
+        f.write("\n")
 
 
 def _export_transform(f, T):
