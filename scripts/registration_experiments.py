@@ -1234,7 +1234,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                 plausible_transforms.append(Hp)
         else:
             # evaluate the pts in chunks since we can't load all points in memory at the same time
-            rot_chunk = 10
+            rot_chunk = 5
             pos_chunk = 1000
             for i in range(0, self.N_rot, rot_chunk):
                 logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
@@ -1324,7 +1324,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         if self.pokes in self.plausible_set:
             self.register_transforms_with_points()
             # has at least one contact segment
-            if self.best_segment_idx is not None:
+            if self.best_segment_idx is None:
                 logger.warning("No sufficient contact segment on poke %d despite having data for the plausible set",
                                self.pokes)
                 return
