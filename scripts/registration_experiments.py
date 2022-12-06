@@ -1119,7 +1119,7 @@ class PlausibleSetRunner(PokeRunner):
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, plausible_suboptimality=0.005, gt_position_max_offset=0.2, position_steps=15, N_rot=20000,
+    def __init__(self, *args, plausible_suboptimality=0.001, gt_position_max_offset=0.2, position_steps=15, N_rot=20000,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_suboptimality = plausible_suboptimality
@@ -1211,6 +1211,13 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         Tp = tf.Transform3d(matrix=transforms)
         pts = Tp.transform_points(self.contact_pts)
         closest = self.env.obj_factory.object_frame_closest_point(pts)
+        # for debugging uncomment below
+        # self.env.draw_mesh("base frame", ([0, 0, 0], [0, 0, 0, 1]), (0.0, 1.0, 0., 0.5),
+        #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+        # for i, pt in enumerate(pts):
+        #     self.env.vis.draw_point(f"tmp.{i}", pt.cpu().numpy())
+        # for i, pt in enumerate(closest.closest):
+        #     self.env.vis.draw_point(f"tmpi.{i}", pt.cpu().numpy(), (1,0,0))
         cost = closest.distance.abs().mean(dim=-1)
         # reject any that violates freespace
         freespace_violation = self.volumetric_cost(transforms[:, :3, :3], transforms[:, :3, 3], None)
@@ -1225,13 +1232,17 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # if we've narrowed it down to a small number of plausible transforms, we only need to keep evaluating those
         # since new pokes can only prune previously plausible transforms
         if len(self.plausible_set) > 0:
-            H = self.plausible_set[self.pokes - 1]
-            costs = self._evaluate_transforms(H.inverse())
-            plausible = costs < self.plausible_suboptimality + gt_cost
+            trans_chunk = 5000
+            Hall = self.plausible_set[self.pokes - 1]
+            for i in range(0, Hall.shape[0], trans_chunk):
+                H = Hall[i:i + trans_chunk]
+                Hinv = H.inverse()
+                costs = self._evaluate_transforms(Hinv)
+                plausible = costs < self.plausible_suboptimality + gt_cost
 
-            if torch.any(plausible):
-                Hp = H[plausible]
-                plausible_transforms.append(Hp)
+                if torch.any(plausible):
+                    Hp = H[plausible]
+                    plausible_transforms.append(Hp)
         else:
             # evaluate the pts in chunks since we can't load all points in memory at the same time
             rot_chunk = 5
