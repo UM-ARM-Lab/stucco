@@ -1334,19 +1334,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
     def hook_after_last_poke(self, seed):
         pass
 
-    def evaluate_registrations(self):
-        """Responsible for populating to_export"""
-        self.method.register_transforms(self.transforms_per_object[self.best_segment_idx], self.best_tsf_guess)
-        logger.debug(f"err each obj {np.round(self.dist_per_est_obj, 4)}")
-
-        # sampled transforms and all plausible transforms
-        T = self.transforms_per_object[self.best_segment_idx]
-        Tp = self.plausible_set[self.pokes]
-
-        # NOTE that T is already inverted, so no need for T.inverse() * T
-        # however, Tinv is useful for plotting purposes
-        Tinv = T.inverse()
-
+    def _do_evaluate_plausible_diversity_on_best_quantile(self, T, Tp, Tinv, to_plot=False):
         # effectively can apply one transform then take the inverse using the other one; if they are the same, then
         # we should end up in the base frame if that T == Tp
         # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
@@ -1354,12 +1342,6 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         # the einsum does the multiplication below and is about twice as fast
         Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
 
-        # evaluate_chamfer_distance()
-
-        # find pairwise chamfer distance between the sampled transforms
-        # when evaluating, move the best guess pose far away to improve clarity
-        self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
-                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
         B, P = Iapprox.shape[:2]
         errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
                                                      self.env.obj_factory, 0)
@@ -1372,7 +1354,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         bp_coverage = best_per_plausible.values.sum() / P
 
         # sampled vs closest plausible transform
-        if self.plot_meshes:
+        if self.plot_meshes and to_plot:
             self.env.draw_user_text("sampled (green) vs closest plausible (blue)", xy=[-0.1, -0.1, -0.5])
             for b in range(B):
                 p = best_per_sampled.indices[b]
@@ -1393,38 +1375,56 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
                                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
                 time.sleep(self.sleep_between_plots)
 
-        # NOTE different multiplication order Tp @ T is also valid
-        Iapprox = Tp.view(-1, 1, 4, 4) @ T.view(1, -1, 4, 4)
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
-                                                     self.env.obj_factory, 0)
-        errors_per_batch = errors_per_batch.view(P, B)
-        best_per_sampled = errors_per_batch.min(dim=0)
-        best_per_plausible = errors_per_batch.min(dim=1)
-        pb_plausibility = best_per_sampled.values.sum() / B
-        pb_coverage = best_per_plausible.values.sum() / P
+        return bp_plausibility, bp_coverage
 
-        logger.info(
-            f"pokes {self.pokes} BP plausibility {bp_plausibility.item():.0f} coverage {bp_coverage.item():.0f} "
-            f"PB plausibility {pb_plausibility.item():.0f} coverage {pb_coverage.item():.0f}")
-        self.plausibility = bp_plausibility
-        self.coverage = bp_coverage
+    def evaluate_registrations(self):
+        """Responsible for populating to_export"""
+        self.method.register_transforms(self.transforms_per_object[self.best_segment_idx], self.best_tsf_guess)
+        logger.debug(f"err each obj {np.round(self.dist_per_est_obj, 4)}")
+
+        # sampled transforms and all plausible transforms
+        T = self.transforms_per_object[self.best_segment_idx]
+        Tp = self.plausible_set[self.pokes]
+        rmse = self.rmse_per_object[self.best_segment_idx]
+
+        # NOTE that T is already inverted, so no need for T.inverse() * T
+        # however, Tinv is useful for plotting purposes
+        Tinv = T.inverse()
+
+        # when evaluating, move the best guess pose far away to improve clarity
+        self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
+                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+
+        self.plausibility = {}
+        self.coverage = {}
+        for quantile in [1.0, 0.75, 0.5]:
+            thresh = torch.quantile(rmse, quantile)
+            used = rmse <= thresh
+            to_plot = quantile == 1.0
+            bp_plausibility, bp_coverage = self._do_evaluate_plausible_diversity_on_best_quantile(T[used], Tp,
+                                                                                                  Tinv[used], to_plot)
+            logger.info(f"pokes {self.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
+                        f"coverage {bp_coverage.item():.0f}")
+            self.plausibility[quantile] = bp_plausibility
+            self.coverage[quantile] = bp_coverage
 
     def export_metrics(self, cache, name, seed):
         """Responsible for populating to_export and saving to database"""
         batch = np.arange(self.B)
-        df = pd.DataFrame(
-            {"method": self.reg_method.name, "level": self.env.level.name,
-             "name": name,
-             "seed": seed, "poke": self.pokes,
-             "batch": batch,
-             "plausibility": self.plausibility.item(),
-             "coverage": self.coverage.item(),
-             "plausible_diversity": (self.plausibility + self.coverage).item(),
-             })
+        data = {"method": self.reg_method.name, "level": self.env.level.name,
+                "name": name,
+                "seed": seed, "poke": self.pokes,
+                "batch": batch,
+                }
+        for quantile in self.plausibility.keys():
+            data[f"plausibility_q{quantile}"] = self.plausibility[quantile].item()
+            data[f"coverage_q{quantile}"] = self.coverage[quantile].item()
+            data[f"plausible_diversity_q{quantile}"] = (self.plausibility[quantile] + self.coverage[quantile]).item()
 
+        df = pd.DataFrame(data)
         cols = list(cache.columns)
         cols_next = [c for c in df.columns if c not in cols]
-        if "plausibility" not in cols:
+        if "plausibility_q1.0" not in cols:
             dd = pd.merge(cache, df, how="outer", suffixes=('', '_y'))
         else:
             # this will replace values that are shared between cache and df with those of df
