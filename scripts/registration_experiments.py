@@ -1397,7 +1397,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
             bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible = self._do_evaluate_plausible_diversity_on_best_quantile(
                 quantile_errors_per_batch)
             logger.info(f"pokes {self.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
-                        f"coverage {bp_coverage.item():.0f}")
+                        f"coverage {bp_coverage.item():.0f} against {P} plausible transforms")
             self.plausibility[quantile] = bp_plausibility
             self.coverage[quantile] = bp_coverage
 
