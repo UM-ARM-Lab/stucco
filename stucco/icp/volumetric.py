@@ -6,6 +6,8 @@ import warnings
 from typing import Union, Optional
 
 from arm_pytorch_utilities.tensor_utils import ensure_tensor
+from arm_pytorch_utilities import grad
+
 from pytorch3d.ops import utils as oputil
 from torch import optim
 
@@ -21,7 +23,7 @@ from stucco import cfg
 
 import cma
 from ribs.archives import GridArchive
-from ribs.emitters import EvolutionStrategyEmitter
+from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter
 from ribs.schedulers import Scheduler
 
 from stucco.svgd import RBF, SVGD
@@ -78,11 +80,13 @@ def plot_cmame_archive(archive):
     plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
     restart_index += 1
 
+
 class Optimization(enum.Enum):
     SGD = 0
     CMAES = 1
     CMAME = 2
     SVGD = 3
+    CMAMEGA = 4
 
 
 def iterative_closest_point_volumetric(
@@ -372,6 +376,107 @@ def iterative_closest_point_volumetric_cmame(
         # note that objective is -cost
         R, T = get_torch_RT(np.stack(solutions))
         cost = volumetric_cost(R, T, s)
+        losses.append(cost)
+        # behavior is the xy translation
+        bcs = solutions[:, 6:8]
+        scheduler.tell(-cost.cpu().numpy(), bcs)
+
+    df = archive.as_pandas()
+    objectives = df.batch_objectives()
+    solutions = df.batch_solutions()
+    if len(solutions) > b:
+        order = np.argpartition(-objectives, b)
+        solutions = solutions[order[:b]]
+    # convert back to R, T
+    R, T = get_torch_RT(solutions)
+    rmse = volumetric_cost(R, T, s)
+
+    if save_loss_plot:
+        plot_cmame_archive(archive)
+
+    if oputil.is_pointclouds(X):
+        Xt = X.update_padded(Xt)  # type: ignore
+
+    return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+
+def iterative_closest_point_volumetric_cmamega(
+        volumetric_cost: VolumetricCost,
+        X: Union[torch.Tensor, "Pointclouds"],
+        init_transform: Optional[SimilarityTransform] = None,
+        bins=40,
+        iterations=1000,
+        ranges=None,
+        save_loss_plot=True,
+        **kwargs,
+) -> ICPSolution:
+    # make sure we convert input Pointclouds structures to
+    # padded tensors of shape (N, P, 3)
+    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+    Xt, R, T, s = apply_init_transform(Xt, init_transform)
+    b = Xt.shape[0]
+
+    # initialize the transformation history
+    t_history = []
+    losses = []
+
+    # --- CMA-MEGA
+    device = Xt.device
+    dtype = Xt.dtype
+
+    def get_torch_RT(x):
+        q_ = x[:, :6]
+        t = x[:, 6:]
+        qq, TT = ensure_tensor(device, dtype, q_, t)
+        RR = rotation_6d_to_matrix(qq)
+        return RR, TT
+
+    q0 = matrix_to_rotation_6d(R[0])
+    T0 = T[0]
+    x0 = torch.cat([q0, T0]).cpu().numpy()
+
+    # extract ranges from the boundaries of the free voxels
+    if ranges is None:
+        if isinstance(volumetric_cost.free_voxels, util.VoxelGrid):
+            ranges = volumetric_cost.free_voxels.range_per_dim[:2]
+        else:
+            raise RuntimeError("Range not given and cannot be inferred from the freespace voxels")
+
+    archive = GridArchive(solution_dim=len(x0), dims=[bins, bins], ranges=ranges)
+    emitters = [
+        GradientArborescenceEmitter(archive, x0=x0, sigma0=1.0, lr=0.002, grad_opt="adam", selection_rule="mu",
+                                    bounds=None, batch_size=b - 1)
+    ]
+    scheduler = Scheduler(archive, emitters)
+
+    def f(x):
+        R, T = get_torch_RT(x)
+        return volumetric_cost(R, T, None)
+
+    for i in range(iterations):
+        # dqd part
+        solutions = scheduler.ask_dqd()
+        bcs = solutions[:, 6:8]
+        # evaluate the models and record the objective and behavior
+        # note that objective is -cost
+        # get objective gradient and also the behavior gradient
+        x = ensure_tensor(device, dtype, solutions)
+        cost = f(x)
+        objective = -cost.cpu().numpy()
+        objective_grad = -grad.batch_jacobian(f, x)
+        # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
+        behavior_grad = np.zeros((bcs.shape[-1], solutions.shape[-1]))
+        behavior_grad[:, 6:8] = np.eye(2)
+        behavior_grad = np.tile(behavior_grad, (x.shape[0], 1, 1))
+
+        jacobian = np.concatenate((objective_grad.cpu().numpy(), behavior_grad), axis=1)
+        scheduler.tell_dqd(objective, bcs, jacobian)
+
+        solutions = scheduler.ask()
+        # evaluate the models and record the objective and behavior
+        # note that objective is -cost
+        R, T = get_torch_RT(np.stack(solutions))
+        cost = volumetric_cost(R, T, None)
         losses.append(cost)
         # behavior is the xy translation
         bcs = solutions[:, 6:8]

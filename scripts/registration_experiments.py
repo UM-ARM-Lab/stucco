@@ -171,6 +171,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
             optimization = volumetric.Optimization.CMAES
         elif reg_method == icp.ICPMethod.VOLUMETRIC_CMAME:
             optimization = volumetric.Optimization.CMAME
+        elif reg_method == icp.ICPMethod.VOLUMETRIC_CMAMEGA:
+            optimization = volumetric.Optimization.CMAMEGA
         elif reg_method == icp.ICPMethod.VOLUMETRIC_SVGD:
             optimization = volumetric.Optimization.SVGD
         # so given_init_pose expects world frame to object frame
