@@ -14,6 +14,7 @@ class ICPMethod(enum.Enum):
     VOLUMETRIC_LIMITED_REINIT = 9
     VOLUMETRIC_CMAES = 10
     VOLUMETRIC_CMAME = 14
+    VOLUMETRIC_CMAMEGA = 15
     VOLUMETRIC_SVGD = 11
     VOLUMETRIC_LIMITED_REINIT_FULL = 13
 
@@ -25,7 +26,7 @@ class ICPMethod(enum.Enum):
     MEDIAL_CONSTRAINT = 8
     CVO = 12
 
-    NONE = 15
+    NONE = 16
 
 
 class InitMethod(enum.Enum):
