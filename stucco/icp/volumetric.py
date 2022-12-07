@@ -21,8 +21,8 @@ from stucco import cfg
 
 import cma
 from ribs.archives import GridArchive
-from ribs.emitters import ImprovementEmitter
-from ribs.optimizers import Optimizer
+from ribs.emitters import EvolutionStrategyEmitter
+from ribs.schedulers import Scheduler
 
 from stucco.svgd import RBF, SVGD
 
@@ -361,13 +361,13 @@ def iterative_closest_point_volumetric_cmame(
         else:
             raise RuntimeError("Range not given and cannot be inferred from the freespace voxels")
 
-    archive = GridArchive([bins, bins], ranges)
+    archive = GridArchive(solution_dim=len(x0), dims=[bins, bins], ranges=ranges)
     emitters = [
-        ImprovementEmitter(archive, x0, 1.0, batch_size=b)
+        EvolutionStrategyEmitter(archive, x0=x0, sigma0=1.0, batch_size=b)
     ]
-    optimizer = Optimizer(archive, emitters)
+    scheduler = Scheduler(archive, emitters)
     for i in range(iterations):
-        solutions = optimizer.ask()
+        solutions = scheduler.ask()
         # evaluate the models and record the objective and behavior
         # note that objective is -cost
         R, T = get_torch_RT(np.stack(solutions))
@@ -375,7 +375,7 @@ def iterative_closest_point_volumetric_cmame(
         losses.append(cost)
         # behavior is the xy translation
         bcs = solutions[:, 6:8]
-        optimizer.tell(-cost.cpu().numpy(), bcs)
+        scheduler.tell(-cost.cpu().numpy(), bcs)
 
     df = archive.as_pandas()
     objectives = df.batch_objectives()

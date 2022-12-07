@@ -8,18 +8,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from arm_pytorch_utilities.rand import seed
+from arm_pytorch_utilities import grad
 
 from stucco.icp.volumetric import plot_restart_losses
 from stucco.svgd import RBF, SVGD
 import cma
 from ribs.archives import GridArchive
-from ribs.emitters import ImprovementEmitter
-from ribs.optimizers import Optimizer
+from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter
+from ribs.schedulers import Scheduler
 
 
 def f(x, y):
     # return np.sin(np.sqrt(x ** 2 + y ** 2)) / np.abs(x * y)
     return (1 - torch.exp(-(x ** 2 + y ** 2)) * torch.abs(x + y)) + (x ** 2 + y ** 2) * 0.1
+
+
+def gradf(xy):
+    def ff(x):
+        return f(x[..., 0], x[..., 1]).view(-1, 1, 1)
+
+    return grad.batch_jacobian(ff, xy)
 
 
 x = np.linspace(-3, 3, 30)
@@ -93,9 +101,10 @@ class OptimizationMethod(enum.Enum):
     SVGD = 0
     CMAES = 1
     CMAME = 2
+    CMA_MEGA = 3
 
 
-method = OptimizationMethod.CMAME
+method = OptimizationMethod.CMA_MEGA
 losses = []
 
 if method is OptimizationMethod.SVGD:
@@ -151,14 +160,14 @@ elif method is OptimizationMethod.CMAES:
 elif method is OptimizationMethod.CMAME:
     # use x,y as the behavior space we want to optimize over (equal to the actual search space)
     bins = 50
-    archive = GridArchive([bins, bins], [(-3, 3), (-3, 3)])
+    archive = GridArchive(solution_dim=2, dims=[bins, bins], ranges=[(-3, 3), (-3, 3)])
     initial_x = np.zeros(2)
     emitters = [
-        ImprovementEmitter(archive, initial_x, 1.0, batch_size=B) for _ in range(5)
+        EvolutionStrategyEmitter(archive, x0=initial_x, sigma0=1.0, batch_size=B) for _ in range(5)
     ]
-    optimizer = Optimizer(archive, emitters)
+    scheduler = Scheduler(archive, emitters)
     for i in range(100):
-        solutions = optimizer.ask()
+        solutions = scheduler.ask()
         # evaluate the models and record the objective and behavior
         # note that objective is -cost
         particles = torch.tensor(solutions, device=device)
@@ -178,7 +187,59 @@ elif method is OptimizationMethod.CMAME:
 
         # behavior is just the solution
         bcs = solutions
-        optimizer.tell(-cost.cpu().numpy(), bcs)
+        scheduler.tell(-cost.cpu().numpy(), bcs)
+
+    # from ribs.visualize import grid_archive_heatmap
+    # plt.figure(figsize=(8,6))
+    # grid_archive_heatmap(archive)
+
+elif method is OptimizationMethod.CMA_MEGA:
+    # use x,y as the behavior space we want to optimize over (equal to the actual search space)
+    bins = 50
+    archive = GridArchive(solution_dim=2, dims=[bins, bins], ranges=[(-3, 3), (-3, 3)])
+    initial_x = np.zeros(2)
+    emitters = [
+        GradientArborescenceEmitter(archive, x0=initial_x, sigma0=1.0, lr=0.002, grad_opt="adam", selection_rule="mu",
+                                    bounds=None, batch_size=B - 1)
+    ]
+    scheduler = Scheduler(archive, emitters)
+    for i in range(100):
+        # dqd part
+        solutions = scheduler.ask_dqd()
+        bcs = solutions
+        # evaluate the models and record the objective and behavior
+        # note that objective is -cost
+        # get objective gradient and also the behavior gradient
+        particles = torch.tensor(solutions, device=device)
+        cost = f(particles[..., 0], particles[..., 1])
+        objective = -cost.cpu().numpy()
+        objective_grad = -gradf(particles)
+
+        behavior_grad = np.tile(np.eye(2), (particles.shape[0], 1, 1))
+
+        jacobian = np.concatenate((objective_grad.cpu().numpy(), behavior_grad), axis=1)
+        scheduler.tell_dqd(objective, bcs, jacobian)
+
+        # regular part
+        solutions = scheduler.ask()
+        particles = torch.tensor(solutions, device=device)
+        cost = f(particles[..., 0], particles[..., 1])
+        losses.append(cost)
+
+        # those particles are just random ones found during the search - what we want is a look at the best particles
+        if i > 0:
+            df = archive.as_pandas()
+            o = df.objective_batch()
+            s = df.solution_batch()
+            if len(s) > B:
+                order = np.argpartition(-o, B)
+                s = s[order[:B]]
+            particles = torch.tensor(s, device=device)
+            plot_particles(i)
+
+        # behavior is just the solution
+        bcs = solutions
+        scheduler.tell(-cost.cpu().numpy(), bcs)
 
     # from ribs.visualize import grid_archive_heatmap
     # plt.figure(figsize=(8,6))
