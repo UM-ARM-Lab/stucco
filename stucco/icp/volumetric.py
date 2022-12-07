@@ -382,8 +382,8 @@ def iterative_closest_point_volumetric_cmame(
         scheduler.tell(-cost.cpu().numpy(), bcs)
 
     df = archive.as_pandas()
-    objectives = df.batch_objectives()
-    solutions = df.batch_solutions()
+    objectives = df.objective_batch()
+    solutions = df.solution_batch()
     if len(solutions) > b:
         order = np.argpartition(-objectives, b)
         solutions = solutions[order[:b]]
@@ -406,13 +406,23 @@ def iterative_closest_point_volumetric_cmamega(
         init_transform: Optional[SimilarityTransform] = None,
         bins=40,
         iterations=1000,
+        # can either specify an explicit range
         ranges=None,
+        # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
+        object_length_scale=0.1,
+        poke_offset_direction=(0.5, 0),  # default is forward along x; |offset| < 1 to represent uncertainty
         save_loss_plot=True,
         **kwargs,
 ) -> ICPSolution:
     # make sure we convert input Pointclouds structures to
     # padded tensors of shape (N, P, 3)
     Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
+    # extract ranges from the centroid of made contacts
+    if ranges is None:
+        centroid = Xt.mean(dim=-2)
+        l = object_length_scale
+        centroid += l * np.array(poke_offset_direction)
+        ranges = np.array((centroid - l, centroid + l))
     Xt, R, T, s = apply_init_transform(Xt, init_transform)
     b = Xt.shape[0]
 
@@ -434,13 +444,6 @@ def iterative_closest_point_volumetric_cmamega(
     q0 = matrix_to_rotation_6d(R[0])
     T0 = T[0]
     x0 = torch.cat([q0, T0]).cpu().numpy()
-
-    # extract ranges from the boundaries of the free voxels
-    if ranges is None:
-        if isinstance(volumetric_cost.free_voxels, util.VoxelGrid):
-            ranges = volumetric_cost.free_voxels.range_per_dim[:2]
-        else:
-            raise RuntimeError("Range not given and cannot be inferred from the freespace voxels")
 
     archive = GridArchive(solution_dim=len(x0), dims=[bins, bins], ranges=ranges)
     emitters = [
@@ -483,8 +486,8 @@ def iterative_closest_point_volumetric_cmamega(
         scheduler.tell(-cost.cpu().numpy(), bcs)
 
     df = archive.as_pandas()
-    objectives = df.batch_objectives()
-    solutions = df.batch_solutions()
+    objectives = df.objective_batch()
+    solutions = df.solution_batch()
     if len(solutions) > b:
         order = np.argpartition(-objectives, b)
         solutions = solutions[order[:b]]
