@@ -1315,7 +1315,7 @@ class PlotPlausibleSetRunner(PlausibleSetRunner):
 class EvaluatePlausibleSetRunner(PlausibleSetRunner):
     def __init__(self, *args, plot_meshes=True, sleep_between_plots=0.1, **kwargs):
         super(EvaluatePlausibleSetRunner, self).__init__(*args, **kwargs)
-        self.plot_meshes = plot_meshes
+        self.plot_meshes = plot_meshes and self.env.mode == p.GUI
         self.sleep_between_plots = sleep_between_plots
         # always read stored with the plausible set evaluation
         self.read_stored = True
@@ -1345,18 +1345,8 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
     def hook_after_last_poke(self, seed):
         pass
 
-    def _do_evaluate_plausible_diversity_on_best_quantile(self, T, Tp, Tinv, to_plot=False):
-        # effectively can apply one transform then take the inverse using the other one; if they are the same, then
-        # we should end up in the base frame if that T == Tp
-        # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
-        # Iapprox = torch.einsum("bij,pjk->bpik", T, Tp)
-        # the einsum does the multiplication below and is about twice as fast
-        Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
-
-        B, P = Iapprox.shape[:2]
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
-                                                     self.env.obj_factory, 0)
-        errors_per_batch = errors_per_batch.view(B, P)
+    def _do_evaluate_plausible_diversity_on_best_quantile(self, errors_per_batch):
+        B, P = errors_per_batch.shape
 
         best_per_sampled = errors_per_batch.min(dim=1)
         best_per_plausible = errors_per_batch.min(dim=0)
@@ -1364,29 +1354,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         bp_plausibility = best_per_sampled.values.sum() / B
         bp_coverage = best_per_plausible.values.sum() / P
 
-        # sampled vs closest plausible transform
-        if self.plot_meshes and to_plot:
-            self.env.draw_user_text("sampled (green) vs closest plausible (blue)", xy=[-0.1, -0.1, -0.5])
-            for b in range(B):
-                p = best_per_sampled.indices[b]
-                self.env.draw_user_text(f"{best_per_sampled.values[b].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
-                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
-                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                time.sleep(self.sleep_between_plots)
-
-            self.env.draw_user_text("plausible (blue) vs closest sampled (blue)", xy=[-0.1, -0.1, -0.5])
-            for p in range(P):
-                b = best_per_plausible.indices[p]
-                self.env.draw_user_text(f"{best_per_plausible.values[p].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
-                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
-                                   object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                time.sleep(self.sleep_between_plots)
-
-        return bp_plausibility, bp_coverage
+        return bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible
 
     def evaluate_registrations(self):
         """Responsible for populating to_export"""
@@ -1401,6 +1369,17 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         # NOTE that T is already inverted, so no need for T.inverse() * T
         # however, Tinv is useful for plotting purposes
         Tinv = T.inverse()
+        # effectively can apply one transform then take the inverse using the other one; if they are the same, then
+        # we should end up in the base frame if that T == Tp
+        # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
+        # Iapprox = torch.einsum("bij,pjk->bpik", T, Tp)
+        # the einsum does the multiplication below and is about twice as fast
+        Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
+
+        B, P = Iapprox.shape[:2]
+        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
+                                                     self.env.obj_factory, 0)
+        errors_per_batch = errors_per_batch.view(B, P)
 
         # when evaluating, move the best guess pose far away to improve clarity
         self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
@@ -1412,12 +1391,35 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
             thresh = torch.quantile(rmse, quantile)
             used = rmse <= thresh
             to_plot = quantile == 1.0
-            bp_plausibility, bp_coverage = self._do_evaluate_plausible_diversity_on_best_quantile(T[used], Tp,
-                                                                                                  Tinv[used], to_plot)
+            quantile_errors_per_batch = errors_per_batch[used]
+            bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible = self._do_evaluate_plausible_diversity_on_best_quantile(
+                quantile_errors_per_batch)
             logger.info(f"pokes {self.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
                         f"coverage {bp_coverage.item():.0f}")
             self.plausibility[quantile] = bp_plausibility
             self.coverage[quantile] = bp_coverage
+
+            # sampled vs closest plausible transform
+            if self.plot_meshes and to_plot:
+                self.env.draw_user_text("sampled (green) vs closest plausible (blue)", xy=[-0.1, -0.1, -0.5])
+                for b in range(B):
+                    p = best_per_sampled.indices[b]
+                    self.env.draw_user_text(f"{best_per_sampled.values[b].item():.0f}", xy=[-0.1, -0.2, -0.5])
+                    self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                                       object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                    self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                                       object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                    time.sleep(self.sleep_between_plots)
+
+                self.env.draw_user_text("plausible (blue) vs closest sampled (blue)", xy=[-0.1, -0.1, -0.5])
+                for p in range(P):
+                    b = best_per_plausible.indices[p]
+                    self.env.draw_user_text(f"{best_per_plausible.values[p].item():.0f}", xy=[-0.1, -0.2, -0.5])
+                    self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                                       object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                    self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                                       object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+                    time.sleep(self.sleep_between_plots)
 
     def export_metrics(self, cache, name, seed):
         """Responsible for populating to_export and saving to database"""
@@ -1434,12 +1436,22 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
 
         df = pd.DataFrame(data)
         cols = list(cache.columns)
+        # filter out stale columns (seems to be interferring with combine_first)
+        cols = [c for c in cols if c not in ('plausibility', 'coverage', 'plausible_diversity')]
+        cache = cache[cols]
         cols_next = [c for c in df.columns if c not in cols]
         if "plausibility_q1.0" not in cols:
             dd = pd.merge(cache, df, how="outer", suffixes=('', '_y'))
         else:
-            # this will replace values that are shared between cache and df with those of df
-            dd = df.combine_first(cache)
+            dd = pd.merge(cache, df, on=self.KEY_COLUMNS, how='outer')
+            # combine shared columns
+            pd_cols = [c for c in df.columns if ('plausi' in c) or ('coverage' in c)]
+            for c in pd_cols:
+                if c + "_x" in dd.columns:
+                    x = c + "_x"
+                    y = c + "_y"
+                    dd[c] = dd[y].fillna(dd[x])
+                    dd.drop([x, y], axis=1, inplace=True)
 
         # rearrange back in proper order
         dd = dd[cols + cols_next]
@@ -1780,10 +1792,26 @@ def plot_poke_results(args):
                      plot_median=False, x='poke', y='chamfer_err')
 
 
+def plot_poke_plausible_diversity(args):
+    def filter(df):
+        df = df[(df["level"] == level.name)]
+        df = df[df.batch == 0]
+        df = df[df['plausibility_q1.0'].notnull()]
+        return df
+
+    plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                     key_columns=PokeRunner.KEY_COLUMNS,
+                     logy=True, keep_lowest_y_quantile=1.0,
+                     save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
+                     show=not args.no_gui,
+                     plot_median=True, x='poke', y='plausibility_q0.75')
+
+
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
-                             'poke-visualize-sdf', 'poke-visualize-pcd', 'poke-results',
+                             'poke-visualize-sdf', 'poke-visualize-pcd',
+                             'poke-results', 'plot-poke-pd',
                              'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
                              'debug'],
                     help='which experiment to run')
@@ -1897,6 +1925,9 @@ if __name__ == "__main__":
 
     elif args.experiment == "poke-results":
         plot_poke_results(args)
+
+    elif args.experiment == "plot-poke-pd":
+        plot_poke_plausible_diversity(args)
 
     elif args.experiment == "debug":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
