@@ -154,6 +154,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
                         icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
                         icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL,
                         icp.ICPMethod.VOLUMETRIC_CMAES, icp.ICPMethod.VOLUMETRIC_CMAME,
+                        icp.ICPMethod.VOLUMETRIC_CMAMEGA,
                         icp.ICPMethod.VOLUMETRIC_SVGD]:
         if reg_method == icp.ICPMethod.VOLUMETRIC_NO_FREESPACE:
             volumetric_cost = copy.copy(volumetric_cost)

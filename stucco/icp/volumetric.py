@@ -28,6 +28,9 @@ from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter
 from ribs.schedulers import Scheduler
 
 from stucco.svgd import RBF, SVGD
+import logging
+
+logger = logging.getLogger(__name__)
 
 restart_index = 0
 sgd_index = 0
@@ -73,10 +76,10 @@ def plot_qd_archive(archive):
     fig, ax = plt.subplots()
     grid_archive_heatmap(archive, ax=ax, vmin=-4, vmax=0)
     # for MUSTARD task
-    # ax.scatter(0.25, 0)
+    ax.scatter(0.25, 0)
     ax.set_xlabel('x')
     ax.set_ylabel('y')
-    fig.suptitle(f"poke {restart_index}")
+    fig.suptitle(f"poke {restart_index} QD: {archive.stats.norm_qd_score}")
 
     plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
     restart_index += 1
@@ -317,8 +320,8 @@ class QDOptimization:
         return False
 
     def get_torch_RT(self, x):
-        q_ = x[:, :6]
-        t = x[:, 6:]
+        q_ = x[..., :6]
+        t = x[..., 6:]
         qq, TT = ensure_tensor(self.device, self.dtype, q_, t)
         RR = rotation_6d_to_matrix(qq)
         return RR, TT
@@ -369,10 +372,12 @@ class CMAME(QDOptimization):
         self.iterations = iterations
         self.ranges = ranges
         if self.ranges is None:
-            centroid = self.Xt.mean(dim=-2)
+            centroid = self.Xt.mean(dim=-2).mean(dim=-2).cpu().numpy()
+            # extract XY (leave Z to be searched on)
+            centroid = centroid[:2]
             l = object_length_scale
             centroid += l * np.array(poke_offset_direction)
-            self.ranges = np.array((centroid - l, centroid + l))
+            self.ranges = np.array((centroid - l, centroid + l)).T
 
         self.archive = None
         self.i = 0
@@ -394,6 +399,7 @@ class CMAME(QDOptimization):
         return x[..., 6:8]
 
     def step(self):
+        self.i += 1
         solutions = self.scheduler.ask()
         # evaluate the models and record the objective and behavior
         # note that objective is -cost
@@ -402,6 +408,7 @@ class CMAME(QDOptimization):
         bcs = self._measure(solutions)
         self.scheduler.tell(-cost.cpu().numpy(), bcs)
         qd = self.archive.stats.norm_qd_score
+        logger.debug("step %d norm QD score: %f", self.i, qd)
         return cost
 
     def process_final_results(self, s, losses):
@@ -446,15 +453,17 @@ class CMAMEGA(CMAME):
         # note that objective is -cost
         # get objective gradient and also the behavior gradient
         x = ensure_tensor(self.device, self.dtype, solutions)
+        x.requires_grad = True
         cost = self._f(x)
-        objective = -cost.cpu().numpy()
-        objective_grad = -grad.batch_jacobian(self._f, x)
+        cost.backward()
+        objective_grad = -x.grad.cpu().numpy()
+        objective = -cost.detach().cpu().numpy()
         # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
         behavior_grad = np.zeros((bcs.shape[-1], solutions.shape[-1]))
         behavior_grad[:, 6:8] = np.eye(2)
         behavior_grad = np.tile(behavior_grad, (x.shape[0], 1, 1))
 
-        jacobian = np.concatenate((objective_grad.cpu().numpy(), behavior_grad), axis=1)
+        jacobian = np.concatenate((objective_grad.reshape(1, 1, -1), behavior_grad), axis=1)
         self.scheduler.tell_dqd(objective, bcs, jacobian)
 
         return super(CMAMEGA, self).step()
