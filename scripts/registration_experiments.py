@@ -422,6 +422,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     methods_order = [m for m in full_method_order if m in method_to_name]
     category_order = [m for m in full_category_order if m in method_to_name.values()]
+    fig = plt.figure()
     if scatter:
         res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
     else:
@@ -453,6 +454,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
+        plt.close(fig)
     if show:
         plt.show()
 
@@ -1768,7 +1770,7 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0):
             input()
 
 
-def plot_poke_results(args):
+def plot_poke_chamfer_err(args):
     def filter(df):
         # df = df[df["level"].str.contains(level.name) & (
         #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
@@ -1797,23 +1799,27 @@ def plot_poke_results(args):
 def plot_poke_plausible_diversity(args):
     def filter(df):
         df = df[(df["level"] == level.name)]
+        # df = df[(df["level"].str.contains(level.name))]
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
         return df
 
-    plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                     key_columns=PokeRunner.KEY_COLUMNS,
-                     logy=True, keep_lowest_y_quantile=1.0,
-                     save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
-                     show=not args.no_gui,
-                     plot_median=True, x='poke', y='plausibility_q0.75')
+    # choose from 0.50, 0.75, 1.0
+    quantile = 0.75
+    for y in ['plausibility', 'coverage', 'plausible_diversity']:
+        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
+                         key_columns=PokeRunner.KEY_COLUMNS,
+                         logy=True, keep_lowest_y_quantile=1.0,
+                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.png"),
+                         show=not args.no_gui,
+                         plot_median=True, x='poke', y=f'{y}_q{quantile}')
 
 
 parser = argparse.ArgumentParser(description='Object registration from contact')
 parser.add_argument('experiment',
                     choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
                              'poke-visualize-sdf', 'poke-visualize-pcd',
-                             'poke-results', 'plot-poke-pd',
+                             'plot-poke-ce', 'plot-poke-pd',
                              'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
                              'debug'],
                     help='which experiment to run')
@@ -1925,8 +1931,8 @@ if __name__ == "__main__":
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
-    elif args.experiment == "poke-results":
-        plot_poke_results(args)
+    elif args.experiment == "plot-poke-ce":
+        plot_poke_chamfer_err(args)
 
     elif args.experiment == "plot-poke-pd":
         plot_poke_plausible_diversity(args)
