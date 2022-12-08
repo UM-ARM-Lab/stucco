@@ -1,3 +1,4 @@
+import abc
 import enum
 
 import numpy as np
@@ -65,7 +66,7 @@ def plot_sgd_losses(losses):
     sgd_index += 1
 
 
-def plot_cmame_archive(archive):
+def plot_qd_archive(archive):
     global restart_index
     from ribs.visualize import grid_archive_heatmap
 
@@ -258,250 +259,205 @@ def apply_init_transform(Xt, init_transform: Optional[SimilarityTransform] = Non
     return Xt, R, T, s
 
 
-def iterative_closest_point_volumetric_cmaes(
-        volumetric_cost: VolumetricCost,
-        X: Union[torch.Tensor, "Pointclouds"],
-        init_transform: Optional[SimilarityTransform] = None,
-        sigma=0.1,
-        save_loss_plot=True,
-        **kwargs,
-) -> ICPSolution:
-    # make sure we convert input Pointclouds structures to
-    # padded tensors of shape (N, P, 3)
-    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-    Xt, R, T, s = apply_init_transform(Xt, init_transform)
-    b = Xt.shape[0]
+class QDOptimization:
+    def __init__(self, volumetric_cost: VolumetricCost,
+                 X: Union[torch.Tensor, "Pointclouds"],
+                 init_transform: Optional[SimilarityTransform] = None,
+                 sigma=0.1,
+                 save_loss_plot=True):
+        self.volumetric_cost = volumetric_cost
+        self.X = X
+        self.Xt, self.num_points_X = oputil.convert_pointclouds_to_tensor(X)
+        self.B = self.Xt.shape[0]
 
-    converged = False
+        self.init_transform = init_transform
+        self.sigma = sigma
+        self.save_loss_plot = save_loss_plot
 
-    # initialize the transformation history
-    t_history = []
-    losses = []
+        self.device = self.Xt.device
+        self.dtype = self.Xt.dtype
 
-    # --- CMA-ES
-    device = Xt.device
-    dtype = Xt.dtype
+    def run(self, *args, **kwargs):
+        Xt, R, T, s = apply_init_transform(self.Xt, self.init_transform)
 
-    def get_torch_RT(x):
+        # initialize the transformation history
+        t_history = []
+        losses = []
+
+        q0 = matrix_to_rotation_6d(R[0])
+        T0 = T[0]
+        x0 = torch.cat([q0, T0]).cpu().numpy()
+        self.scheduler = self.create_scheduler(x0, *args, **kwargs)
+
+        while not self.is_done():
+            cost = self.step()
+            losses.append(cost)
+
+        R, T, rmse = self.process_final_results(s, losses)
+
+        if oputil.is_pointclouds(self.X):
+            Xt = X.update_padded(Xt)  # type: ignore
+
+        return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+    @abc.abstractmethod
+    def create_scheduler(self, x0, *args, **kwargs):
+        pass
+
+    @abc.abstractmethod
+    def step(self):
+        pass
+
+    @abc.abstractmethod
+    def process_final_results(self, s, losses):
+        pass
+
+    @abc.abstractmethod
+    def is_done(self):
+        return False
+
+    def get_torch_RT(self, x):
         q_ = x[:, :6]
         t = x[:, 6:]
-        qq, TT = ensure_tensor(device, dtype, q_, t)
+        qq, TT = ensure_tensor(self.device, self.dtype, q_, t)
         RR = rotation_6d_to_matrix(qq)
         return RR, TT
 
-    # TODO investigate why we're always offset by a little
-    q0 = matrix_to_rotation_6d(R[0])
-    T0 = T[0]
-    x0 = torch.cat([q0, T0]).cpu().numpy()
-    options = {"popsize": b, "seed": np.random.randint(0, 10000), "tolfun": 1e-5, "tolfunhist": 1e-6}
-    options.update(kwargs)
-    es = cma.CMAEvolutionStrategy(x0=x0, sigma0=sigma, inopts=options)
-    while not es.stop():
-        solutions = es.ask()
+
+class CMAES(QDOptimization):
+    def create_scheduler(self, x0, *args, **kwargs):
+        options = {"popsize": self.B, "seed": np.random.randint(0, 10000), "tolfun": 1e-5, "tolfunhist": 1e-6}
+        options.update(kwargs)
+        es = cma.CMAEvolutionStrategy(x0=x0, sigma0=self.sigma, inopts=options)
+        return es
+
+    def is_done(self):
+        return self.scheduler.stop()
+
+    def step(self):
+        solutions = self.scheduler.ask()
         # convert back to R, T, s
-        R, T = get_torch_RT(np.stack(solutions))
-        cost = volumetric_cost(R, T, s)
-        losses.append(cost)
-        # cost = cost.numpy()
-        es.tell(solutions, cost.cpu().numpy())
+        R, T = self.get_torch_RT(np.stack(solutions))
+        cost = self.volumetric_cost(R, T, None)
+        self.scheduler.tell(solutions, cost.cpu().numpy())
+        return cost
 
-    # convert ES back to R, T
-    solutions = es.ask()
-    R, T = get_torch_RT(np.stack(solutions))
-    # print("init")
-    # print(T0)
-    # print("sol")
-    # print(T[0])
-    rmse = volumetric_cost(R, T, s)
+    def process_final_results(self, s, losses):
+        # convert ES back to R, T
+        solutions = self.scheduler.ask()
+        R, T = self.get_torch_RT(np.stack(solutions))
+        rmse = self.volumetric_cost(R, T, s)
 
-    if save_loss_plot:
-        plot_restart_losses(losses)
+        if self.save_loss_plot:
+            plot_restart_losses(losses)
 
-    if oputil.is_pointclouds(X):
-        Xt = X.update_padded(Xt)  # type: ignore
-
-    return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+        return R, T, rmse
 
 
-def iterative_closest_point_volumetric_cmame(
-        volumetric_cost: VolumetricCost,
-        X: Union[torch.Tensor, "Pointclouds"],
-        init_transform: Optional[SimilarityTransform] = None,
-        bins=40,
-        iterations=1000,
-        ranges=None,
-        save_loss_plot=True,
-        **kwargs,
-) -> ICPSolution:
-    # make sure we convert input Pointclouds structures to
-    # padded tensors of shape (N, P, 3)
-    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-    Xt, R, T, s = apply_init_transform(Xt, init_transform)
-    b = Xt.shape[0]
+class CMAME(QDOptimization):
+    def __init__(self, *args, bins=40, iterations=1000,
+                 # can either specify an explicit range
+                 ranges=None,
+                 # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
+                 object_length_scale=0.1,
+                 poke_offset_direction=(0.5, 0),  # default is forward along x; |offset| < 1 to represent uncertainty
+                 **kwargs):
+        if "sigma" not in kwargs:
+            kwargs["sigma"] = 1.0
+        super(CMAME, self).__init__(*args, **kwargs)
+        self.bins = bins
+        self.iterations = iterations
+        self.ranges = ranges
+        if self.ranges is None:
+            centroid = self.Xt.mean(dim=-2)
+            l = object_length_scale
+            centroid += l * np.array(poke_offset_direction)
+            self.ranges = np.array((centroid - l, centroid + l))
 
-    # initialize the transformation history
-    t_history = []
-    losses = []
+        self.archive = None
+        self.i = 0
 
-    # --- CMA-ME
-    device = Xt.device
-    dtype = Xt.dtype
+    def create_scheduler(self, x0, *args, **kwargs):
+        self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
+        emitters = [
+            EvolutionStrategyEmitter(self.archive, x0=x0, sigma0=1.0, batch_size=self.B)
+        ]
+        scheduler = Scheduler(self.archive, emitters)
+        return scheduler
 
-    def get_torch_RT(x):
-        q_ = x[:, :6]
-        t = x[:, 6:]
-        qq, TT = ensure_tensor(device, dtype, q_, t)
-        RR = rotation_6d_to_matrix(qq)
-        return RR, TT
+    def is_done(self):
+        return self.i >= self.iterations
 
-    q0 = matrix_to_rotation_6d(R[0])
-    T0 = T[0]
-    x0 = torch.cat([q0, T0]).cpu().numpy()
+    @staticmethod
+    def _measure(x):
+        # behavior is the xy translation
+        return x[..., 6:8]
 
-    # extract ranges from the boundaries of the free voxels
-    if ranges is None:
-        if isinstance(volumetric_cost.free_voxels, util.VoxelGrid):
-            ranges = volumetric_cost.free_voxels.range_per_dim[:2]
-        else:
-            raise RuntimeError("Range not given and cannot be inferred from the freespace voxels")
-
-    archive = GridArchive(solution_dim=len(x0), dims=[bins, bins], ranges=ranges)
-    emitters = [
-        EvolutionStrategyEmitter(archive, x0=x0, sigma0=1.0, batch_size=b)
-    ]
-    scheduler = Scheduler(archive, emitters)
-    for i in range(iterations):
-        solutions = scheduler.ask()
+    def step(self):
+        solutions = self.scheduler.ask()
         # evaluate the models and record the objective and behavior
         # note that objective is -cost
-        R, T = get_torch_RT(np.stack(solutions))
-        cost = volumetric_cost(R, T, s)
-        losses.append(cost)
-        # behavior is the xy translation
-        bcs = solutions[:, 6:8]
-        scheduler.tell(-cost.cpu().numpy(), bcs)
+        R, T = self.get_torch_RT(np.stack(solutions))
+        cost = self.volumetric_cost(R, T, None)
+        bcs = self._measure(solutions)
+        self.scheduler.tell(-cost.cpu().numpy(), bcs)
+        qd = self.archive.stats.norm_qd_score
+        return cost
 
-    df = archive.as_pandas()
-    objectives = df.objective_batch()
-    solutions = df.solution_batch()
-    if len(solutions) > b:
-        order = np.argpartition(-objectives, b)
-        solutions = solutions[order[:b]]
-    # convert back to R, T
-    R, T = get_torch_RT(solutions)
-    rmse = volumetric_cost(R, T, s)
+    def process_final_results(self, s, losses):
+        df = self.archive.as_pandas()
+        objectives = df.objective_batch()
+        solutions = df.solution_batch()
+        if len(solutions) > self.B:
+            order = np.argpartition(-objectives, self.B)
+            solutions = solutions[order[:self.B]]
+        # convert back to R, T
+        R, T = self.get_torch_RT(solutions)
+        rmse = self.volumetric_cost(R, T, s)
 
-    if save_loss_plot:
-        plot_cmame_archive(archive)
+        if self.save_loss_plot:
+            plot_qd_archive(self.archive)
 
-    if oputil.is_pointclouds(X):
-        Xt = X.update_padded(Xt)  # type: ignore
-
-    return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+        return R, T, rmse
 
 
-def iterative_closest_point_volumetric_cmamega(
-        volumetric_cost: VolumetricCost,
-        X: Union[torch.Tensor, "Pointclouds"],
-        init_transform: Optional[SimilarityTransform] = None,
-        bins=40,
-        iterations=1000,
-        # can either specify an explicit range
-        ranges=None,
-        # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
-        object_length_scale=0.1,
-        poke_offset_direction=(0.5, 0),  # default is forward along x; |offset| < 1 to represent uncertainty
-        save_loss_plot=True,
-        **kwargs,
-) -> ICPSolution:
-    # make sure we convert input Pointclouds structures to
-    # padded tensors of shape (N, P, 3)
-    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-    # extract ranges from the centroid of made contacts
-    if ranges is None:
-        centroid = Xt.mean(dim=-2)
-        l = object_length_scale
-        centroid += l * np.array(poke_offset_direction)
-        ranges = np.array((centroid - l, centroid + l))
-    Xt, R, T, s = apply_init_transform(Xt, init_transform)
-    b = Xt.shape[0]
+class CMAMEGA(CMAME):
+    def __init__(self, *args, lr=0.002, **kwargs):
+        super(CMAMEGA, self).__init__(*args, **kwargs)
+        self.lr = lr
 
-    # initialize the transformation history
-    t_history = []
-    losses = []
+    def create_scheduler(self, x0, *args, **kwargs):
+        self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
+        emitters = [
+            GradientArborescenceEmitter(self.archive, x0=x0, sigma0=self.sigma, lr=self.lr, grad_opt="adam",
+                                        selection_rule="mu", bounds=None, batch_size=self.B - 1)
+        ]
+        scheduler = Scheduler(self.archive, emitters)
+        return scheduler
 
-    # --- CMA-MEGA
-    device = Xt.device
-    dtype = Xt.dtype
+    def _f(self, x):
+        R, T = self.get_torch_RT(x)
+        return self.volumetric_cost(R, T, None)
 
-    def get_torch_RT(x):
-        q_ = x[:, :6]
-        t = x[:, 6:]
-        qq, TT = ensure_tensor(device, dtype, q_, t)
-        RR = rotation_6d_to_matrix(qq)
-        return RR, TT
-
-    q0 = matrix_to_rotation_6d(R[0])
-    T0 = T[0]
-    x0 = torch.cat([q0, T0]).cpu().numpy()
-
-    archive = GridArchive(solution_dim=len(x0), dims=[bins, bins], ranges=ranges)
-    emitters = [
-        GradientArborescenceEmitter(archive, x0=x0, sigma0=1.0, lr=0.002, grad_opt="adam", selection_rule="mu",
-                                    bounds=None, batch_size=b - 1)
-    ]
-    scheduler = Scheduler(archive, emitters)
-
-    def f(x):
-        R, T = get_torch_RT(x)
-        return volumetric_cost(R, T, None)
-
-    for i in range(iterations):
-        # dqd part
-        solutions = scheduler.ask_dqd()
-        bcs = solutions[:, 6:8]
+    def step(self):
+        solutions = self.scheduler.ask_dqd()
+        bcs = self._measure(solutions)
         # evaluate the models and record the objective and behavior
         # note that objective is -cost
         # get objective gradient and also the behavior gradient
-        x = ensure_tensor(device, dtype, solutions)
-        cost = f(x)
+        x = ensure_tensor(self.device, self.dtype, solutions)
+        cost = self._f(x)
         objective = -cost.cpu().numpy()
-        objective_grad = -grad.batch_jacobian(f, x)
+        objective_grad = -grad.batch_jacobian(self._f, x)
         # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
         behavior_grad = np.zeros((bcs.shape[-1], solutions.shape[-1]))
         behavior_grad[:, 6:8] = np.eye(2)
         behavior_grad = np.tile(behavior_grad, (x.shape[0], 1, 1))
 
         jacobian = np.concatenate((objective_grad.cpu().numpy(), behavior_grad), axis=1)
-        scheduler.tell_dqd(objective, bcs, jacobian)
+        self.scheduler.tell_dqd(objective, bcs, jacobian)
 
-        solutions = scheduler.ask()
-        # evaluate the models and record the objective and behavior
-        # note that objective is -cost
-        R, T = get_torch_RT(np.stack(solutions))
-        cost = volumetric_cost(R, T, None)
-        losses.append(cost)
-        # behavior is the xy translation
-        bcs = solutions[:, 6:8]
-        scheduler.tell(-cost.cpu().numpy(), bcs)
-
-    df = archive.as_pandas()
-    objectives = df.objective_batch()
-    solutions = df.solution_batch()
-    if len(solutions) > b:
-        order = np.argpartition(-objectives, b)
-        solutions = solutions[order[:b]]
-    # convert back to R, T
-    R, T = get_torch_RT(solutions)
-    rmse = volumetric_cost(R, T, s)
-
-    if save_loss_plot:
-        plot_cmame_archive(archive)
-
-    if oputil.is_pointclouds(X):
-        Xt = X.update_padded(Xt)  # type: ignore
-
-    return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+        return super(CMAMEGA, self).step()
 
 
 class CostProb:

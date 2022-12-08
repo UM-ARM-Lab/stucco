@@ -521,17 +521,14 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
                                                             init_transform=given_init_pose,
                                                             **kwargs)
     elif optimization == volumetric.Optimization.CMAES:
-        res = volumetric.iterative_closest_point_volumetric_cmaes(volumetric_cost, A.repeat(batch, 1, 1),
-                                                                  init_transform=given_init_pose,
-                                                                  **kwargs)
+        op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+        res = op.run()
     elif optimization == volumetric.Optimization.CMAME:
-        res = volumetric.iterative_closest_point_volumetric_cmame(volumetric_cost, A.repeat(batch, 1, 1),
-                                                                  init_transform=given_init_pose,
-                                                                  **kwargs)
+        op = volumetric.CMAME(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+        res = op.run()
     elif optimization == volumetric.Optimization.CMAMEGA:
-        res = volumetric.iterative_closest_point_volumetric_cmamega(volumetric_cost, A.repeat(batch, 1, 1),
-                                                                    init_transform=given_init_pose,
-                                                                    **kwargs)
+        op = volumetric.CMAMEGA(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+        res = op.run()
     elif optimization == volumetric.Optimization.SVGD:
         res = volumetric.iterative_closest_point_volumetric_svgd(volumetric_cost, A.repeat(batch, 1, 1),
                                                                  init_transform=given_init_pose,
