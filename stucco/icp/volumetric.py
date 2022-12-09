@@ -358,11 +358,11 @@ class CMAES(QDOptimization):
 
 
 class CMAME(QDOptimization):
-    def __init__(self, *args, bins=40, iterations=1000,
+    def __init__(self, *args, bins=20, iterations=10000,
                  # can either specify an explicit range
                  ranges=None,
                  # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
-                 object_length_scale=0.1,
+                 object_length_scale=0.15,
                  poke_offset_direction=(0.5, 0),  # default is forward along x; |offset| < 1 to represent uncertainty
                  **kwargs):
         if "sigma" not in kwargs:
@@ -429,7 +429,7 @@ class CMAME(QDOptimization):
 
 
 class CMAMEGA(CMAME):
-    def __init__(self, *args, lr=0.002, **kwargs):
+    def __init__(self, *args, lr=0.01, **kwargs):
         super(CMAMEGA, self).__init__(*args, **kwargs)
         self.lr = lr
 
