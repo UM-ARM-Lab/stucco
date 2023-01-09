@@ -416,7 +416,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                          "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE",
                          "VOLUMETRIC_LIMITED_REINIT", "VOLUMETRIC_LIMITED_REINIT_FULL",
                          # variants with non-SGD optimization
-                         "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD",
+                         "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD", "VOLUMETRIC_CMAMEGA",
                          # baselines
                          "ICP", "ICP_REVERSE", "CVO", "MEDIAL"]
     # order the categories should be shown
@@ -1008,6 +1008,7 @@ class PokeRunner:
         return cache
 
     def run(self, name="", seed=0, ctrl_noise_max=0.005, draw_text=None):
+        volumetric.previous_solutions = None
         if os.path.exists(self.dbname):
             self.cache = pd.read_pickle(self.dbname)
         else:
@@ -1799,10 +1800,11 @@ def plot_poke_chamfer_err(args):
 
 def plot_poke_plausible_diversity(args):
     def filter(df):
-        df = df[(df["level"] == level.name)]
-        # df = df[(df["level"].str.contains(level.name))]
+        # df = df[(df["level"] == level.name)]
+        df = df[(df["level"].str.contains(level.name))]
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
+        df = df[df.name == ""]
         return df
 
     # choose from 0.50, 0.75, 1.0

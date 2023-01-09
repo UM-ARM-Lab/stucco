@@ -262,6 +262,9 @@ def apply_init_transform(Xt, init_transform: Optional[SimilarityTransform] = Non
     return Xt, R, T, s
 
 
+previous_solutions = None
+
+
 class QDOptimization:
     def __init__(self, volumetric_cost: VolumetricCost,
                  X: Union[torch.Tensor, "Pointclouds"],
@@ -291,6 +294,7 @@ class QDOptimization:
         T0 = T[0]
         x0 = torch.cat([q0, T0]).cpu().numpy()
         self.scheduler = self.create_scheduler(x0, *args, **kwargs)
+        self.restore_previous_results()
 
         while not self.is_done():
             cost = self.step()
@@ -309,6 +313,10 @@ class QDOptimization:
 
     @abc.abstractmethod
     def step(self):
+        pass
+
+    @abc.abstractmethod
+    def restore_previous_results(self):
         pass
 
     @abc.abstractmethod
@@ -411,10 +419,21 @@ class CMAME(QDOptimization):
         logger.debug("step %d norm QD score: %f", self.i, qd)
         return cost
 
+    def restore_previous_results(self):
+        if previous_solutions is None:
+            return
+        assert isinstance(previous_solutions, np.ndarray)
+        R, T = self.get_torch_RT(np.stack(previous_solutions))
+        rmse = self.volumetric_cost(R, T, None)
+        self.archive.add(previous_solutions, -rmse.cpu().numpy(), self._measure(previous_solutions))
+
     def process_final_results(self, s, losses):
+        global previous_solutions
         df = self.archive.as_pandas()
         objectives = df.objective_batch()
         solutions = df.solution_batch()
+        # store to allow restoring on next step
+        previous_solutions = solutions
         if len(solutions) > self.B:
             order = np.argpartition(-objectives, self.B)
             solutions = solutions[order[:self.B]]
