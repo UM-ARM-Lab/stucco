@@ -238,6 +238,9 @@ def apply_init_transform(Xt, init_transform: Optional[SimilarityTransform] = Non
         # parse the initial transform from the input and apply to Xt
         try:
             R, T, s = init_transform
+            R = R.clone()
+            T = T.clone()
+            s = s.clone()
             assert (
                     R.shape == torch.Size((b, dim, dim))
                     and T.shape == torch.Size((b, dim))
