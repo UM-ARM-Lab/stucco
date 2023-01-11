@@ -35,7 +35,7 @@ from stucco.evaluation import evaluate_chamfer_distance
 from stucco.icp import costs as icp_costs
 from stucco.icp import volumetric
 from stucco import util
-from stucco.sdf import ObjectFactory
+from stucco.sdf import draw_pose_distribution
 
 from arm_pytorch_utilities.controller import Controller
 from stucco import tracking, detection
@@ -549,24 +549,6 @@ def predetermined_controls():
     return predetermined_control
 
 
-def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None,
-                           show_only_latest=False):
-    m = link_to_world_tf_matrix
-    for b in range(len(m)):
-        mm = m[b]
-        pos, rot = util.matrix_to_pos_rot(mm)
-        # if we're given a sequential delay, then instead of drawing the distribution simultaneously, we render them
-        # sequentially
-        if show_only_latest:
-            b = 0
-            if sequential_delay is not None and sequential_delay > 0:
-                time.sleep(sequential_delay)
-
-        object_id = obj_id_map.get(b, None)
-        object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
-        obj_id_map[b] = object_id
-
-
 class PokingController(Controller):
     class Mode(enum.Enum):
         GO_TO_NEXT_TARGET = 0
@@ -743,7 +725,6 @@ def export_init_transform(transform_file: str, T: torch.tensor):
 
 
 def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pokes=4):
-    from torch import tensor
     # load from file
     env.reset()
     dtype = env.dtype
@@ -774,7 +755,7 @@ def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pok
 
     empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
     volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
-                                               scale_known_freespace=1,
+                                               scale_known_freespace=1, obj_factory=env.obj_factory,
                                                vis=env.vis, debug=True)
 
     this_pts = tensor_utils.ensure_tensor(device, dtype, pts)
@@ -865,7 +846,7 @@ class PokeRunner:
         empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
         self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
                                                         scale_known_freespace=20,
-                                                        vis=self.env.vis, debug=False)
+                                                        vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
 
     def register_transforms_with_points(self):
         """Exports best_segment_idx, transforms_per_object, and rmse_per_object"""
@@ -1196,7 +1177,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # use just to get freespace violation
         self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
                                                         scale_known_freespace=20, scale_known_sdf=0,
-                                                        vis=self.env.vis, debug=False)
+                                                        vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
 
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object

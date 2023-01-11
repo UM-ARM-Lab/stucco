@@ -112,6 +112,7 @@ class VolumetricCost(ICPPoseCost):
 
     def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
                  vis=None, scale_known_freespace=1., scale_known_sdf=1.,
+                 obj_factory=None,
                  debug=False, debug_known_sgd=False, debug_freespace=False):
         """
         :param free_voxels: representation of freespace
@@ -157,6 +158,7 @@ class VolumetricCost(ICPPoseCost):
         self.debug_freespace = debug_freespace
 
         self.vis = vis
+        self.obj_factory = obj_factory
 
     def __call__(self, R, T, s, knn_res: _KNN = None):
         # assign batch and reuse for later for efficiency

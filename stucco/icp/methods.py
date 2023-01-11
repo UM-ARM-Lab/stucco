@@ -6,10 +6,13 @@ import torch
 from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
+
+from stucco.env.pybullet_env import draw_AABB
 from stucco.icp.sgd import iterative_closest_point_sgd
 from stucco.icp import volumetric
 from stucco.icp.medial_constraints import iterative_closest_point_medial_constraint
 from stucco import util
+from stucco.sdf import draw_pose_distribution
 
 
 # from https://github.com/richardos/icp
@@ -488,6 +491,16 @@ def icp_pytorch3d(A, B, given_init_pose=None, batch=30):
     return T, distances
 
 
+def _our_res_to_world_to_link_matrix(res):
+    batch = res.RTs.T.shape[0]
+    device = res.RTs.T.device
+    dtype = res.RTs.T.dtype
+    T = torch.eye(4, device=device, dtype=dtype).repeat(batch, 1, 1)
+    T[:, :3, :3] = res.RTs.R
+    T[:, :3, 3] = res.RTs.T
+    return T
+
+
 def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
     # initialize transform with closed form solution
     # T, distances = icp_pytorch3d(A, B, given_init_pose=given_init_pose, batch=batch)
@@ -501,15 +514,16 @@ def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
 
     res = iterative_closest_point_sgd(A.repeat(batch, 1, 1), B.repeat(batch, 1, 1), init_transform=given_init_pose,
                                       allow_reflection=True, **kwargs)
-    T = torch.eye(4, device=A.device).repeat(batch, 1, 1)
-    T[:, :3, :3] = res.RTs.R
-    T[:, :3, 3] = res.RTs.T
+    T = _our_res_to_world_to_link_matrix(res)
     distances = res.rmse
     return T, distances
 
 
+obj_id_map = {}
+
+
 def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimization=volumetric.Optimization.SGD,
-                   **kwargs):
+                   debug=True, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
@@ -525,7 +539,8 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         res = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
                                                             init_transform=given_init_pose,
                                                             **kwargs)
-    elif optimization in [volumetric.Optimization.CMAES, volumetric.Optimization.CMAME, volumetric.Optimization.CMAMEGA]:
+    elif optimization in [volumetric.Optimization.CMAES, volumetric.Optimization.CMAME,
+                          volumetric.Optimization.CMAMEGA]:
         if optimization == volumetric.Optimization.CMAES:
             op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
         elif optimization == volumetric.Optimization.CMAME:
@@ -534,13 +549,32 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         else:
             op = volumetric.CMAMEGA(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                                     object_length_scale=m * 0.5, **kwargs)
+        if debug:
+            # visualize archive
+            z = 0.1
+            aabb = np.concatenate((op.ranges, np.array((z, z)).reshape(1, -1)), axis=0)
+            draw_AABB(volumetric_cost.vis, aabb)
+
         # feed it the result of SGD optimization
         res_init = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
-                                                            init_transform=given_init_pose,
-                                                            **kwargs)
+                                                                 init_transform=given_init_pose,
+                                                                 **kwargs)
+
+        if debug:
+            T = _our_res_to_world_to_link_matrix(res_init)
+            draw_pose_distribution(T.inverse(), obj_id_map, volumetric_cost.vis, volumetric_cost.obj_factory,
+                                   sequential_delay=None, show_only_latest=False)
+
         x = op.get_numpy_x(res_init.RTs.R, res_init.RTs.T)
         op.add_solutions(x)
         res = op.run()
+
+        if debug:
+            print(res_init.rmse)
+            print(res.rmse)
+            T = _our_res_to_world_to_link_matrix(res)
+            draw_pose_distribution(T.inverse(), obj_id_map, volumetric_cost.vis, volumetric_cost.obj_factory,
+                                   sequential_delay=None, show_only_latest=False)
 
     elif optimization == volumetric.Optimization.SVGD:
         res = volumetric.iterative_closest_point_volumetric_svgd(volumetric_cost, A.repeat(batch, 1, 1),
@@ -549,9 +583,7 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
     else:
         raise RuntimeError(f"Unsupported optimization method {optimization}")
 
-    T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
-    T[:, :3, :3] = res.RTs.R
-    T[:, :3, 3] = res.RTs.T
+    T = _our_res_to_world_to_link_matrix(res)
     distances = res.rmse
     return T, distances
 

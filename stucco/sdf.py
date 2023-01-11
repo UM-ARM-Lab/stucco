@@ -1,6 +1,7 @@
 import abc
 import os
 import logging
+import time
 
 import numpy as np
 import open3d as o3d
@@ -293,3 +294,21 @@ class CachedSDF(util.ObjectFrameSDF):
 
         return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim,
                                             invalid_value=self._fallback_sdf_value_func)
+
+
+def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None,
+                           show_only_latest=False):
+    m = link_to_world_tf_matrix
+    for b in range(len(m)):
+        mm = m[b]
+        pos, rot = util.matrix_to_pos_rot(mm)
+        # if we're given a sequential delay, then instead of drawing the distribution simultaneously, we render them
+        # sequentially
+        if show_only_latest:
+            b = 0
+            if sequential_delay is not None and sequential_delay > 0:
+                time.sleep(sequential_delay)
+
+        object_id = obj_id_map.get(b, None)
+        object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
+        obj_id_map[b] = object_id
