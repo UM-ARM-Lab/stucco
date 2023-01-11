@@ -519,23 +519,29 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
     min_d = volumetric_cost.model_all_points.min(dim=0).values
     max_d = volumetric_cost.model_all_points.max(dim=0).values
     d = max_d - min_d
-    m = torch.sqrt(sum(d ** 2))
+    m = torch.sqrt(sum(d ** 2)).item()
 
     if optimization == volumetric.Optimization.SGD:
         res = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
                                                             init_transform=given_init_pose,
                                                             **kwargs)
-    elif optimization == volumetric.Optimization.CMAES:
-        op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+    elif optimization in [volumetric.Optimization.CMAES, volumetric.Optimization.CMAME, volumetric.Optimization.CMAMEGA]:
+        if optimization == volumetric.Optimization.CMAES:
+            op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+        elif optimization == volumetric.Optimization.CMAME:
+            op = volumetric.CMAME(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                  object_length_scale=m * 0.5, **kwargs)
+        else:
+            op = volumetric.CMAMEGA(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                    object_length_scale=m * 0.5, **kwargs)
+        # feed it the result of SGD optimization
+        res_init = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
+                                                            init_transform=given_init_pose,
+                                                            **kwargs)
+        x = op.get_numpy_x(res_init.RTs.R, res_init.RTs.T)
+        op.add_solutions(x)
         res = op.run()
-    elif optimization == volumetric.Optimization.CMAME:
-        op = volumetric.CMAME(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                              object_length_scale=m * 0.5, **kwargs)
-        res = op.run()
-    elif optimization == volumetric.Optimization.CMAMEGA:
-        op = volumetric.CMAMEGA(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                                object_length_scale=m * 0.5, **kwargs)
-        res = op.run()
+
     elif optimization == volumetric.Optimization.SVGD:
         res = volumetric.iterative_closest_point_volumetric_svgd(volumetric_cost, A.repeat(batch, 1, 1),
                                                                  init_transform=given_init_pose,

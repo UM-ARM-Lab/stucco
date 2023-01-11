@@ -420,8 +420,8 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                          # baselines
                          "ICP", "ICP_REVERSE", "CVO", "MEDIAL"]
     # order the categories should be shown
-    full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     methods_order = [m for m in full_method_order if m in method_to_name]
+    full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     category_order = [m for m in full_category_order if m in method_to_name.values()]
     fig = plt.figure()
     if scatter:
@@ -1800,8 +1800,8 @@ def plot_poke_chamfer_err(args):
 
 def plot_poke_plausible_diversity(args):
     def filter(df):
-        # df = df[(df["level"] == level.name)]
-        df = df[(df["level"].str.contains(level.name))]
+        # df = df[(df["level"].str.contains(level.name))]
+        df = df[(df["level"] == level.name)]
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
         df = df[df.name == ""]

@@ -283,29 +283,32 @@ class QDOptimization:
         self.device = self.Xt.device
         self.dtype = self.Xt.dtype
 
-    def run(self, *args, **kwargs):
+        Xt, R, T, s = apply_init_transform(self.Xt, self.init_transform)
+        x0 = self.get_numpy_x(R[0], T[0])
+        self.scheduler = self.create_scheduler(x0)
+        self.restore_previous_results()
+
+    def run(self):
         Xt, R, T, s = apply_init_transform(self.Xt, self.init_transform)
 
         # initialize the transformation history
         t_history = []
         losses = []
 
-        q0 = matrix_to_rotation_6d(R[0])
-        T0 = T[0]
-        x0 = torch.cat([q0, T0]).cpu().numpy()
-        self.scheduler = self.create_scheduler(x0, *args, **kwargs)
-        self.restore_previous_results()
-
         while not self.is_done():
             cost = self.step()
             losses.append(cost)
 
-        R, T, rmse = self.process_final_results(s, losses)
+        R, T, rmse = self.process_final_results(None, losses)
 
         if oputil.is_pointclouds(self.X):
             Xt = X.update_padded(Xt)  # type: ignore
 
         return ICPSolution(True, rmse, Xt, SimilarityTransform(R, T, s), t_history)
+
+    @abc.abstractmethod
+    def add_solutions(self, solutions):
+        pass
 
     @abc.abstractmethod
     def create_scheduler(self, x0, *args, **kwargs):
@@ -326,6 +329,11 @@ class QDOptimization:
     @abc.abstractmethod
     def is_done(self):
         return False
+
+    def get_numpy_x(self, R, T):
+        q = matrix_to_rotation_6d(R)
+        x = torch.cat([q, T], dim=-1).cpu().numpy()
+        return x
 
     def get_torch_RT(self, x):
         q_ = x[..., :6]
@@ -353,6 +361,9 @@ class CMAES(QDOptimization):
         self.scheduler.tell(solutions, cost.cpu().numpy())
         return cost
 
+    def add_solutions(self, solutions):
+        pass
+
     def process_final_results(self, s, losses):
         # convert ES back to R, T
         solutions = self.scheduler.ask()
@@ -375,22 +386,26 @@ class CMAME(QDOptimization):
                  **kwargs):
         if "sigma" not in kwargs:
             kwargs["sigma"] = 1.0
-        super(CMAME, self).__init__(*args, **kwargs)
         self.bins = bins
         self.iterations = iterations
         self.ranges = ranges
+        self.m = object_length_scale
+        self.poke_offset_direction = poke_offset_direction
+
+        self.archive = None
+        self.i = 0
+        super(CMAME, self).__init__(*args, **kwargs)
+
+    def _create_ranges(self):
         if self.ranges is None:
             centroid = self.Xt.mean(dim=-2).mean(dim=-2).cpu().numpy()
             # extract XY (leave Z to be searched on)
             centroid = centroid[:2]
-            l = object_length_scale
-            centroid += l * np.array(poke_offset_direction)
-            self.ranges = np.array((centroid - l, centroid + l)).T
-
-        self.archive = None
-        self.i = 0
+            centroid += self.m * np.array(self.poke_offset_direction)
+            self.ranges = np.array((centroid - self.m, centroid + self.m)).T
 
     def create_scheduler(self, x0, *args, **kwargs):
+        self._create_ranges()
         self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
         emitters = [
             EvolutionStrategyEmitter(self.archive, x0=x0, sigma0=1.0, batch_size=self.B)
@@ -419,13 +434,16 @@ class CMAME(QDOptimization):
         logger.debug("step %d norm QD score: %f", self.i, qd)
         return cost
 
+    def add_solutions(self, solutions):
+        assert isinstance(solutions, np.ndarray)
+        R, T = self.get_torch_RT(np.stack(solutions))
+        rmse = self.volumetric_cost(R, T, None)
+        self.archive.add(solutions, -rmse.cpu().numpy(), self._measure(solutions))
+
     def restore_previous_results(self):
         if previous_solutions is None:
             return
-        assert isinstance(previous_solutions, np.ndarray)
-        R, T = self.get_torch_RT(np.stack(previous_solutions))
-        rmse = self.volumetric_cost(R, T, None)
-        self.archive.add(previous_solutions, -rmse.cpu().numpy(), self._measure(previous_solutions))
+        self.add_solutions(previous_solutions)
 
     def process_final_results(self, s, losses):
         global previous_solutions
@@ -449,10 +467,11 @@ class CMAME(QDOptimization):
 
 class CMAMEGA(CMAME):
     def __init__(self, *args, lr=0.01, **kwargs):
-        super(CMAMEGA, self).__init__(*args, **kwargs)
         self.lr = lr
+        super(CMAMEGA, self).__init__(*args, **kwargs)
 
     def create_scheduler(self, x0, *args, **kwargs):
+        self._create_ranges()
         self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
         emitters = [
             GradientArborescenceEmitter(self.archive, x0=x0, sigma0=self.sigma, lr=self.lr, grad_opt="adam",
