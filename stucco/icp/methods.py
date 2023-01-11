@@ -523,44 +523,55 @@ obj_id_map = {}
 
 
 def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimization=volumetric.Optimization.SGD,
-                   debug=True, **kwargs):
+                   debug=False, range_pos_sigma=2, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
                                           given_init_pose[:, :3, 3],
                                           torch.ones(batch, device=A.device, dtype=A.dtype))
-    # approximate object diagonal length
-    min_d = volumetric_cost.model_all_points.min(dim=0).values
-    max_d = volumetric_cost.model_all_points.max(dim=0).values
-    d = max_d - min_d
-    m = torch.sqrt(sum(d ** 2)).item()
 
     if optimization == volumetric.Optimization.SGD:
         res = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
                                                             init_transform=given_init_pose,
                                                             **kwargs)
-    elif optimization in [volumetric.Optimization.CMAES, volumetric.Optimization.CMAME,
-                          volumetric.Optimization.CMAMEGA]:
-        if optimization == volumetric.Optimization.CMAES:
-            op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
-        elif optimization == volumetric.Optimization.CMAME:
-            op = volumetric.CMAME(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                                  object_length_scale=m * 0.5, **kwargs)
-        else:
-            op = volumetric.CMAMEGA(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                                    object_length_scale=m * 0.5, **kwargs)
-        if debug:
-            # visualize archive
-            z = 0.1
-            aabb = np.concatenate((op.ranges, np.array((z, z)).reshape(1, -1)), axis=0)
-            draw_AABB(volumetric_cost.vis, aabb)
-
+    elif optimization == volumetric.Optimization.CMAES:
+        op = volumetric.CMAES(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose, **kwargs)
+        res = op.run()
+    elif optimization in [volumetric.Optimization.CMAME, volumetric.Optimization.CMAMEGA]:
         # feed it the result of SGD optimization
         res_init = volumetric.iterative_closest_point_volumetric(volumetric_cost, A.repeat(batch, 1, 1),
                                                                  init_transform=given_init_pose,
                                                                  **kwargs)
 
+        # create range based on SGD results (where are good fits)
+        # filter outliers out based on RMSE
+        T = _our_res_to_world_to_link_matrix(res_init)
+        # TT = T.inverse()[:, :3, 3]
+        TT = T[:, :3, 3]
+        rmse = res_init.rmse
+        filt = rmse < torch.quantile(rmse, 0.8)
+        pos = TT[filt]
+        pos_std = pos.std(dim=-2).cpu().numpy()
+        centroid = pos.mean(dim=-2).cpu().numpy()
+
+        # extract XY (leave Z to be searched on)
+        centroid = centroid[:2]
+        pos_std = pos_std[:2]
+
+        ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
+
+        if optimization == volumetric.Optimization.CMAME:
+            QD = volumetric.CMAME
+        else:
+            QD = volumetric.CMAMEGA
+        op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                ranges=ranges, **kwargs)
+
         if debug:
+            # visualize archive
+            z = 0.1
+            aabb = np.concatenate((op.ranges, np.array((z, z)).reshape(1, -1)), axis=0)
+            draw_AABB(volumetric_cost.vis, aabb)
             T = _our_res_to_world_to_link_matrix(res_init)
             draw_pose_distribution(T.inverse(), obj_id_map, volumetric_cost.vis, volumetric_cost.obj_factory,
                                    sequential_delay=None, show_only_latest=False)
