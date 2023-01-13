@@ -219,7 +219,7 @@ repeat with baselines by replacing `ours` with `online-birch` and other baseline
 ### Volumetric Registration Experiments
 Generate and export data for offline baselines:
 ```shell
-python run_many_registration_experiments.py --registration none --no_gui --task mustard mustard_sideways mustard_fallen mustard_fallen_sideways drill drill_opposite drill_slanted drill_fallen hammer hammer_1 hammer_2
+python run_many_registration_experiments.py --registration none --no_gui
 ```
 
 Generate gifs from the logged images after `cd`ing into their log directories:
@@ -227,3 +227,13 @@ Generate gifs from the logged images after `cd`ing into their log directories:
 ffmpeg -i %d.png -vf palettegen palette.png
 ffmpeg -i %d.png -i palette.png -lavfi paletteuse all.gif
 ```
+
+### Running Baselines
+CVO
+1. download docker image [https://github.com/UMich-CURLY/docker_images/tree/master/cvo_gpu](cvo_gpu)
+2. build docker image and follow instructions
+3. first start container with `bash run_cuda_docker.bash cvo` in the `docker/images/cvo_gpu` directory (script modified to mount shared data directory)
+4. for later uses, restart latest container with "docker start -a -i `docker ps -q -l`"
+5. build CVO
+6. run script inside build on a single trajectory `bin/cvo_align_manip_freespace ../data/poke/MUSTARD_0.txt ../data/poke/MUSTARD.txt ../cvo_params/cvo_geometric_params_gpu.yaml`
+7. run script for all trajectories of a task `python3 ../scripts/run_many_manip_experiments.py --task mustard mustard_fallen drill`

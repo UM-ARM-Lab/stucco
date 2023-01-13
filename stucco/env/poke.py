@@ -5,9 +5,7 @@ import time
 import enum
 import torch
 import os
-import random
 import scipy.stats
-import copy
 
 import numpy as np
 import matplotlib.colors as colors
@@ -17,7 +15,7 @@ from arm_pytorch_utilities import tensor_utils
 
 import stucco.sdf
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
-    ContactInfo, make_cylinder, closest_point_on_surface, pybullet_obj_range, draw_AABB
+    ContactInfo,  closest_point_on_surface, pybullet_obj_range, draw_AABB
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
     PlanarPointToConfig
 from stucco.env.panda import PandaJustGripperID
@@ -42,9 +40,9 @@ pandaNumDofs = 7
 class Levels(enum.IntEnum):
     # no clutter environments
     MUSTARD = 0
-    CRACKER = 1
-    COFFEE_CAN = 2
-    BANANA = 3
+    # CRACKER = 1
+    # COFFEE_CAN = 2
+    # BANANA = 3
     DRILL = 4
     HAMMER = 5
     DRILL_OPPOSITE = 6
@@ -60,7 +58,7 @@ class Levels(enum.IntEnum):
 task_map = {str(c).split('.')[1]: c for c in Levels}
 level_to_obj_map = {
     Levels.MUSTARD: "mustard",
-    Levels.BANANA: "banana",
+    # Levels.BANANA: "banana",
     Levels.DRILL: "drill",
     Levels.HAMMER: "hammer",
     Levels.HAMMER_1: "hammer",
