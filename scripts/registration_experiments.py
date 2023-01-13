@@ -13,6 +13,10 @@ import seaborn as sns
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
+# marching cubes free surface extraction
+import open3d as o3d
+from torchmcubes import marching_cubes, grid_interp
+
 import stucco.sdf
 import stucco.util
 import torch
@@ -653,15 +657,17 @@ class PokingController(Controller):
         return u
 
 
+def _export_pc(f, pc, augmented_data: typing.Any = ""):
+    pc_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} {augmented_data}" for pt in pc]
+    f.write("\n".join(pc_serialized))
+    f.write("\n")
+
+
 def _export_pcs(f, pc_free, pc_occ):
     if len(pc_free):
-        pc_free_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 0" for pt in pc_free]
-        f.write("\n".join(pc_free_serialized))
-        f.write("\n")
+        _export_pc(f, pc_free, 0)
     if len(pc_occ):
-        pc_occ_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} 1" for pt in pc_occ]
-        f.write("\n".join(pc_occ_serialized))
-        f.write("\n")
+        _export_pc(f, pc_occ, 1)
 
 
 def _export_transform(f, T):
@@ -1072,17 +1078,21 @@ class PokeRunner:
 class ExportProblemRunner(PokeRunner):
     """If registration method is None, export the point clouds, initial transforms, and ground truth transforms"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, export_freespace_surface=True, **kwargs):
         super(ExportProblemRunner, self).__init__(*args, **kwargs)
         self.reg_method = icp.ICPMethod.NONE
         self.pc_to_register_file = None
+        self.free_surface_file = None
         self.transform_file = None
+        self.export_free_surface = export_freespace_surface
 
     def hook_before_first_poke(self, seed):
+        super().hook_before_first_poke(seed)
         data_dir = cfg.DATA_DIR
         self.pc_to_register_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}.txt")
         pc_register_against_file = os.path.join(data_dir, f"poke/{self.env.level.name}.txt")
         self.transform_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_trans.txt")
+        self.free_surface_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_free_surface.txt")
         transform_gt_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_gt_trans.txt")
         # exporting data for offline baselines, remove the stale file
         export_pc_register_against(pc_register_against_file, self.env)
@@ -1091,13 +1101,61 @@ class ExportProblemRunner(PokeRunner):
             os.remove(self.pc_to_register_file)
         except OSError:
             pass
+        try:
+            os.remove(self.free_surface_file)
+        except OSError:
+            pass
 
     def hook_after_poke(self, name, seed):
         if self.pokes >= self.start_at_num_pts:
             if self.best_tsf_guess is None:
-                self.best_tsf_guess = initialize_transform_estimates(self.B, env, self.init_method, self.method)
+                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env, self.init_method, self.method)
                 export_init_transform(self.transform_file, self.best_tsf_guess)
-            export_pc_to_register(self.pc_to_register_file, self.pokes, env, self.method)
+            export_pc_to_register(self.pc_to_register_file, self.pokes, self.env, self.method)
+            self.do_export_free_surface()
+
+    def do_export_free_surface(self, debug=False):
+        if not self.export_free_surface:
+            return
+        verts, faces = marching_cubes(self.env.free_voxels.get_voxel_values(), 1)
+
+        verts = verts.cpu().numpy()
+        faces = faces.cpu().numpy()
+
+        # Use Open3D for visualization
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(verts)
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
+        mesh.compute_triangle_normals()
+        mesh.compute_vertex_normals()
+        sa = mesh.get_surface_area()
+        points_to_sample_per_area = 0.5
+        points_to_sample = round(points_to_sample_per_area * sa)
+        pcd = mesh.sample_points_uniformly(number_of_points=points_to_sample)
+        # convert back to our coordinates
+        points = np.asarray(pcd.points)
+        # x and z seems to be swapped for some reason
+        points = np.stack((points[:, 2], points[:, 1], points[:, 0])).T
+        points = self.env.free_voxels.voxels.ensure_value_key(
+            torch.tensor(points, dtype=self.dtype, device=self.device), force=True)
+        # by default will be pointing towards the inside of the object
+        normals = np.asarray(pcd.normals)
+        normals = np.stack((normals[:, 2], normals[:, 1], normals[:, 0])).T
+
+        if debug:
+            # o3d.visualization.draw_geometries([mesh, pcd], window_name='Marching cubes (CUDA)')
+            normal_scale = 0.02
+            for i, pt in enumerate(points):
+                self.env.vis.draw_point(f"free_surface.{i}", pt, color=(0, 1, 0), scale=0.5, length=0.005)
+                self.env.vis.draw_2d_line(f"free_surface_normal.{i}", pt, normals[i], color=(1, 0, 0),
+                                          scale=normal_scale)
+
+        os.makedirs(os.path.dirname(self.free_surface_file), exist_ok=True)
+        with open(self.free_surface_file, 'a') as f:
+            # write out the poke index and the size of the point cloud
+            f.write(f"{self.pokes} {points_to_sample}\n")
+            _export_pc(f, points)
+            _export_pc(f, normals)
 
 
 class PlausibleSetRunner(PokeRunner):

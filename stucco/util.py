@@ -79,6 +79,10 @@ class VoxelGrid(Voxels):
         val = self.voxels.raw_data[indices]
         return pos, val
 
+    def get_voxel_values(self):
+        """Get the raw value of the voxels without any coordinate information"""
+        return self._data
+
     def get_voxel_center_points(self):
         return self.pts
 
