@@ -523,7 +523,7 @@ obj_id_map = {}
 
 
 def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimization=volumetric.Optimization.SGD,
-                   debug=False, range_pos_sigma=2, **kwargs):
+                   debug=False, range_pos_sigma=3, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],

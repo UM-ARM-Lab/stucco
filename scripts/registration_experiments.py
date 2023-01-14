@@ -1164,10 +1164,10 @@ class PlausibleSetRunner(PokeRunner):
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, plausible_suboptimality=0.001, gt_position_max_offset=0.2, position_steps=15, N_rot=20000,
+    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=10000,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
-        self.plausible_suboptimality = plausible_suboptimality
+        self.plausible_suboptimality = self.env.obj_factory.plausible_suboptimality
         # self.gt_position_max_offset = gt_position_max_offset
         # self.position_steps = position_steps
         self.N_rot = N_rot
@@ -1229,14 +1229,6 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
             # ensure the ground truth rotation is sampled
             self.rot[N_upright] = self.Hgt[:, :3, :3]
 
-    def create_volumetric_cost(self):
-        # placeholder for now; have to be filled manually
-        empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
-        # use just to get freespace violation
-        self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
-                                                        scale_known_freespace=20, scale_known_sdf=0,
-                                                        vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
-
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object
         contact_pts = []
@@ -1252,21 +1244,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         self.evaluate_registrations()
 
     def _evaluate_transforms(self, transforms):
-        # use exact SDF when evaluating costs rather than voxelized
-        Tp = tf.Transform3d(matrix=transforms)
-        pts = Tp.transform_points(self.contact_pts)
-        closest = self.env.obj_factory.object_frame_closest_point(pts)
-        # for debugging uncomment below
-        # self.env.draw_mesh("base frame", ([0, 0, 0], [0, 0, 0, 1]), (0.0, 1.0, 0., 0.5),
-        #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-        # for i, pt in enumerate(pts):
-        #     self.env.vis.draw_point(f"tmp.{i}", pt.cpu().numpy())
-        # for i, pt in enumerate(closest.closest):
-        #     self.env.vis.draw_point(f"tmpi.{i}", pt.cpu().numpy(), (1,0,0))
-        cost = closest.distance.abs().mean(dim=-1)
-        # reject any that violates freespace
-        freespace_violation = self.volumetric_cost(transforms[:, :3, :3], transforms[:, :3, 3], None)
-        return cost + freespace_violation
+        return self.volumetric_cost(transforms[:, :3, :3], transforms[:, :3, -1], None)
 
     def evaluate_registrations(self):
         # evaluate all the transforms
@@ -1290,7 +1268,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                     plausible_transforms.append(Hp)
         else:
             # evaluate the pts in chunks since we can't load all points in memory at the same time
-            rot_chunk = 5
+            rot_chunk = 1
             pos_chunk = 1000
             for i in range(0, self.N_rot, rot_chunk):
                 logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")

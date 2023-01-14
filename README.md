@@ -222,6 +222,11 @@ Generate and export data for offline baselines:
 python run_many_registration_experiments.py --registration none --no_gui
 ```
 
+Generate plausible set for plausible diversity evaluation
+```shell
+python run_many_registration_experiments.py --experiment generate-plausible-set --seed 0 --no_gui
+```
+
 Generate gifs from the logged images after `cd`ing into their log directories:
 ```shell
 ffmpeg -i %d.png -vf palettegen palette.png

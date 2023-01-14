@@ -25,13 +25,14 @@ class SDFQuery(NamedTuple):
 
 class ObjectFactory(abc.ABC):
     def __init__(self, name, scale=2.5, vis_frame_pos=(0, 0, 0), vis_frame_rot=(0, 0, 0, 1),
-                 **kwargs):
+                 plausible_suboptimality=0.001, **kwargs):
         self.name = name
         self.scale = scale
         # frame from model's base frame to the simulation's use of the model
         self.vis_frame_pos = vis_frame_pos
         self.vis_frame_rot = vis_frame_rot
         self.other_load_kwargs = kwargs
+        self.plausible_suboptimality = plausible_suboptimality
 
         # use external mesh library to compute closest point for non-convex meshes
         self._mesh = None
