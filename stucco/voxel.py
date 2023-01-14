@@ -30,6 +30,14 @@ class Voxels(abc.ABC):
     def get_known_pos_and_values(self):
         """Return the position (N x 3) and values (N) of known voxels"""
 
+    @abc.abstractmethod
+    def __getitem__(self, pts):
+        """Return the values (N) at the positions (N x 3)"""
+
+    @abc.abstractmethod
+    def __setitem__(self, pts, value):
+        """Set the values (N) at the positions (N x 3)"""
+
 
 class VoxelGrid(Voxels):
     def __init__(self, resolution, range_per_dim, dtype=torch.float, device='cpu'):
@@ -97,6 +105,9 @@ class VoxelSet(Voxels):
     def __init__(self, positions, values):
         self.positions = positions
         self.values = values
+
+    def __getitem__(self, pts):
+        raise RuntimeError("Cannot get arbitrary points on a voxel set")
 
     def __setitem__(self, pts, value):
         self.positions = torch.cat((self.positions, pts.view(-1, self.positions.shape[-1])), dim=0)
