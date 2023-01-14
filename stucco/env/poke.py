@@ -13,9 +13,8 @@ import matplotlib.cm as cmx
 
 from arm_pytorch_utilities import tensor_utils
 
-import stucco.sdf
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
-    ContactInfo,  closest_point_on_surface, pybullet_obj_range, draw_AABB
+    ContactInfo, closest_point_on_surface, pybullet_obj_range, draw_AABB
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
     PlanarPointToConfig
 from stucco.env.panda import PandaJustGripperID
@@ -24,8 +23,7 @@ from stucco import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector, ContactSensor
-from stucco.sdf import ObjectFactory
-from stucco import util
+from stucco import sdf, voxel
 
 import pytorch_kinematics.transforms as tf
 
@@ -256,8 +254,8 @@ class PokeEnv(PybulletEnv):
 
         # poke target information
         self.obj_factory: YCBObjectFactory = None
-        self.target_sdf: util.ObjectFrameSDF = None
-        self.free_voxels: util.VoxelGrid = None
+        self.target_sdf: sdf.ObjectFrameSDF = None
+        self.free_voxels: voxel.VoxelGrid = None
 
         self.target_model_name = None
         self._target_object_id = None
@@ -565,7 +563,7 @@ class PokeEnv(PybulletEnv):
         if self.reaction_force_strategy is ReactionForceStrategy.MEDIAN_OVER_MINI_STEPS:
             median_mini_step = np.argsort(self._mini_step_contact['mag'])[self.mini_steps // 2]
             return self._mini_step_contact['full'][median_mini_step], \
-                   self._mini_step_contact['torque'][median_mini_step]
+                self._mini_step_contact['torque'][median_mini_step]
         if self.reaction_force_strategy is ReactionForceStrategy.MAX_OVER_MINI_STEPS:
             max_mini_step = np.argmax(self._mini_step_contact['mag'])
             return self._mini_step_contact['full'][max_mini_step], self._mini_step_contact['torque'][max_mini_step]
@@ -849,9 +847,9 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
 
         # SDF for the object
-        obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
-        self.target_sdf = stucco.sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
-                                               obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        obj_frame_sdf = sdf.MeshSDF(self.obj_factory)
+        self.target_sdf = sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
+                                        obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
             draw_AABB(self.vis, self.ranges)
             # display the voxels created for this sdf
@@ -863,11 +861,11 @@ class PokeEnv(PybulletEnv):
         # SDF for the robot (used for filling up freespace voxels)
         # should be fine to use the actual robot ID for the ground truth SDF since we won't be querying outside of the
         # SDF range (and thus need to actually use the GT lookup)
-        robot_frame_sdf = stucco.sdf.PyBulletNaiveSDF(self.robot_id)
+        robot_frame_sdf = sdf.PyBulletNaiveSDF(self.robot_id)
         robot_range = pybullet_obj_range(self.robot_id, 0.02)
         # TODO consider if need the fingers of the gripper to sweep out freespace, or if that's too close
-        self.robot_sdf = stucco.sdf.CachedSDF("floating_gripper", 0.005, robot_range,
-                                              robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        self.robot_sdf = sdf.CachedSDF("floating_gripper", 0.005, robot_range,
+                                       robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
         if self.clean_cache:
@@ -882,8 +880,8 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.robot_id, rob_pos, rob_rot)
         p.resetBasePositionAndOrientation(self._target_object_id, target_pos, target_rot)
 
-        self.free_voxels = util.ExpandingVoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges,
-                                                   device=self.device)
+        self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_voxel_resolution, self.freespace_ranges,
+                                                    device=self.device)
 
         # register floor as freespace
         # having the whole sdf's floor takes too long to draw (pybullet takes a long time to draw)
@@ -891,8 +889,8 @@ class PokeEnv(PybulletEnv):
         floor_range = pybullet_obj_range(self.target_object_id(), 0.15)
         floor_range[2, 0] = -self.freespace_voxel_resolution * 3
         floor_range[2, 1] = -self.freespace_voxel_resolution * 2
-        floor_coord, floor_pts = util.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
-                                                                         dtype=self.dtype, device=self.device)
+        floor_coord, floor_pts = voxel.get_coordinates_and_points_in_grid(self.freespace_voxel_resolution, floor_range,
+                                                                          dtype=self.dtype, device=self.device)
         self.free_voxels[floor_pts] = 1
 
     def _setup_objects(self):
@@ -1051,7 +1049,7 @@ class ArmPointToConfig(PlanarPointToConfig):
             super(ArmPointToConfig, self).__init__(*data)
 
 
-class YCBObjectFactory(ObjectFactory):
+class YCBObjectFactory(sdf.ObjectFactory):
     def __init__(self, name, ycb_name, ranges=None, **kwargs):
         # specify ranges=None to infer the range from the object's bounding box
         super(YCBObjectFactory, self).__init__(name, **kwargs)

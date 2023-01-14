@@ -5,6 +5,7 @@ import re
 import copy
 import time
 import pandas as pd
+import subprocess
 
 import argparse
 import matplotlib
@@ -15,10 +16,13 @@ from sklearn.cluster import Birch, DBSCAN, KMeans
 
 # marching cubes free surface extraction
 import open3d as o3d
-from torchmcubes import marching_cubes, grid_interp
 
-import stucco.sdf
-import stucco.util
+from stucco.icp import quality_diversity
+from stucco import voxel
+from stucco import sdf
+from stucco.env.pybullet_env import make_sphere
+from torchmcubes import marching_cubes
+
 import torch
 import pybullet as p
 import logging
@@ -38,8 +42,9 @@ from stucco.env_getters.poke import PokeGetter
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.icp import costs as icp_costs
 from stucco.icp import volumetric
+from stucco.icp.medial_constraints import MedialBall
 from stucco import util
-from stucco.sdf import draw_pose_distribution
+from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 
 from arm_pytorch_utilities.controller import Controller
 from stucco import tracking, detection
@@ -87,7 +92,7 @@ def predetermined_poke_range():
     }
 
 
-def build_model(obj_factory: stucco.sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
+def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu"):
     points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
                                             seed=seed, clean_cache=True,
@@ -184,14 +189,6 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
         T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
                                           given_init_pose=best_tsf_guess.inverse(), save_loss_plot=False,
                                           batch=B)
-    elif reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
-        T, distances = icp.icp_medial_constraints(volumetric_cost.sdf, volumetric_cost.free_voxels,
-                                                  model_points_world_frame,
-                                                  given_init_pose=best_tsf_guess,
-                                                  batch=B, max_iterations=5, verbose=False,
-                                                  # vis=None)
-                                                  vis=volumetric_cost.vis)
-        T = T.inverse()
     else:
         raise RuntimeError(f"Unsupported ICP method {reg_method}")
     # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
@@ -201,6 +198,64 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     # T, distances = icp.icp_stein(model_points_world_frame, model_points_register, given_init_pose=T.inverse(),
     #                              batch=B)
     return T, distances
+
+
+def do_medial_constraint_registration(model_points_world_frame, sdf: ObjectFrameSDF, best_tsf_guess, B,
+                                      level: poke.Levels, seed: int, pokes: int, vis=None):
+    ball_generate_exe = os.path.join(cfg.ROOT_DIR, "../medial_constraint/build/medial_constraint_icp")
+    if not os.path.isfile(ball_generate_exe):
+        raise RuntimeError(f"Expecting medial constraint ball generating executable to be at {ball_generate_exe}! "
+                           f"make sure that repository is cloned and built")
+    free_surface_path = f"{saved_traj_dir_base(level)}_{seed}_free_surface.txt"
+    points_path = f"{saved_traj_dir_base(level)}_{seed}.txt"
+    balls_path = f"{saved_traj_dir_for_method(icp.ICPMethod.MEDIAL_CONSTRAINT)}/{level.name}_{seed}_balls.txt"
+    # if it hasn't been already generated (it generates for all pokes so only needs to be run once per traj)
+    if not os.path.isfile(balls_path):
+        subprocess.run([ball_generate_exe, free_surface_path, points_path, balls_path])
+        if not os.path.isfile(balls_path):
+            raise RuntimeError(f"Medial balls file not created after execution - errors in ball generation!")
+
+    # to efficiently batch process them, we'll be using it as just a tensor with semantics attached to each dimension
+    balls = None
+    with open(balls_path) as f:
+        data = f.readlines()
+        i = 0
+        while i < len(data):
+            header = data[i].split()
+            this_poke = int(header[0])
+            num_balls = int(header[1])
+            if this_poke < pokes:
+                # keep going forward
+                i += num_balls
+                continue
+            elif this_poke > pokes:
+                # assuming the pokes are ordered, if we're past then there won't be anymore of this poke later
+                break
+
+            balls = torch.tensor([[float(v) for v in line.strip().split()] for line in data[i + 1:i + num_balls]])
+            i += num_balls + 1
+            break
+    if balls is None:
+        raise RuntimeError(f"Could now find balls for poke {pokes} in {balls_path}")
+    if vis is not None:
+        obj_ids = []
+        for ball in balls:
+            # create ball and visualize in vis
+            obj_ids.append(
+                make_sphere(ball[MedialBall.R], ball[MedialBall.X: MedialBall.Z + 1], rgba=(0.7, 0.1, 0.2, 0.3)))
+
+    T, distances = icp.icp_medial_constraints(sdf, balls,
+                                              model_points_world_frame,
+                                              given_init_pose=best_tsf_guess,
+                                              batch=B, max_iterations=100, verbose=False,
+                                              # vis=None)
+                                              vis=vis)
+    T = T.inverse()
+    return T, distances
+
+
+def saved_traj_dir_base(level: poke.Levels):
+    return os.path.join(cfg.DATA_DIR, f"poke/{level.name}")
 
 
 def saved_traj_dir_for_method(reg_method: icp.ICPMethod):
@@ -307,9 +362,9 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
         vis.clear_visualization_after("mpt", i + 1)
         vis.clear_visualization_after("mn", i + 1)
 
-        free_voxels = util.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
-        known_sdf = util.VoxelSet(model_points_world_frame,
-                                  torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
+        free_voxels = voxel.VoxelGrid(0.025, freespace_ranges, dtype=dtype, device=device)
+        known_sdf = voxel.VoxelSet(model_points_world_frame,
+                                   torch.zeros(model_points_world_frame.shape[0], dtype=dtype, device=device))
         volumetric_cost = icp_costs.VolumetricCost(free_voxels, known_sdf, env.target_sdf, scale=1,
                                                    scale_known_freespace=freespace_cost_scale,
                                                    vis=vis, debug=debug)
@@ -759,14 +814,14 @@ def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pok
     for i, pt in enumerate(pts):
         env.vis.draw_point(f"c.{i}", pt.cpu().numpy(), (1, 0, 0))
 
-    empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
+    empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
     volumetric_cost = icp_costs.VolumetricCost(env.free_voxels, empty_sdf, env.target_sdf, scale=1,
                                                scale_known_freespace=1, obj_factory=env.obj_factory,
                                                vis=env.vis, debug=True)
 
     this_pts = tensor_utils.ensure_tensor(device, dtype, pts)
-    volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
-                                               torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
+    volumetric_cost.sdf_voxels = voxel.VoxelSet(this_pts,
+                                                torch.zeros(this_pts.shape[0], dtype=dtype, device=device))
 
     pose = env.target_pose
     gt_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(device, dtype, pose[1])),
@@ -849,7 +904,7 @@ class PokeRunner:
 
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
-        empty_sdf = util.VoxelSet(torch.empty(0), torch.empty(0))
+        empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
         self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
                                                         scale_known_freespace=20,
                                                         vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
@@ -868,9 +923,8 @@ class PokeRunner:
                 continue
             # this_pts corresponds to tracked contact points that are segmented together
             this_pts = tensor_utils.ensure_tensor(self.device, self.dtype, this_pts)
-            self.volumetric_cost.sdf_voxels = util.VoxelSet(this_pts,
-                                                            torch.zeros(this_pts.shape[0], dtype=self.dtype,
-                                                                        device=self.device))
+            self.volumetric_cost.sdf_voxels = voxel.VoxelSet(this_pts, torch.zeros(this_pts.shape[0], dtype=self.dtype,
+                                                                                   device=self.device))
 
             if self.best_tsf_guess is None:
                 self.best_tsf_guess = initialize_transform_estimates(self.B, env, self.init_method, self.method)
@@ -885,6 +939,10 @@ class PokeRunner:
                     T, distances = read_offline_output(self.reg_method, level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
+                elif self.reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
+                    T, distances = do_medial_constraint_registration(this_pts, self.volumetric_cost.sdf,
+                                                                     self.best_tsf_guess, self.B, self.env.level, seed,
+                                                                     self.pokes, self.env.vis)
                 else:
                     T, distances = do_registration(this_pts, self.model_points_register, self.best_tsf_guess, self.B,
                                                    self.volumetric_cost,
@@ -995,7 +1053,7 @@ class PokeRunner:
         return cache
 
     def run(self, name="", seed=0, ctrl_noise_max=0.005, draw_text=None):
-        volumetric.previous_solutions = None
+        quality_diversity.previous_solutions = None
         if os.path.exists(self.dbname):
             self.cache = pd.read_pickle(self.dbname)
         else:
@@ -1088,12 +1146,11 @@ class ExportProblemRunner(PokeRunner):
 
     def hook_before_first_poke(self, seed):
         super().hook_before_first_poke(seed)
-        data_dir = cfg.DATA_DIR
-        self.pc_to_register_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}.txt")
-        pc_register_against_file = os.path.join(data_dir, f"poke/{self.env.level.name}.txt")
-        self.transform_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_trans.txt")
-        self.free_surface_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_free_surface.txt")
-        transform_gt_file = os.path.join(data_dir, f"poke/{self.env.level.name}_{seed}_gt_trans.txt")
+        self.pc_to_register_file = f"{saved_traj_dir_base(self.env.level)}_{seed}.txt"
+        pc_register_against_file = f"{saved_traj_dir_base(self.env.level)}.txt"
+        self.transform_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_trans.txt"
+        self.free_surface_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_free_surface.txt"
+        transform_gt_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_gt_trans.txt"
         # exporting data for offline baselines, remove the stale file
         export_pc_register_against(pc_register_against_file, self.env)
         export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
@@ -1238,9 +1295,9 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         if len(self.contact_pts) < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
             return
 
-        self.volumetric_cost.sdf_voxels = util.VoxelSet(self.contact_pts,
-                                                        torch.zeros(self.contact_pts.shape[0], dtype=self.dtype,
-                                                                    device=self.device))
+        self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.contact_pts,
+                                                         torch.zeros(self.contact_pts.shape[0], dtype=self.dtype,
+                                                                     device=self.device))
         self.evaluate_registrations()
 
     def _evaluate_transforms(self, transforms):
@@ -1735,8 +1792,8 @@ def plot_sdf(env: poke.PokeEnv, filter_pts=None):
     env.obj_factory.draw_mesh(env.vis, "objframe", ([0, 0, 0], [0, 0, 0, 1]), (0.3, 0.3, 0.3, 0.5),
                               object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
     s = env.target_sdf
-    assert isinstance(s, stucco.sdf.CachedSDF)
-    coords, pts = util.get_coordinates_and_points_in_grid(s.resolution, s.ranges)
+    assert isinstance(s, sdf.CachedSDF)
+    coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, s.ranges)
     if filter_pts is not None:
         pts = filter_pts(pts)
     sdf_val, sdf_grad = s(pts)

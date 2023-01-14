@@ -1,13 +1,15 @@
-import abc
-import copy
-import math
+import os
+from typing import Optional
 
 import matplotlib
-import numpy as np
 import torch
-from multidim_indexing import torch_view
+from matplotlib import pyplot as plt, cm as cm
 
 import pytorch_kinematics
+from pytorch3d.ops import utils as oputil
+from pytorch3d.ops.points_alignment import SimilarityTransform
+
+from stucco import cfg
 
 
 def matrix_to_pos_rot(m):
@@ -30,141 +32,89 @@ def move_figure(f, x, y):
         f.canvas.manager.window.move(x, y)
 
 
-def get_divisible_range_by_resolution(resolution, range_per_dim):
-    # ensure value range divides resolution evenly
-    temp_range = []
-    for low, high in range_per_dim:
-        span = high - low
-        span = round(span / resolution)
-        temp_range.append((low, low + span * resolution))
-    return temp_range
+restart_index = 0
+sgd_index = 0
 
 
-def get_coordinates_and_points_in_grid(resolution, range_per_dim, dtype=torch.float, device='cpu', get_points=True):
-    # create points along the value ranges
-    coords = [torch.arange(low, high + resolution, resolution, dtype=dtype, device=device) for low, high in
-              range_per_dim]
-    pts = torch.cartesian_prod(*coords) if get_points else None
-    return coords, pts
+def plot_restart_losses(losses):
+    global restart_index, sgd_index
+    losses = torch.stack(losses).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.set_xlabel('restart iteration')
+    ax.set_ylabel('cost')
+    ax.set_yscale('log')
+    fig.suptitle(f"poke {restart_index}")
+
+    for b in range(losses.shape[1]):
+        c = (b + 1) / losses.shape[1]
+        ax.plot(losses[:, b], c=cm.GnBu(c))
+    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
+    restart_index += 1
+    sgd_index = 0
 
 
-class Voxels(abc.ABC):
-    @abc.abstractmethod
-    def get_known_pos_and_values(self):
-        """Return the position (N x 3) and values (N) of known voxels"""
+def plot_sgd_losses(losses):
+    global restart_index, sgd_index
+    losses = torch.stack(losses).cpu().numpy()
+    fig, ax = plt.subplots()
+    ax.set_xlabel('sgd iteration')
+    ax.set_ylabel('cost')
+    ax.set_yscale('log')
+    fig.suptitle(f"poke {restart_index} restart {sgd_index}")
+
+    for b in range(losses.shape[1]):
+        c = (b + 1) / losses.shape[1]
+        ax.plot(losses[:, b], c=cm.PuRd(c))
+    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/sgd', f"{restart_index}_{sgd_index}.png"))
+    sgd_index += 1
 
 
-class VoxelGrid(Voxels):
-    def __init__(self, resolution, range_per_dim, dtype=torch.float, device='cpu'):
-        self.resolution = resolution
-        self.invalid_val = 0
-        self.dtype = dtype
-        self.device = device
-        self._create_voxels(resolution, range_per_dim)
-
-    def _create_voxels(self, resolution, range_per_dim):
-        self.range_per_dim = get_divisible_range_by_resolution(resolution, range_per_dim)
-        self.coords, self.pts = get_coordinates_and_points_in_grid(resolution, self.range_per_dim, dtype=self.dtype,
-                                                                   device=self.device)
-        # underlying data
-        self._data = torch.zeros([len(coord) for coord in self.coords], dtype=self.dtype, device=self.device)
-        self.voxels = torch_view.TorchMultidimView(self._data, self.range_per_dim, invalid_value=self.invalid_val)
-        self.range_per_dim = np.array(self.range_per_dim)
-
-    def get_known_pos_and_values(self):
-        known = self.voxels.raw_data != self.invalid_val
-        indices = known.nonzero()
-        # these points are in object frame
-        pos = self.voxels.ensure_value_key(indices)
-        val = self.voxels.raw_data[indices]
-        return pos, val
-
-    def get_voxel_values(self):
-        """Get the raw value of the voxels without any coordinate information"""
-        return self._data
-
-    def get_voxel_center_points(self):
-        return self.pts
-
-    def __getitem__(self, pts):
-        return self.voxels[pts]
-
-    def __setitem__(self, pts, value):
-        self.voxels[pts] = value
+def apply_init_transform(Xt, init_transform: Optional[SimilarityTransform] = None):
+    b, size_X, dim = Xt.shape
+    if init_transform is not None:
+        # parse the initial transform from the input and apply to Xt
+        try:
+            R, T, s = init_transform
+            R = R.clone()
+            T = T.clone()
+            s = s.clone()
+            assert (
+                    R.shape == torch.Size((b, dim, dim))
+                    and T.shape == torch.Size((b, dim))
+                    and s.shape == torch.Size((b,))
+            )
+        except Exception:
+            raise ValueError(
+                "The initial transformation init_transform has to be "
+                "a named tuple SimilarityTransform with elements (R, T, s). "
+                "R are dim x dim orthonormal matrices of shape "
+                "(minibatch, dim, dim), T is a batch of dim-dimensional "
+                "translations of shape (minibatch, dim) and s is a batch "
+                "of scalars of shape (minibatch,)."
+            )
+        # apply the init transform to the input point cloud
+        Xt = apply_similarity_transform(Xt, R, T, s)
+    else:
+        # initialize the transformation with identity
+        R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
+        T = Xt.new_zeros((b, dim))
+        s = Xt.new_ones(b)
+    return Xt, R, T, s
 
 
-class ExpandingVoxelGrid(VoxelGrid):
-    def __setitem__(self, pts, value):
-        # if this query goes outside the range, expand the range in increments of the resolution
-        min = pts.min(dim=0).values
-        max = pts.max(dim=0).values
-        range_per_dim = copy.deepcopy(self.range_per_dim)
-        for dim in range(len(min)):
-            over = (max[dim] - self.range_per_dim[dim][1]).item()
-            under = (self.range_per_dim[dim][0] - min[dim]).item()
-            # adjust in increments of resolution
-            if over > 0:
-                range_per_dim[dim][1] += math.ceil(over / self.resolution) * self.resolution
-            if under > 0:
-                range_per_dim[dim][0] -= math.ceil(under / self.resolution) * self.resolution
-        if not np.allclose(range_per_dim, self.range_per_dim):
-            # transfer over values
-            known_pos, known_values = self.get_known_pos_and_values()
-            self._create_voxels(self.resolution, range_per_dim)
-            super().__setitem__(known_pos, known_values)
-
-        return super().__setitem__(pts, value)
-
-
-class VoxelSet(Voxels):
-    def __init__(self, positions, values):
-        self.positions = positions
-        self.values = values
-
-    def __setitem__(self, pts, value):
-        self.positions = torch.cat((self.positions, pts.view(-1, self.positions.shape[-1])), dim=0)
-        self.values = torch.cat((self.values, value))
-
-    def get_known_pos_and_values(self):
-        return self.positions, self.values
-
-
-class ObjectFrameSDF(abc.ABC):
-    @abc.abstractmethod
-    def __call__(self, points_in_object_frame):
-        """
-        Evaluate the signed distance function at given points in the object frame
-        :param points_in_object_frame: B x N x d d-dimensional points (2 or 3) of B batches; located in object frame
-        :return: tuple of B x N signed distance from closest object surface in m and B x N x d SDF gradient pointing
-            towards higher SDF values (away from surface when outside the object and towards the surface when inside)
-        """
-
-    def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
-        """
-        Get a voxel view of a part of the SDF
-        :param voxels: the voxel over which to evaluate the SDF; if left as none, take the default range which is
-        implementation dependent
-        :return:
-        """
-        if voxels is None:
-            voxels = VoxelGrid(0.01, [[-1, 1], [-1, 1], [-0.6, 1]])
-
-        pts = voxels.get_voxel_center_points()
-        sdf_val, sdf_grad = self.__call__(pts.unsqueeze(0))
-        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
-
-        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim, invalid_value=self.__call__)
-
-    def get_filtered_points(self, unary_filter, voxels: VoxelGrid = None) -> torch.tensor:
-        """
-        Get a N x d sequence of points extracted from a voxel grid such that their SDF values satisfy a given
-        unary filter (on their SDF value)
-        :param unary_filter: filter on the SDF value of each point, evaluting to true results in accepting that point
-        :param voxels:
-        :return:
-        """
-        model_voxels = self.get_voxel_view(voxels)
-        interior = unary_filter(model_voxels.raw_data)
-        indices = interior.nonzero()
-        # these points are in object frame
-        return model_voxels.ensure_value_key(indices)
+def apply_similarity_transform(
+        X: torch.Tensor, R: torch.Tensor, T: torch.Tensor = None, s: torch.Tensor = None
+) -> torch.Tensor:
+    """
+    Applies a similarity transformation parametrized with a batch of orthonormal
+    matrices `R` of shape `(minibatch, d, d)`, a batch of translations `T`
+    of shape `(minibatch, d)` and a batch of scaling factors `s`
+    of shape `(minibatch,)` to a given `d`-dimensional cloud `X`
+    of shape `(minibatch, num_points, d)`
+    """
+    if s is not None:
+        R = s[:, None, None] * R
+    X = R @ X.transpose(-1, -2)
+    if T is not None:
+        X = X + T[:, :, None]
+    return X.transpose(-1, -2)

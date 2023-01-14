@@ -18,6 +18,7 @@ from stucco import icp
 from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 from stucco import util
+from stucco.sdf import ObjectFrameSDF
 
 from stucco.sdf import ObjectFactory
 
@@ -181,7 +182,7 @@ class ShapeExplorationPolicy(abc.ABC):
 
 
 class ICPEVExplorationPolicy(ShapeExplorationPolicy):
-    def __init__(self, obj_frame_sdf: util.ObjectFrameSDF, num_samples_each_action=100,
+    def __init__(self, obj_frame_sdf: ObjectFrameSDF, num_samples_each_action=100,
                  icp_batch=30, alpha=0.01,
                  alpha_evaluate=0.05,
                  upright_bias=0.3,

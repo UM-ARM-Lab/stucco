@@ -10,15 +10,31 @@ import scipy.optimize as spo
 
 from stucco import util
 from stucco.env.env import Visualizer
-from stucco.icp.sgd import ICPSolution, SimilarityTransform, _apply_similarity_transform
+from stucco.icp.sgd import ICPSolution, SimilarityTransform
+from stucco.util import apply_similarity_transform
+from stucco.sdf import ObjectFrameSDF
+from stucco import voxel
 
 
+# balls are tensors for efficiency, with each dimension taking on these meanings
+class MedialBall:
+    X = 0
+    Y = 1
+    Z = 2
+    PX = 3
+    PY = 4
+    PZ = 5
+    R = 6
+
+MedialBallType = torch.tensor
+
+# TODO redo with medial balls and CMA-ES
 def iterative_closest_point_medial_constraint(
-        obj_sdf: util.ObjectFrameSDF,
-        freespace_voxels: util.VoxelGrid,
+        obj_sdf: ObjectFrameSDF,
+        medial_balls: MedialBallType,
         X: torch.Tensor,
         init_transform: SimilarityTransform = None,
-        max_iterations: int = 5,
+        max_iterations: int = 100,
         relative_rmse_thr: float = 1e-6,
         vis: Visualizer = None,
         verbose: bool = False,
@@ -50,7 +66,7 @@ def iterative_closest_point_medial_constraint(
                 "of scalars of shape (minibatch,)."
             )
         # apply the init transform to the input point cloud
-        Xt = _apply_similarity_transform(Xt, R, T, s)
+        Xt = apply_similarity_transform(Xt, R, T, s)
     else:
         # initialize the transformation with identity
         R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
@@ -78,7 +94,7 @@ def iterative_closest_point_medial_constraint(
         R, T, s = sim_transform
 
         # apply the estimated similarity transform to Xt_init
-        Xt = _apply_similarity_transform(Xt_init, R, T, s)
+        Xt = apply_similarity_transform(Xt_init, R, T, s)
 
         # add the current transformation to the history
         t_history.append(SimilarityTransform(R, T, s))
@@ -118,8 +134,8 @@ def iterative_closest_point_medial_constraint(
 
 
 def minimal_medial_constraint_alignment(
-        obj_sdf: util.ObjectFrameSDF,
-        freespace_voxels: util.VoxelGrid,
+        obj_sdf: ObjectFrameSDF,
+        freespace_voxels: voxel.VoxelGrid,
         X,  # surface points
         R: torch.Tensor = None, T: torch.tensor = None,
         vis: Visualizer = None,
@@ -174,7 +190,7 @@ def minimal_medial_constraint_alignment(
         R, T = get_torch_RT(x)
         Rt = R.transpose(-1, -2)
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
-        pts_interior_world = _apply_similarity_transform(model_interior_points, Rt, tt)
+        pts_interior_world = apply_similarity_transform(model_interior_points, Rt, tt)
         # sdf of freespace points should be > 0
         # conversely, no interior points should lie in a freespace voxel
         occupied = freespace_voxels[pts_interior_world]

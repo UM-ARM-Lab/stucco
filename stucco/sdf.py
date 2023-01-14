@@ -9,6 +9,7 @@ import torch
 from arm_pytorch_utilities import tensor_utils
 from multidim_indexing import torch_view
 
+from stucco.voxel import VoxelGrid, get_divisible_range_by_resolution, get_coordinates_and_points_in_grid
 from stucco import util, cfg
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 from typing import NamedTuple, Union
@@ -130,7 +131,48 @@ class ObjectFactory(abc.ABC):
         return SDFQuery(*self._do_object_frame_closest_point(points_in_object_frame, compute_normal=compute_normal))
 
 
-class PyBulletNaiveSDF(util.ObjectFrameSDF):
+class ObjectFrameSDF(abc.ABC):
+    @abc.abstractmethod
+    def __call__(self, points_in_object_frame):
+        """
+        Evaluate the signed distance function at given points in the object frame
+        :param points_in_object_frame: B x N x d d-dimensional points (2 or 3) of B batches; located in object frame
+        :return: tuple of B x N signed distance from closest object surface in m and B x N x d SDF gradient pointing
+            towards higher SDF values (away from surface when outside the object and towards the surface when inside)
+        """
+
+    def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
+        """
+        Get a voxel view of a part of the SDF
+        :param voxels: the voxel over which to evaluate the SDF; if left as none, take the default range which is
+        implementation dependent
+        :return:
+        """
+        if voxels is None:
+            voxels = VoxelGrid(0.01, [[-1, 1], [-1, 1], [-0.6, 1]])
+
+        pts = voxels.get_voxel_center_points()
+        sdf_val, sdf_grad = self.__call__(pts.unsqueeze(0))
+        cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in voxels.coords])
+
+        return torch_view.TorchMultidimView(cached_underlying_sdf, voxels.range_per_dim, invalid_value=self.__call__)
+
+    def get_filtered_points(self, unary_filter, voxels: VoxelGrid = None) -> torch.tensor:
+        """
+        Get a N x d sequence of points extracted from a voxel grid such that their SDF values satisfy a given
+        unary filter (on their SDF value)
+        :param unary_filter: filter on the SDF value of each point, evaluting to true results in accepting that point
+        :param voxels:
+        :return:
+        """
+        model_voxels = self.get_voxel_view(voxels)
+        interior = unary_filter(model_voxels.raw_data)
+        indices = interior.nonzero()
+        # these points are in object frame
+        return model_voxels.ensure_value_key(indices)
+
+
+class PyBulletNaiveSDF(ObjectFrameSDF):
     def __init__(self, test_obj_id, vis=None):
         self.test_obj_id = test_obj_id
         self.vis = vis
@@ -165,7 +207,7 @@ class PyBulletNaiveSDF(util.ObjectFrameSDF):
         return sdf, sdf_grad
 
 
-class MeshSDF(util.ObjectFrameSDF):
+class MeshSDF(ObjectFrameSDF):
     def __init__(self, obj_factory: ObjectFactory, vis=None):
         self.obj_factory = obj_factory
         self.vis = vis
@@ -193,7 +235,7 @@ class MeshSDF(util.ObjectFrameSDF):
         return res.distance, res.gradient
 
 
-class CachedSDF(util.ObjectFrameSDF):
+class CachedSDF(ObjectFrameSDF):
     def __init__(self, object_name, resolution, range_per_dim, gt_sdf, device="cpu", clean_cache=False,
                  debug_check_sdf=False):
         fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
@@ -209,7 +251,7 @@ class CachedSDF(util.ObjectFrameSDF):
         self.gt_sdf = gt_sdf
         self.resolution = resolution
 
-        range_per_dim = util.get_divisible_range_by_resolution(resolution, range_per_dim)
+        range_per_dim = get_divisible_range_by_resolution(resolution, range_per_dim)
         self.ranges = range_per_dim
 
         self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
@@ -230,7 +272,7 @@ class CachedSDF(util.ObjectFrameSDF):
             if gt_sdf is None:
                 raise RuntimeError("Cached SDF did not find the cache and requires an initialize queryable SDF")
 
-            coords, pts = util.get_coordinates_and_points_in_grid(self.resolution, self.ranges)
+            coords, pts = get_coordinates_and_points_in_grid(self.resolution, self.ranges)
             sdf_val, sdf_grad = gt_sdf(pts)
             cached_underlying_sdf = sdf_val.reshape([len(coord) for coord in coords])
             cached_underlying_sdf_grad = sdf_grad.squeeze(0)
@@ -284,7 +326,7 @@ class CachedSDF(util.ObjectFrameSDF):
             assert torch.all(close_enough[within_bounds])
         return val, grad
 
-    def get_voxel_view(self, voxels: util.VoxelGrid = None) -> torch_view.TorchMultidimView:
+    def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
         if voxels is None:
             return self.voxels
 

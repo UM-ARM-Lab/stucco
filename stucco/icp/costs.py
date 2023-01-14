@@ -2,10 +2,11 @@ import matplotlib.colors, matplotlib.cm
 import torch
 from torch.nn import MSELoss
 from pytorch3d.ops.knn import knn_gather, _KNN
-from stucco.icp.sgd import _apply_similarity_transform
-from typing import Any
 
-from stucco import util
+from stucco import sdf
+from stucco import voxel
+from stucco.util import apply_similarity_transform
+from typing import Any
 
 
 class RegistrationCost:
@@ -42,14 +43,14 @@ class SurfaceNormalCost(RegistrationCost):
 
     def __call__(self,  R, T, s, knn_res: _KNN = None):
         corresponding_ynorm = knn_gather(self.Ynorm, knn_res.idx).squeeze(-2)
-        transformed_norms = _apply_similarity_transform(self.Xnorm, R, s=s)
+        transformed_norms = apply_similarity_transform(self.Xnorm, R, s=s)
         return self.loss(corresponding_ynorm, transformed_norms) * self.scale
 
 
 class KnownFreeSpaceCost(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, world_frame_interior_points: torch.tensor, world_frame_interior_gradients: torch.tensor,
-                interior_point_weights: torch.tensor, world_frame_voxels: util.VoxelGrid) -> torch.tensor:
+                interior_point_weights: torch.tensor, world_frame_voxels: voxel.VoxelGrid) -> torch.tensor:
         # interior points should not be occupied
         occupied = world_frame_voxels[world_frame_interior_points]
         # voxels should be 1 where it is known free space, otherwise 0
@@ -110,14 +111,13 @@ class KnownSDFDistanceCost:
 class VolumetricCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
-    def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
+    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
                  vis=None, scale_known_freespace=1., scale_known_sdf=1.,
                  obj_factory=None,
                  debug=False, debug_known_sgd=False, debug_freespace=False):
         """
         :param free_voxels: representation of freespace
         :param sdf_voxels: voxels for which we know the exact SDF values for
-        :param model_interior_points: points on the inside of the model (not on the surface)
         :param obj_sdf: signed distance function of the target object in object frame
         :param scale:
         """
@@ -192,12 +192,12 @@ class VolumetricCost(RegistrationCost):
     def _transform_model_to_world_frame(self, R, T, s):
         Rt = R.transpose(-1, -2)
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
-        self._pts_interior = _apply_similarity_transform(self.model_interior_points, Rt, tt, s)
-        self._pts_all = _apply_similarity_transform(self.model_all_points, Rt, tt, s)
+        self._pts_interior = apply_similarity_transform(self.model_interior_points, Rt, tt, s)
+        self._pts_all = apply_similarity_transform(self.model_all_points, Rt, tt, s)
         if self.debug and self._pts_interior.requires_grad:
             self._pts_interior.retain_grad()
             self._pts_all.retain_grad()
-        self._grad = _apply_similarity_transform(self.model_interior_normals, Rt)
+        self._grad = apply_similarity_transform(self.model_interior_normals, Rt)
 
     def visualize(self, R, T, s):
         if not self.debug:
@@ -322,6 +322,6 @@ class ICPPoseCostMatrixInputWrapper:
         R = H[:, :3, :3]
         T = H[:, :3, 3]
         s = torch.ones(N, dtype=T.dtype, device=T.device)
-        state_cost = self.cost.__call__(None, R, T, s)
+        state_cost = self.cost.__call__(R, T, s, None)
         action_cost = torch.norm(dH, dim=1) if dH is not None else 0
         return state_cost + action_cost * self.action_cost_scale

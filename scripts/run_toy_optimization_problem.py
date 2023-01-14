@@ -10,7 +10,7 @@ import torch
 from arm_pytorch_utilities.rand import seed
 from arm_pytorch_utilities import grad
 
-from stucco.icp.volumetric import plot_restart_losses
+from stucco.util import plot_restart_losses
 from stucco.svgd import RBF, SVGD
 import cma
 from ribs.archives import GridArchive

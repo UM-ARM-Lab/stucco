@@ -1,6 +1,6 @@
 import torch
 import warnings
-from typing import List, NamedTuple, Optional, TYPE_CHECKING, Union
+from typing import List, Optional, Union
 from torch.nn import MSELoss
 
 from pytorch3d.ops import knn_points
@@ -10,23 +10,7 @@ from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform
 from pytorch3d.ops.knn import _KNN
 from pytorch3d.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
 
-
-def _apply_similarity_transform(
-        X: torch.Tensor, R: torch.Tensor, T: torch.Tensor = None, s: torch.Tensor = None
-) -> torch.Tensor:
-    """
-    Applies a similarity transformation parametrized with a batch of orthonormal
-    matrices `R` of shape `(minibatch, d, d)`, a batch of translations `T`
-    of shape `(minibatch, d)` and a batch of scaling factors `s`
-    of shape `(minibatch,)` to a given `d`-dimensional cloud `X`
-    of shape `(minibatch, num_points, d)`
-    """
-    if s is not None:
-        R = s[:, None, None] * R
-    X = R @ X.transpose(-1, -2)
-    if T is not None:
-        X = X + T[:, :, None]
-    return X.transpose(-1, -2)
+from stucco.util import apply_similarity_transform
 
 
 def iterative_closest_point_sgd(
@@ -142,7 +126,7 @@ def iterative_closest_point_sgd(
                 "of scalars of shape (minibatch,)."
             )
         # apply the init transform to the input point cloud
-        Xt = _apply_similarity_transform(Xt, R, T, s)
+        Xt = apply_similarity_transform(Xt, R, T, s)
     else:
         # initialize the transformation with identity
         R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
@@ -192,7 +176,7 @@ def iterative_closest_point_sgd(
         R, T, s = sim_transform
 
         # apply the estimated similarity transform to Xt_init
-        Xt = _apply_similarity_transform(Xt_init, R, T, s)
+        Xt = apply_similarity_transform(Xt_init, R, T, s)
 
         # add the current transformation to the history
         t_history.append(SimilarityTransform(R, T, s))
@@ -369,19 +353,19 @@ def corresponding_points_alignment_sgd(
             # we compute T based on the specifics of the problem
             if estimate_scale:
                 # s is trained in this case
-                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R, s=s)[:, 0, :]
+                T = Ymu[:, 0, :] - apply_similarity_transform(Xmu, R, s=s)[:, 0, :]
             else:
-                T = Ymu[:, 0, :] - _apply_similarity_transform(Xmu, R)[:, 0, :]
+                T = Ymu[:, 0, :] - apply_similarity_transform(Xmu, R)[:, 0, :]
         return R, T
 
     for epoch in range(iterations):
         R, T = get_usable_transform_representation()
 
         if learn_translation:
-            yhat = _apply_similarity_transform(Xt, R, T, s)
+            yhat = apply_similarity_transform(Xt, R, T, s)
             alignment_loss = loss(yhat, Yt)
         else:
-            yhat = _apply_similarity_transform(Xc, R, s=s)
+            yhat = apply_similarity_transform(Xc, R, s=s)
             alignment_loss = loss(yhat, Yc)
         # since using reduction None, need to reduce it to per batch
         alignment_loss = alignment_loss.sum(dim=1).sum(dim=1)
