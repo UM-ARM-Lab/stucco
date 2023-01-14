@@ -8,7 +8,7 @@ from typing import Any
 from stucco import util
 
 
-class ICPPoseCost:
+class RegistrationCost:
     def __call__(self,  R, T, s, knn_res: _KNN = None):
         """Cost for given pose guesses of ICP
 
@@ -23,7 +23,7 @@ class ICPPoseCost:
         pass
 
 
-class ComposeCost(ICPPoseCost):
+class ComposeCost(RegistrationCost):
     def __init__(self, *args):
         self.costs = args
 
@@ -31,7 +31,7 @@ class ComposeCost(ICPPoseCost):
         return sum(cost(*args, **kwargs) for cost in self.costs)
 
 
-class SurfaceNormalCost(ICPPoseCost):
+class SurfaceNormalCost(RegistrationCost):
     """Cost of matching the surface normals at corresponding points"""
 
     def __init__(self, Xnorm, Ynorm, scale=1.):
@@ -107,7 +107,7 @@ class KnownSDFDistanceCost:
         return loss
 
 
-class VolumetricCost(ICPPoseCost):
+class VolumetricCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
     def __init__(self, free_voxels: util.Voxels, sdf_voxels: util.Voxels, obj_sdf: util.ObjectFrameSDF, scale=1,
@@ -312,7 +312,7 @@ class VolumetricCost(ICPPoseCost):
 
 
 class ICPPoseCostMatrixInputWrapper:
-    def __init__(self, cost: ICPPoseCost, action_cost_scale=1.0):
+    def __init__(self, cost: RegistrationCost, action_cost_scale=1.0):
         self.cost = cost
         self.action_cost_scale = action_cost_scale
 
