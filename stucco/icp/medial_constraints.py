@@ -29,7 +29,7 @@ class MedialConstraintCost(RegistrationCost):
                  model_surface_points_world_frame: torch.tensor, scale=1,
                  vis: typing.Optional[Visualizer] = None, scale_medial_ball_penetration=1., scale_surface_points_sdf=1.,
                  obj_factory=None,
-                 debug=False, debug_known_sgd=False, debug_freespace=False):
+                 debug=False):
         """
         :param obj_sdf: signed distance function of the target object in object frame
         :param scale:
@@ -55,12 +55,11 @@ class MedialConstraintCost(RegistrationCost):
 
         # intermediate products for visualization purposes
         self.debug = debug
-        self.debug_known_sgd = debug_known_sgd
-        self.debug_freespace = debug_freespace
 
         self.vis = vis
         self.obj_factory = obj_factory
         self.obj_map = {}
+        self._penetration = None
 
     def __call__(self, R, T, s, knn_res=None):
         # assign batch and reuse for later for efficiency
@@ -73,16 +72,15 @@ class MedialConstraintCost(RegistrationCost):
         # transform the points via the given similarity transformation parameters, then evaluate their occupancy
         # should transform the interior points from link frame to world frame
         self._transform_model_to_object_frame(R, T, s)
-        self.visualize(R, T, s)
 
         loss = torch.zeros(self.B, device=self._pts_world_orig.device, dtype=self._pts_world_orig.dtype)
 
         if self.scale_medial_ball_penetration != 0:
             d, _ = self.sdf(self._ball_c_obj)
-            penetration = self.medial_balls[:, MedialBall.R] - d
+            self._penetration = self.medial_balls[:, MedialBall.R] - d
             # non-violating so have 0 cost
-            penetration[penetration < 0] = 0
-            bl = penetration.square()
+            self._penetration[self._penetration < 0] = 0
+            bl = self._penetration.square()
             # reduce across each ball
             loss += bl.mean(dim=-1) * self.scale_medial_ball_penetration
         if self.scale_surface_points_sdf != 0:
@@ -91,6 +89,7 @@ class MedialConstraintCost(RegistrationCost):
             # reduce across each contact point
             loss += l.mean(dim=-1) * self.scale_surface_points_sdf
 
+        self.visualize(R, T, s)
         return loss * self.scale
 
     def _transform_model_to_object_frame(self, R, T, s):
@@ -107,9 +106,19 @@ class MedialConstraintCost(RegistrationCost):
         device = R.device
         dtype = R.dtype
         batch = R.shape[0]
-        I = torch.eye(4, device=device, dtype=dtype).repeat(batch, 1, 1)
-        sdf.draw_pose_distribution(I, self.obj_map, self.vis, self.obj_factory)
-        for i, pt in enumerate(self._pts_obj[0]):
+        H = torch.eye(4, device=device, dtype=dtype).repeat(batch, 1, 1)
+        # H[:, :3, :3] = R
+        # H[:, :3, 3] = T
+        sdf.draw_pose_distribution(H[0].unsqueeze(0), self.obj_map, self.vis, self.obj_factory)
+        b = 0
+        for i, pt in enumerate(self._pts_obj[b]):
             self.vis.draw_point(f"mcpt.{i}", pt.cpu().numpy(), color=(0, 1, 0), length=0.005, scale=1)
-        for i, pt in enumerate(self._ball_c_obj[0]):
-            self.vis.draw_point(f"mcball.{i}", pt.cpu().numpy(), color=(0, 0, 1), length=0.005, scale=1)
+        for i, pt in enumerate(self._ball_c_obj[b]):
+            c = (0, 0, 1)
+            label = None
+            r = self.medial_balls[i, MedialBall.R].item()
+            if self._penetration[b, i] > 0:
+                c = (1, 0, 0)
+                # label = f"{self._penetration[b, i] / r * 100:.1f}%"
+            self.vis.draw_point(f"mcball.{i}", pt.cpu().numpy(), color=c,
+                                length=r, scale=1, label=label)

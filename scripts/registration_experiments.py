@@ -255,7 +255,7 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
                                               given_init_pose=best_tsf_guess,
                                               batch=B,
                                               # parameters when combined with ground truth initialization helps debug
-                                              # maxiter=0, sigma=0.0001,
+                                              # maxiter=100, sigma=0.0001,
                                               verbose=False,
                                               save_loss_plot=False,
                                               vis=vis, obj_factory=obj_factory)

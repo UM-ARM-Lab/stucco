@@ -609,7 +609,8 @@ def icp_medial_constraints(obj_sdf: ObjectFrameSDF, medial_balls, A, given_init_
                                           given_init_pose[:, :3, 3],
                                           torch.ones(batch, device=A.device, dtype=A.dtype))
 
-    medial_constraint_cost = MedialConstraintCost(medial_balls, obj_sdf, A, vis=vis, obj_factory=obj_factory)
+    medial_constraint_cost = MedialConstraintCost(medial_balls, obj_sdf, A, vis=vis, obj_factory=obj_factory,
+                                                  debug=False)
     op = quality_diversity.CMAES(medial_constraint_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                                  **kwargs)
     res = op.run()
