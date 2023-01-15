@@ -46,8 +46,10 @@ def make_cylinder(radius, height, position, euler_angles, mass=1., lateral_frict
     return obj_id
 
 
-def make_sphere(radius, position, mass=1., lateral_friction=1.5, spinning_friction=0.1, rgba=(0.8, 0.7, 0.3, 0.8)):
-    col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=radius)
+def make_sphere(radius, position, visual_only=False, mass=1., lateral_friction=1.5, spinning_friction=0.1, rgba=(0.8, 0.7, 0.3, 0.8)):
+    col_id = -1
+    if not visual_only:
+        col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=radius)
     vis_id = p.createVisualShape(p.GEOM_SPHERE, radius=radius, rgbaColor=rgba)
     obj_id = p.createMultiBody(mass, col_id, vis_id, basePosition=position)
     p.changeDynamics(obj_id, -1, lateralFriction=lateral_friction, spinningFriction=spinning_friction)

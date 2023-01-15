@@ -200,8 +200,11 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     return T, distances
 
 
-def do_medial_constraint_registration(model_points_world_frame, sdf: ObjectFrameSDF, best_tsf_guess, B,
-                                      level: poke.Levels, seed: int, pokes: int, vis=None):
+ball_ids = []
+def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectFrameSDF, best_tsf_guess, B,
+                                      level: poke.Levels, seed: int, pokes: int, vis=None, obj_factory=None,
+                                      plot_balls=False):
+    global ball_ids
     ball_generate_exe = os.path.join(cfg.ROOT_DIR, "../medial_constraint/build/medial_constraint_icp")
     if not os.path.isfile(ball_generate_exe):
         raise RuntimeError(f"Expecting medial constraint ball generating executable to be at {ball_generate_exe}! "
@@ -226,31 +229,38 @@ def do_medial_constraint_registration(model_points_world_frame, sdf: ObjectFrame
             num_balls = int(header[1])
             if this_poke < pokes:
                 # keep going forward
-                i += num_balls
+                i += num_balls + 1
                 continue
             elif this_poke > pokes:
                 # assuming the pokes are ordered, if we're past then there won't be anymore of this poke later
                 break
 
             balls = torch.tensor([[float(v) for v in line.strip().split()] for line in data[i + 1:i + num_balls]])
-            i += num_balls + 1
             break
     if balls is None:
         raise RuntimeError(f"Could now find balls for poke {pokes} in {balls_path}")
-    if vis is not None:
-        obj_ids = []
+    if vis is not None and plot_balls:
+        for ball_id in ball_ids:
+            p.removeBody(ball_id)
+        ball_ids = []
         for ball in balls:
             # create ball and visualize in vis
-            obj_ids.append(
-                make_sphere(ball[MedialBall.R], ball[MedialBall.X: MedialBall.Z + 1], rgba=(0.7, 0.1, 0.2, 0.3)))
+            ball_ids.append(
+                make_sphere(ball[MedialBall.R], ball[MedialBall.X: MedialBall.Z + 1], mass=0, visual_only=True,
+                            rgba=(0.7, 0.1, 0.2, 0.3)))
 
-    T, distances = icp.icp_medial_constraints(sdf, balls,
+    balls = balls.to(device=model_points_world_frame.device, dtype=model_points_world_frame.dtype)
+    T, distances = icp.icp_medial_constraints(obj_sdf, balls,
                                               model_points_world_frame,
                                               given_init_pose=best_tsf_guess,
-                                              batch=B, max_iterations=100, verbose=False,
-                                              # vis=None)
-                                              vis=vis)
+                                              batch=B,
+                                              # parameters when combined with ground truth initialization helps debug
+                                              # maxiter=0, sigma=0.0001,
+                                              verbose=False,
+                                              save_loss_plot=False,
+                                              vis=vis, obj_factory=obj_factory)
     T = T.inverse()
+    logger.info(f"medial constraint RMSE: {distances.mean().item()}")
     return T, distances
 
 
@@ -909,7 +919,7 @@ class PokeRunner:
                                                         scale_known_freespace=20,
                                                         vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
 
-    def register_transforms_with_points(self):
+    def register_transforms_with_points(self, seed):
         """Exports best_segment_idx, transforms_per_object, and rmse_per_object"""
         # note that we update our registration regardless if we're in contact or not
         self.best_distance = None
@@ -927,7 +937,7 @@ class PokeRunner:
                                                                                    device=self.device))
 
             if self.best_tsf_guess is None:
-                self.best_tsf_guess = initialize_transform_estimates(self.B, env, self.init_method, self.method)
+                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env, self.init_method, self.method)
             if self.ground_truth_initialization:
                 self.best_tsf_guess = self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1)
 
@@ -936,13 +946,15 @@ class PokeRunner:
                 T, distances = self.num_points_to_T_cache[N]
             else:
                 if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
-                    T, distances = read_offline_output(self.reg_method, level, seed, self.pokes)
+                    T, distances = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
                 elif self.reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
                     T, distances = do_medial_constraint_registration(this_pts, self.volumetric_cost.sdf,
-                                                                     self.best_tsf_guess, self.B, self.env.level, seed,
-                                                                     self.pokes, self.env.vis)
+                                                                     self.best_tsf_guess, self.B, self.env.level,
+                                                                     seed, self.pokes,
+                                                                     vis=self.env.vis,
+                                                                     obj_factory=self.env.obj_factory)
                 else:
                     T, distances = do_registration(this_pts, self.model_points_register, self.best_tsf_guess, self.B,
                                                    self.volumetric_cost,
@@ -1067,7 +1079,7 @@ class PokeRunner:
 
         obs = self.env.reset()
         self.create_volumetric_cost()
-        self.method = create_tracking_method(self.env, tracking_method_name)
+        self.method = create_tracking_method(self.env, self.tracking_method_name)
         y_order, z_order = predetermined_poke_range().get(env.level,
                                                           ((0, 0.2, 0.3, -0.2, -0.3),
                                                            (0.05, 0.15, 0.25, 0.325, 0.4, 0.5)))
@@ -1122,7 +1134,7 @@ class PokeRunner:
         self.model_normals_world_frame_eval = self.link_to_current_tf_gt.transform_normals(self.model_normals_eval)
 
     def hook_after_poke(self, name, seed):
-        self.register_transforms_with_points()
+        self.register_transforms_with_points(seed)
         # has at least one contact segment
         if self.best_segment_idx is not None:
             self.evaluate_registrations()
@@ -1413,7 +1425,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
 
     def hook_after_poke(self, name, seed):
         if self.pokes in self.plausible_set:
-            self.register_transforms_with_points()
+            self.register_transforms_with_points(seed)
             # has at least one contact segment
             if self.best_segment_idx is None:
                 logger.warning("No sufficient contact segment on poke %d despite having data for the plausible set",
@@ -1846,7 +1858,7 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0):
             input()
 
 
-def plot_poke_chamfer_err(args):
+def plot_poke_chamfer_err(args, level, obj_factory):
     def filter(df):
         # df = df[df["level"].str.contains(level.name) & (
         #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
@@ -1872,7 +1884,7 @@ def plot_poke_chamfer_err(args):
                      plot_median=False, x='poke', y='chamfer_err')
 
 
-def plot_poke_plausible_diversity(args):
+def plot_poke_plausible_diversity(args, level, obj_factory):
     def filter(df):
         # df = df[(df["level"].str.contains(level.name))]
         df = df[(df["level"] == level.name)]
@@ -1892,39 +1904,7 @@ def plot_poke_plausible_diversity(args):
                          plot_median=True, x='poke', y=f'{y}_q{quantile}')
 
 
-parser = argparse.ArgumentParser(description='Object registration from contact')
-parser.add_argument('experiment',
-                    choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
-                             'poke-visualize-sdf', 'poke-visualize-pcd',
-                             'plot-poke-ce', 'plot-poke-pd',
-                             'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
-                             'debug'],
-                    help='which experiment to run')
-registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
-parser.add_argument('--registration',
-                    choices=registration_map.keys(),
-                    default='volumetric',
-                    help='which registration method to run')
-parser.add_argument('--tracking',
-                    choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
-                    default='ours',
-                    help='which tracking method to run')
-parser.add_argument('--seed', metavar='N', type=int, nargs='+',
-                    default=[0],
-                    help='random seed(s) to run')
-parser.add_argument('--no_gui', action='store_true', help='force no GUI')
-# run parameters
-task_map = {level.name.lower(): level for level in poke.Levels}
-parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
-parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
-parser.add_argument('--plot_only', action='store_true',
-                    help='plot only (previous) results without running any experiments')
-parser.add_argument('--read_stored', action='store_true', help='read and process previously output results rather than'
-                                                               ' rerunning where possible')
-
-args = parser.parse_args()
-
-if __name__ == "__main__":
+def main(args):
     level = task_map[args.task]
     tracking_method_name = args.tracking
     registration_method = registration_map[args.registration]
@@ -1946,7 +1926,6 @@ if __name__ == "__main__":
     elif args.experiment == "plot-sdf":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
 
-
         def filter(pts):
             c1 = (pts[:, 0] > -0.15) & (pts[:, 0] < 0.15)
             c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
@@ -1956,7 +1935,6 @@ if __name__ == "__main__":
             # c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.5)
             c = c1 & c2 & c3
             return pts[c][::2]
-
 
         plot_sdf(env, filter_pts=filter)
 
@@ -2009,10 +1987,10 @@ if __name__ == "__main__":
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
     elif args.experiment == "plot-poke-ce":
-        plot_poke_chamfer_err(args)
+        plot_poke_chamfer_err(args, level, obj_factory)
 
     elif args.experiment == "plot-poke-pd":
-        plot_poke_plausible_diversity(args)
+        plot_poke_plausible_diversity(args, level, obj_factory)
 
     elif args.experiment == "debug":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
@@ -2046,3 +2024,40 @@ if __name__ == "__main__":
         #     name: "voxel" in name and "cached" not in name and "icpev" not in name or "tukey" in name)
         # plot_exploration_results(names_to_include=lambda name: "temp" in name or "cache" in name, logy=True)
         # experiment.run(run_name="gp_var")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Object registration from contact')
+    parser.add_argument('experiment',
+                        choices=['build', 'plot-sdf', 'globalmin', 'baseline', 'random-sample', 'freespace', 'poke',
+                                 'poke-visualize-sdf', 'poke-visualize-pcd',
+                                 'plot-poke-ce', 'plot-poke-pd',
+                                 'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
+                                 'debug'],
+                        help='which experiment to run')
+    registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+    parser.add_argument('--registration',
+                        choices=registration_map.keys(),
+                        default='volumetric',
+                        help='which registration method to run')
+    parser.add_argument('--tracking',
+                        choices=['ours', 'online-birch', 'online-dbscan', 'online-kmeans', 'gmphd'],
+                        default='ours',
+                        help='which tracking method to run')
+    parser.add_argument('--seed', metavar='N', type=int, nargs='+',
+                        default=[0],
+                        help='random seed(s) to run')
+    parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+    # run parameters
+    task_map = {level.name.lower(): level for level in poke.Levels}
+    parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
+    parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
+    parser.add_argument('--plot_only', action='store_true',
+                        help='plot only (previous) results without running any experiments')
+    parser.add_argument('--read_stored', action='store_true',
+                        help='read and process previously output results rather than'
+                             ' rerunning where possible')
+
+    args = parser.parse_args()
+
+    main(args)

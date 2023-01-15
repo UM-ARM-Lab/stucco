@@ -10,7 +10,7 @@ import pytorch3d.transforms as tf
 from stucco.env.pybullet_env import draw_AABB
 from stucco.icp.sgd import iterative_closest_point_sgd
 from stucco.icp import volumetric
-from stucco.icp.medial_constraints import iterative_closest_point_medial_constraint
+from stucco.icp.medial_constraints import MedialConstraintCost
 from stucco import util
 from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 from stucco.icp import quality_diversity
@@ -601,19 +601,19 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
     return T, distances
 
 
-def icp_medial_constraints(obj_sdf: ObjectFrameSDF, medial_balls, A, given_init_pose=None, batch=30, **kwargs):
+def icp_medial_constraints(obj_sdf: ObjectFrameSDF, medial_balls, A, given_init_pose=None, batch=30, vis=None,
+                           obj_factory=None, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
                                           given_init_pose[:, :3, 3],
                                           torch.ones(batch, device=A.device, dtype=A.dtype))
 
-    res = iterative_closest_point_medial_constraint(obj_sdf, medial_balls, A.repeat(batch, 1, 1),
-                                                    init_transform=given_init_pose,
-                                                    **kwargs)
-    T = torch.eye(4, device=A.device, dtype=A.dtype).repeat(batch, 1, 1)
-    T[:, :3, :3] = res.RTs.R
-    T[:, :3, 3] = res.RTs.T
+    medial_constraint_cost = MedialConstraintCost(medial_balls, obj_sdf, A, vis=vis, obj_factory=obj_factory)
+    op = quality_diversity.CMAES(medial_constraint_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                 **kwargs)
+    res = op.run()
+    T = _our_res_to_world_to_link_matrix(res)
     distances = res.rmse
     return T, distances
 

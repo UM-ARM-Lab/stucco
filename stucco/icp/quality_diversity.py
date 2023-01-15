@@ -46,7 +46,7 @@ class QDOptimization:
                  model_points_world_frame: torch.tensor,
                  init_transform: Optional[SimilarityTransform] = None,
                  sigma=0.1,
-                 save_loss_plot=True):
+                 save_loss_plot=False, **kwargs):
         self.registration_cost = registration_cost
         self.X = model_points_world_frame
         self.Xt, self.num_points_X = oputil.convert_pointclouds_to_tensor(self.X)
@@ -61,7 +61,7 @@ class QDOptimization:
 
         Xt, R, T, s = apply_init_transform(self.Xt, self.init_transform)
         x0 = self.get_numpy_x(R[0], T[0])
-        self.scheduler = self.create_scheduler(x0)
+        self.scheduler = self.create_scheduler(x0, **kwargs)
         self.restore_previous_results()
 
     def run(self):

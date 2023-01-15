@@ -1,19 +1,11 @@
 # implements a version of https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2723710/haugo2020iterative.pdf?sequence=2
+import typing
+
 import torch
-import numpy as np
-
-from pytorch3d.ops import utils as oputil
-from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix, Transform3d
-from arm_pytorch_utilities.tensor_utils import ensure_tensor
-
-import scipy.optimize as spo
-
-from stucco import util
 from stucco.env.env import Visualizer
-from stucco.icp.sgd import ICPSolution, SimilarityTransform
 from stucco.util import apply_similarity_transform
-from stucco.sdf import ObjectFrameSDF
-from stucco import voxel
+from stucco.icp.costs import RegistrationCost
+from stucco import sdf
 
 
 # balls are tensors for efficiency, with each dimension taking on these meanings
@@ -26,204 +18,98 @@ class MedialBall:
     PZ = 5
     R = 6
 
+
 MedialBallType = torch.tensor
 
-# TODO redo with medial balls and CMA-ES
-def iterative_closest_point_medial_constraint(
-        obj_sdf: ObjectFrameSDF,
-        medial_balls: MedialBallType,
-        X: torch.Tensor,
-        init_transform: SimilarityTransform = None,
-        max_iterations: int = 100,
-        relative_rmse_thr: float = 1e-6,
-        vis: Visualizer = None,
-        verbose: bool = False,
-) -> ICPSolution:
-    # make sure we convert input Pointclouds structures to
-    # padded tensors of shape (N, P, 3)
-    Xt, num_points_X = oputil.convert_pointclouds_to_tensor(X)
-    b, size_X, dim = Xt.shape
 
-    # clone the initial point cloud
-    Xt_init = Xt.clone()
+class MedialConstraintCost(RegistrationCost):
+    """Cost of transformed model pose intersecting with known freespace medial balls"""
 
-    if init_transform is not None:
-        # parse the initial transform from the input and apply to Xt
-        try:
-            R, T, s = init_transform
-            assert (
-                    R.shape == torch.Size((b, dim, dim))
-                    and T.shape == torch.Size((b, dim))
-                    and s.shape == torch.Size((b,))
-            )
-        except Exception:
-            raise ValueError(
-                "The initial transformation init_transform has to be "
-                "a named tuple SimilarityTransform with elements (R, T, s). "
-                "R are dim x dim orthonormal matrices of shape "
-                "(minibatch, dim, dim), T is a batch of dim-dimensional "
-                "translations of shape (minibatch, dim) and s is a batch "
-                "of scalars of shape (minibatch,)."
-            )
-        # apply the init transform to the input point cloud
-        Xt = apply_similarity_transform(Xt, R, T, s)
-    else:
-        # initialize the transformation with identity
-        R = oputil.eyes(dim, b, device=Xt.device, dtype=Xt.dtype)
-        T = Xt.new_zeros((b, dim))
-        s = Xt.new_ones(b)
+    def __init__(self, medial_balls: MedialBallType, obj_sdf: sdf.ObjectFrameSDF,
+                 model_surface_points_world_frame: torch.tensor, scale=1,
+                 vis: typing.Optional[Visualizer] = None, scale_medial_ball_penetration=1., scale_surface_points_sdf=1.,
+                 obj_factory=None,
+                 debug=False, debug_known_sgd=False, debug_freespace=False):
+        """
+        :param obj_sdf: signed distance function of the target object in object frame
+        :param scale:
+        """
 
-    prev_rmse = None
-    rmse = None
-    iteration = -1
-    converged = False
+        self.medial_balls = medial_balls
+        self.sdf = obj_sdf
 
-    # initialize the transformation history
-    t_history = []
+        self.scale = scale
+        self.scale_medial_ball_penetration = scale_medial_ball_penetration
+        self.scale_surface_points_sdf = scale_surface_points_sdf
 
-    # the main loop over ICP iterations
-    for iteration in range(max_iterations):
-        # get the alignment of the nearest neighbors from Yt with Xt_init
-        sim_transform, rmse = minimal_medial_constraint_alignment(
-            obj_sdf, freespace_voxels,
-            Xt_init,
-            R=R,
-            T=T,
-            vis=vis
-        )
-        R, T, s = sim_transform
+        # the un-batched original in world frame, the batched world frame, and the batched transformed object frame
+        self._pts_world_orig = model_surface_points_world_frame
+        self._pts_world = None
+        self._pts_obj = None
+        self._ball_c_world_orig = self.medial_balls[:, MedialBall.X: MedialBall.Z + 1]
+        self._ball_c_world = None
+        self._ball_c_obj = None
 
-        # apply the estimated similarity transform to Xt_init
-        Xt = apply_similarity_transform(Xt_init, R, T, s)
+        # batch
+        self.B = None
 
-        # add the current transformation to the history
-        t_history.append(SimilarityTransform(R, T, s))
+        # intermediate products for visualization purposes
+        self.debug = debug
+        self.debug_known_sgd = debug_known_sgd
+        self.debug_freespace = debug_freespace
 
-        # compute the relative rmse
-        if prev_rmse is None:
-            relative_rmse = rmse.new_ones(b)
-        else:
-            relative_rmse = (prev_rmse - rmse) / prev_rmse
+        self.vis = vis
+        self.obj_factory = obj_factory
+        self.obj_map = {}
 
-        if verbose:
-            rmse_msg = (
-                    f"ICP iteration {iteration}: mean/max rmse = "
-                    + f"{rmse.mean():1.2e}/{rmse.max():1.2e} "
-                    + f"; mean relative rmse = {relative_rmse.mean():1.2e}"
-            )
-            print(rmse_msg)
+    def __call__(self, R, T, s, knn_res=None):
+        # assign batch and reuse for later for efficiency
+        if self.B is None or self.B != R.shape[0]:
+            self.B = R.shape[0]
+            self._pts_world = self._pts_world_orig.repeat(self.B, 1, 1)
+            self._ball_c_world = self._ball_c_world_orig.repeat(self.B, 1, 1)
 
-        # check for convergence
-        if (relative_rmse <= relative_rmse_thr).all():
-            converged = True
-            break
+        # sdf is evaluated in object frame; we're given points in world frame
+        # transform the points via the given similarity transformation parameters, then evaluate their occupancy
+        # should transform the interior points from link frame to world frame
+        self._transform_model_to_object_frame(R, T, s)
+        self.visualize(R, T, s)
 
-        # update the previous rmse
-        prev_rmse = rmse
+        loss = torch.zeros(self.B, device=self._pts_world_orig.device, dtype=self._pts_world_orig.dtype)
 
-    if verbose:
-        if converged:
-            print(f"ICP has converged in {iteration + 1} iterations.")
-        else:
-            print(f"ICP has not converged in {max_iterations} iterations.")
+        if self.scale_medial_ball_penetration != 0:
+            d, _ = self.sdf(self._ball_c_obj)
+            penetration = self.medial_balls[:, MedialBall.R] - d
+            # non-violating so have 0 cost
+            penetration[penetration < 0] = 0
+            bl = penetration.square()
+            # reduce across each ball
+            loss += bl.mean(dim=-1) * self.scale_medial_ball_penetration
+        if self.scale_surface_points_sdf != 0:
+            d, _ = self.sdf(self._pts_obj)
+            l = d.square()
+            # reduce across each contact point
+            loss += l.mean(dim=-1) * self.scale_surface_points_sdf
 
-    if oputil.is_pointclouds(X):
-        Xt = X.update_padded(Xt)  # type: ignore
+        return loss * self.scale
 
-    return ICPSolution(converged, rmse, Xt, SimilarityTransform(R, T, s), t_history)
-
-
-def minimal_medial_constraint_alignment(
-        obj_sdf: ObjectFrameSDF,
-        freespace_voxels: voxel.VoxelGrid,
-        X,  # surface points
-        R: torch.Tensor = None, T: torch.tensor = None,
-        vis: Visualizer = None,
-) -> tuple[SimilarityTransform, torch.tensor]:
-    # make sure we convert input Pointclouds structures to tensors
-    Xt, num_points = oputil.convert_pointclouds_to_tensor(X)
-    b, n, dim = Xt.shape
-    dtype = X.dtype
-    device = X.device
-    if R is None:
-        R = random_rotations(b, dtype=Xt.dtype, device=Xt.device)
-        T = torch.randn((b, dim), dtype=Xt.dtype, device=Xt.device)
-    else:
-        R = R.clone()
-        T = T.clone()
-    s = Xt.new_ones(b)
-
-    model_interior_points = obj_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
-
-    def get_torch_RT(x):
-        q_ = x[:6]
-        t = x[6:]
-        qq, TT = ensure_tensor(device, dtype, q_, t)
-        RR = rotation_6d_to_matrix(qq)
-        return RR.unsqueeze(0), TT.unsqueeze(0)
-
-    def cost(x, i):
-        RR, TT = get_torch_RT(x)
-        # transform points from world frame to object frame
-        world_to_object_frame = Transform3d(rot=RR, pos=TT, device=device, dtype=dtype).inverse()
-        # sdf at the surface points should be 0
-        pts = world_to_object_frame.transform_points(Xt[i])
-        v, _ = obj_sdf.gt_sdf(pts)
-        obj_factory = obj_sdf.gt_sdf.obj_factory
-
-        # scale it up since minimize doesn't do well with small scale costs
-        v = (v * 1000) ** 2
-        v = v.mean()
-        if vis is not None:
-            np.set_printoptions(precision=3, suppress=True)
-            print(f"{x}: {v.item()}")
-            link_to_world = world_to_object_frame.inverse()
-            m = link_to_world.get_matrix()
-            pos, rot = util.matrix_to_pos_rot(m[0])
-            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
-                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
-            vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"sum: {round(v.item())}")
-
-        return v.item()
-
-    def constraint(x):
-        R, T = get_torch_RT(x)
+    def _transform_model_to_object_frame(self, R, T, s):
+        # transform surface points and also ball centers
         Rt = R.transpose(-1, -2)
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
-        pts_interior_world = apply_similarity_transform(model_interior_points, Rt, tt)
-        # sdf of freespace points should be > 0
-        # conversely, no interior points should lie in a freespace voxel
-        occupied = freespace_voxels[pts_interior_world]
-        # voxels should be 1 where it is known free space, otherwise 0
-        # return occupied.reshape(-1).cpu().numpy()
-        return int(occupied.sum().item())
 
-    # respect_freespace_constraint = NonlinearConstraint(constraint, 0, 0)
+        self._pts_obj = apply_similarity_transform(self._pts_world, Rt, tt, s)
+        self._ball_c_obj = apply_similarity_transform(self._ball_c_world, Rt, tt, s)
 
-    # convert to non-redundant representation
-    q = matrix_to_rotation_6d(R)
-
-    total_loss = []
-    for i in range(b):
-        # q, T are the parameters of the problem
-        x0 = torch.cat([q[i], T[i]]).cpu().numpy()
-        # set up SQP
-        # TODO add constraints
-        res = spo.minimize(cost, x0, args=(i,),
-                           # constraints=[{
-                           #     "type": "eq",
-                           #     "fun": constraint,
-                           # }],
-                           tol=0.01,
-                           options={"disp": True, "eps": 0.01}
-                           )
-        # res = spo.dual_annealing(cost, [(-2, 2)] * 9, x0=x0, args=(i,))
-        # extract q, t from res
-        r, t = get_torch_RT(res.x)
-        # print(x0 - res.x)
-        # print(cost(res.x, i))
-        R[i] = r
-        T[i] = t
-        total_loss.append(res.fun)
-
-    return SimilarityTransform(R, T, s), torch.tensor(total_loss, dtype=dtype, device=device)
+    def visualize(self, R, T, s):
+        if not self.debug or self.vis is None:
+            return
+        device = R.device
+        dtype = R.dtype
+        batch = R.shape[0]
+        I = torch.eye(4, device=device, dtype=dtype).repeat(batch, 1, 1)
+        sdf.draw_pose_distribution(I, self.obj_map, self.vis, self.obj_factory)
+        for i, pt in enumerate(self._pts_obj[0]):
+            self.vis.draw_point(f"mcpt.{i}", pt.cpu().numpy(), color=(0, 1, 0), length=0.005, scale=1)
+        for i, pt in enumerate(self._ball_c_obj[0]):
+            self.vis.draw_point(f"mcball.{i}", pt.cpu().numpy(), color=(0, 0, 1), length=0.005, scale=1)
