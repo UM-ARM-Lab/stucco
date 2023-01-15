@@ -306,8 +306,8 @@ class CachedSDF(ObjectFrameSDF):
         keys = self.voxels.ensure_index_key(points_in_object_frame)
         keys_ravelled = self.voxels.ravel_multi_index(keys, self.voxels.shape)
 
-        out_of_bound_keys = (keys_ravelled >= self.voxels_grad.shape[0]) | (keys_ravelled < 0)
-        inbound_keys = ~out_of_bound_keys
+        inbound_keys = self.voxels.get_valid_values(points_in_object_frame)
+        out_of_bound_keys = ~inbound_keys
 
         dtype = points_in_object_frame.dtype
         val = torch.zeros(keys_ravelled.shape, device=self.device, dtype=dtype)
