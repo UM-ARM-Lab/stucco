@@ -14,7 +14,7 @@ from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6
 from stucco.svgd import RBF, SVGD
 import logging
 
-from stucco.util import plot_restart_losses, plot_sgd_losses, apply_init_transform, apply_similarity_transform
+from stucco.util import plot_poke_losses, plot_sgd_losses, apply_init_transform, apply_similarity_transform
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def iterative_closest_point_volumetric(
         prev_rmse = rmse
 
     if save_loss_plot:
-        plot_restart_losses(losses)
+        plot_poke_losses(losses)
 
     if verbose:
         if converged:
@@ -222,7 +222,7 @@ def iterative_closest_point_volumetric_svgd(
     rmse = volumetric_cost(R, T, s)
 
     if save_loss_plot:
-        plot_restart_losses(losses)
+        plot_poke_losses(losses)
 
     if oputil.is_pointclouds(X):
         Xt = X.update_padded(Xt)  # type: ignore

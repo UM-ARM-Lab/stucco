@@ -1,5 +1,4 @@
 import abc
-import os
 from typing import Optional
 import logging
 
@@ -9,34 +8,16 @@ import numpy as np
 import torch
 from arm_pytorch_utilities.tensor_utils import ensure_tensor
 
-from matplotlib import pyplot as plt
 from pytorch3d.ops import utils as oputil
 from pytorch3d.ops.points_alignment import SimilarityTransform, ICPSolution
 from pytorch_kinematics import matrix_to_rotation_6d, rotation_6d_to_matrix
 from ribs.archives import GridArchive
 from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter
 from ribs.schedulers import Scheduler
-from ribs.visualize import grid_archive_heatmap
-from stucco import cfg
 from stucco.icp.costs import RegistrationCost
-from stucco.util import plot_restart_losses, apply_init_transform
+from stucco.util import plot_poke_losses, apply_init_transform, plot_qd_archive
 
 logger = logging.getLogger(__name__)
-
-
-def plot_qd_archive(archive):
-    global restart_index
-    fig, ax = plt.subplots()
-    grid_archive_heatmap(archive, ax=ax, vmin=-4, vmax=0)
-    # for MUSTARD task
-    ax.scatter(0.25, 0)
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    fig.suptitle(f"poke {restart_index} QD: {archive.stats.norm_qd_score}")
-
-    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
-    restart_index += 1
-
 
 previous_solutions = None
 
@@ -147,7 +128,7 @@ class CMAES(QDOptimization):
         rmse = self.registration_cost(R, T, s)
 
         if self.save_loss_plot:
-            plot_restart_losses(losses)
+            plot_poke_losses(losses)
 
         return R, T, rmse
 
@@ -170,6 +151,7 @@ class CMAME(QDOptimization):
 
         self.archive = None
         self.i = 0
+        self.qd_scores = []
         super(CMAME, self).__init__(*args, **kwargs)
 
     def _create_ranges(self):
@@ -207,6 +189,7 @@ class CMAME(QDOptimization):
         bcs = self._measure(solutions)
         self.scheduler.tell(-cost.cpu().numpy(), bcs)
         qd = self.archive.stats.norm_qd_score
+        self.qd_scores.append(qd)
         logger.debug("step %d norm QD score: %f", self.i, qd)
         return cost
 
@@ -236,6 +219,9 @@ class CMAME(QDOptimization):
         rmse = self.registration_cost(R, T, s)
 
         if self.save_loss_plot:
+            plot_poke_losses(losses)
+            qd_scores = [torch.tensor(v).view(1) for v in self.qd_scores]
+            plot_poke_losses(qd_scores, directory='img/qd_score', logy=False, ylabel='norm qd score')
             plot_qd_archive(self.archive)
 
         return R, T, rmse

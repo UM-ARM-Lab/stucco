@@ -10,7 +10,7 @@ import torch
 from arm_pytorch_utilities.rand import seed
 from arm_pytorch_utilities import grad
 
-from stucco.util import plot_restart_losses
+from stucco.util import plot_poke_losses
 from stucco.svgd import RBF, SVGD
 import cma
 from ribs.archives import GridArchive
@@ -245,4 +245,4 @@ elif method is OptimizationMethod.CMA_MEGA:
     # plt.figure(figsize=(8,6))
     # grid_archive_heatmap(archive)
 
-plot_restart_losses(losses)
+plot_poke_losses(losses)

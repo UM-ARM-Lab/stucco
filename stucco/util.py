@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt, cm as cm
 import pytorch_kinematics
 from pytorch3d.ops import utils as oputil
 from pytorch3d.ops.points_alignment import SimilarityTransform
+from ribs.visualize import grid_archive_heatmap
 
 from stucco import cfg
 
@@ -32,40 +33,61 @@ def move_figure(f, x, y):
         f.canvas.manager.window.move(x, y)
 
 
-restart_index = 0
+poke_index = 0
 sgd_index = 0
 
 
-def plot_restart_losses(losses):
-    global restart_index, sgd_index
+def _savefig(directory, fig, suffix=""):
+    savepath = os.path.join(cfg.DATA_DIR, directory, f"{poke_index}{suffix}.png")
+    os.makedirs(os.path.dirname(savepath), exist_ok=True)
+    plt.savefig(savepath)
+    fig.clf()
+    plt.close(fig)
+
+
+def plot_poke_losses(losses, directory='img/loss', ylabel='cost', xlabel='iteration', logy=True):
+    global poke_index, sgd_index
     losses = torch.stack(losses).cpu().numpy()
     fig, ax = plt.subplots()
-    ax.set_xlabel('restart iteration')
-    ax.set_ylabel('cost')
-    ax.set_yscale('log')
-    fig.suptitle(f"poke {restart_index}")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if logy:
+        ax.set_yscale('log')
+    fig.suptitle(f"poke {poke_index}")
 
     for b in range(losses.shape[1]):
         c = (b + 1) / losses.shape[1]
         ax.plot(losses[:, b], c=cm.GnBu(c))
-    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/restart', f"{restart_index}.png"))
-    restart_index += 1
+    _savefig(directory, fig)
     sgd_index = 0
 
 
+def plot_qd_archive(archive):
+    global poke_index
+    fig, ax = plt.subplots()
+    grid_archive_heatmap(archive, ax=ax, vmin=-4, vmax=0)
+    # # for MUSTARD task
+    # ax.scatter(0.25, 0)
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    fig.suptitle(f"poke {poke_index} QD: {archive.stats.norm_qd_score}")
+    _savefig('img/qd', fig)
+
+
 def plot_sgd_losses(losses):
-    global restart_index, sgd_index
+    global poke_index, sgd_index
     losses = torch.stack(losses).cpu().numpy()
     fig, ax = plt.subplots()
     ax.set_xlabel('sgd iteration')
     ax.set_ylabel('cost')
     ax.set_yscale('log')
-    fig.suptitle(f"poke {restart_index} restart {sgd_index}")
+    fig.suptitle(f"poke {poke_index} restart {sgd_index}")
 
     for b in range(losses.shape[1]):
         c = (b + 1) / losses.shape[1]
         ax.plot(losses[:, b], c=cm.PuRd(c))
-    plt.savefig(os.path.join(cfg.DATA_DIR, 'img/sgd', f"{restart_index}_{sgd_index}.png"))
+
+    _savefig('img/sgd', fig, suffix=f"_{sgd_index}")
     sgd_index += 1
 
 

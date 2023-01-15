@@ -6,6 +6,7 @@ import copy
 import time
 import pandas as pd
 import subprocess
+from timeit import default_timer as timer
 
 import argparse
 import matplotlib
@@ -201,6 +202,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 
 
 ball_ids = []
+
+
 def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectFrameSDF, best_tsf_guess, B,
                                       level: poke.Levels, seed: int, pokes: int, vis=None, obj_factory=None,
                                       plot_balls=False):
@@ -945,6 +948,7 @@ class PokeRunner:
             if registration_method_uses_only_contact_points(self.reg_method) and N in self.num_points_to_T_cache:
                 T, distances = self.num_points_to_T_cache[N]
             else:
+                start = timer()
                 if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
                     T, distances = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
@@ -960,6 +964,8 @@ class PokeRunner:
                                                    self.volumetric_cost,
                                                    self.reg_method)
                 self.num_points_to_T_cache[N] = T, distances
+                end = timer()
+                logger.info("registration elapsed %fs", end - start)
 
             self.transforms_per_object.append(T)
             T = T.inverse()
@@ -1113,6 +1119,7 @@ class PokeRunner:
             if action is None:
                 self.pokes += 1
                 self.hook_after_poke(name, seed)
+            util.poke_index = self.pokes
 
             if action is not None:
                 if torch.is_tensor(action):
@@ -1121,6 +1128,7 @@ class PokeRunner:
                 action = np.array(action).flatten()
                 action += action_noise[simTime]
                 obs, rew, done, info = env.step(action)
+
 
         self.env.vis.clear_visualizations()
         self.hook_after_last_poke(seed)
