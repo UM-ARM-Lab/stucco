@@ -39,7 +39,7 @@ class PokeGetter(EnvGetter):
     def env(cls, level=0, log_video=True, **kwargs):
         level = poke.Levels(level)
         goal = (0.25, 0.0, 0.2, 0.)
-        if level in [poke.Levels.MUSTARD, poke.Levels.DRILL]:
+        if level in [poke.Levels.MUSTARD, poke.Levels.DRILL, poke.Levels.CAN]:
             goal = (0.25, 0.0, 0.2, 0.)
         elif level in [poke.Levels.DRILL_OPPOSITE]:
             goal = (0.42, 0.0, 0.2, math.pi)
@@ -62,6 +62,8 @@ class PokeGetter(EnvGetter):
         elif level in [poke.Levels.BOX]:
             goal = (0.25, 0.0, 0.2, math.pi / 2)
         elif level in [poke.Levels.BOX_FALLEN]:
+            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
+        elif level in [poke.Levels.CAN_FALLEN]:
             goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
         env = poke.PokeEnv(environment_level=level, goal=goal, log_video=log_video, **kwargs)
         cls.env_dir = '{}/floating'.format(poke.DIR)

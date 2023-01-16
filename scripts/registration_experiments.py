@@ -92,6 +92,8 @@ def predetermined_poke_range():
         poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
         poke.Levels.BOX: ((0, 0.18, -0.2), (0.05, 0.15, 0.25, 0.37)),
         poke.Levels.BOX_FALLEN: ((0, 0.15, 0.25, -0.1), (0.05, 0.15, 0.3)),
+        poke.Levels.CAN: ((0, 0.2, -0.15), (0.05, 0.12, 0.2, 0.3)),
+        poke.Levels.CAN_FALLEN: ((0, 0.15, 0.25, -0.1), (0.05, 0.12, 0.2)),
     }
 
 

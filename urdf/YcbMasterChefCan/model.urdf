@@ -16,7 +16,7 @@
     </inertial>
     <visual>
       <geometry>
-        <mesh filename="textured_simple_reoriented.obj" scale="0.7 0.7 0.7"/>
+        <mesh filename="textured_simple_reoriented.obj" scale="1.0 1.0 1.0"/>
       </geometry>
       <material name="white">
         <color rgba="1. 1. 1. 0.5"/>
@@ -24,7 +24,7 @@
     </visual>
     <collision>
       <geometry>
-    	 	<mesh filename="collision_vhacd.obj" scale="0.7 0.7 0.7"/>
+    	 	<mesh filename="collision_vhacd.obj" scale="1.0 1.0 1.0"/>
       </geometry>
     </collision>
   </link>
