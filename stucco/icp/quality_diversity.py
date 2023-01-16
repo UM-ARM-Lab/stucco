@@ -27,6 +27,7 @@ class QDOptimization:
                  model_points_world_frame: torch.tensor,
                  init_transform: Optional[SimilarityTransform] = None,
                  sigma=0.1,
+                 num_emitters=5,
                  save_loss_plot=False, **kwargs):
         self.registration_cost = registration_cost
         self.X = model_points_world_frame
@@ -41,8 +42,9 @@ class QDOptimization:
         self.dtype = self.Xt.dtype
 
         Xt, R, T, s = apply_init_transform(self.Xt, self.init_transform)
-        x0 = self.get_numpy_x(R[0], T[0])
-        self.scheduler = self.create_scheduler(x0, **kwargs)
+        x = self.get_numpy_x(R, T)
+        self.num_emitters = num_emitters
+        self.scheduler = self.create_scheduler(x, **kwargs)
         self.restore_previous_results()
 
     def run(self):
@@ -101,7 +103,8 @@ class QDOptimization:
 
 
 class CMAES(QDOptimization):
-    def create_scheduler(self, x0, *args, **kwargs):
+    def create_scheduler(self, x, *args, **kwargs):
+        x0 = x[0]
         options = {"popsize": self.B, "seed": np.random.randint(0, 10000), "tolfun": 1e-5, "tolfunhist": 1e-6}
         options.update(kwargs)
         es = cma.CMAEvolutionStrategy(x0=x0, sigma0=self.sigma, inopts=options)
@@ -134,7 +137,7 @@ class CMAES(QDOptimization):
 
 
 class CMAME(QDOptimization):
-    def __init__(self, *args, bins=40, iterations=1000,
+    def __init__(self, *args, bins=40, iterations=100,
                  # can either specify an explicit range
                  ranges=None,
                  # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
@@ -162,11 +165,12 @@ class CMAME(QDOptimization):
             centroid += self.m * np.array(self.poke_offset_direction)
             self.ranges = np.array((centroid - self.m, centroid + self.m)).T
 
-    def create_scheduler(self, x0, *args, **kwargs):
+    def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
         emitters = [
-            EvolutionStrategyEmitter(self.archive, x0=x0, sigma0=1.0, batch_size=self.B)
+            EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=1.0, batch_size=self.B) for i in
+            range(self.num_emitters)
         ]
         scheduler = Scheduler(self.archive, emitters)
         return scheduler
@@ -232,12 +236,13 @@ class CMAMEGA(CMAME):
         self.lr = lr
         super(CMAMEGA, self).__init__(*args, **kwargs)
 
-    def create_scheduler(self, x0, *args, **kwargs):
+    def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=len(x0), dims=[self.bins, self.bins], ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
         emitters = [
-            GradientArborescenceEmitter(self.archive, x0=x0, sigma0=self.sigma, lr=self.lr, grad_opt="adam",
-                                        selection_rule="mu", bounds=None, batch_size=self.B - 1)
+            GradientArborescenceEmitter(self.archive, x0=x[i], sigma0=self.sigma, lr=self.lr, grad_opt="adam",
+                                        selection_rule="mu", bounds=None, batch_size=self.B - 1) for i in
+            range(self.num_emitters)
         ]
         scheduler = Scheduler(self.archive, emitters)
         return scheduler
@@ -255,7 +260,7 @@ class CMAMEGA(CMAME):
         x = ensure_tensor(self.device, self.dtype, solutions)
         x.requires_grad = True
         cost = self._f(x)
-        cost.backward()
+        cost.mean().backward()
         objective_grad = -x.grad.cpu().numpy()
         objective = -cost.detach().cpu().numpy()
         # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
@@ -263,7 +268,7 @@ class CMAMEGA(CMAME):
         behavior_grad[:, 6:8] = np.eye(2)
         behavior_grad = np.tile(behavior_grad, (x.shape[0], 1, 1))
 
-        jacobian = np.concatenate((objective_grad.reshape(1, 1, -1), behavior_grad), axis=1)
+        jacobian = np.concatenate((objective_grad.reshape(x.shape[0], 1, -1), behavior_grad), axis=1)
         self.scheduler.tell_dqd(objective, bcs, jacobian)
 
         return super(CMAMEGA, self).step()
