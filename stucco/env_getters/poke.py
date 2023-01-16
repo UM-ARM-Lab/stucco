@@ -26,7 +26,7 @@ class PokeGetter(EnvGetter):
 
     @staticmethod
     def contact_parameters(env: poke.PokeEnv, **kwargs) -> tracking.ContactParameters:
-        params = tracking.ContactParameters(length=1.0, # use large length scale initially to ensure everyone is 1 body
+        params = tracking.ContactParameters(length=1.0,  # use large length scale initially to ensure everyone is 1 body
                                             penetration_length=0.002,
                                             hard_assignment_threshold=0.4,
                                             intersection_tolerance=0.005)
@@ -44,27 +44,31 @@ class PokeGetter(EnvGetter):
         elif level in [poke.Levels.DRILL_OPPOSITE]:
             goal = (0.42, 0.0, 0.2, math.pi)
         elif level in [poke.Levels.DRILL_SLANTED]:
-            goal = (0.35, 0.1, 0.2, 2 * math.pi/3)
+            goal = (0.35, 0.1, 0.2, 2 * math.pi / 3)
         elif level in [poke.Levels.DRILL_FALLEN]:
-            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
+            goal = (0.25, 0.0, 0.2, math.pi / 2, 0, 0.2)
         elif level in [poke.Levels.MUSTARD_SIDEWAYS]:
-            goal = (0.25, 0.0, 0.2, math.pi/2)
+            goal = (0.25, 0.0, 0.2, math.pi / 2)
         elif level in [poke.Levels.MUSTARD_FALLEN]:
-            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
+            goal = (0.25, 0.0, 0.2, math.pi / 2, 0, 0.2)
         elif level in [poke.Levels.MUSTARD_FALLEN_SIDEWAYS]:
-            goal = (0.25, 0.0, 0.2, math.pi/2, math.pi/2, 0.4)
+            goal = (0.25, 0.0, 0.2, math.pi / 2, math.pi / 2, 0.4)
         elif level in [poke.Levels.HAMMER]:
             goal = (0.25, -0.18, 0.42, -math.pi / 2, math.pi, math.pi / 2)
         elif level in [poke.Levels.HAMMER_1]:
-            goal = (0.52, 0.0, 0.3, math.pi/2, 1.2, 0)
+            goal = (0.52, 0.0, 0.3, math.pi / 2, 1.2, 0)
         elif level in [poke.Levels.HAMMER_2]:
             goal = (0.3, -0.1, 0.3, -0.3, 0.4, 0.4)
         elif level in [poke.Levels.BOX]:
             goal = (0.25, 0.0, 0.2, math.pi / 2)
         elif level in [poke.Levels.BOX_FALLEN]:
-            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
+            goal = (0.25, 0.0, 0.2, math.pi / 2, 0, 0.2)
         elif level in [poke.Levels.CAN_FALLEN]:
-            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
+            goal = (0.25, 0.0, 0.2, math.pi / 2, 0, 0.2)
+        elif level in [poke.Levels.CLAMP]:
+            goal = (0.3, 0.0, 0.2, math.pi)
+        elif level in [poke.Levels.CLAMP_SIDEWAYS]:
+            goal = (0.27, 0.0, 0.2, math.pi / 2, 0, 2.0)
         env = poke.PokeEnv(environment_level=level, goal=goal, log_video=log_video, **kwargs)
         cls.env_dir = '{}/floating'.format(poke.DIR)
         return env

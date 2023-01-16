@@ -57,6 +57,9 @@ class Levels(enum.IntEnum):
     # spam can
     CAN = 16
     CAN_FALLEN = 17
+    # clamp
+    CLAMP = 18
+    CLAMP_SIDEWAYS = 19
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
@@ -77,6 +80,8 @@ level_to_obj_map = {
     Levels.BOX_FALLEN: "box",
     Levels.CAN: "can",
     Levels.CAN_FALLEN: "can",
+    Levels.CLAMP: "clamp",
+    Levels.CLAMP_SIDEWAYS: "clamp",
 }
 
 DEFAULT_MOVABLE_RGBA = [0.8, 0.7, 0.3, 0.8]
@@ -1120,3 +1125,7 @@ def obj_factory_map(obj_name):
         return YCBObjectFactory("can", "YcbPottedMeatCan",
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0.5]),
                                 vis_frame_pos=[0.006, -0.01, 0.0102])
+    if obj_name == "clamp":
+        return YCBObjectFactory("clamp", "YcbMediumClamp", scale=5,
+                                vis_frame_rot=p.getQuaternionFromEuler([0.1, 0, 0]),
+                                vis_frame_pos=[-0.02, -0.005, -0.0407])
