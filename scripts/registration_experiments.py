@@ -416,7 +416,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
         errors.append(errors_per_batch)
 
         df = pd.DataFrame(
-            {"date": datetime.today().date(), "method": icp_method.name, "name": name, "seed": seed,
+            {"date": datetime.today(), "method": icp_method.name, "name": name, "seed": seed,
              "points": num_points,
              "points_free": len(free_space_world_frame_points),
              "batch": np.arange(B),
@@ -1052,7 +1052,7 @@ class PokeRunner:
         rmse = self.rmse_per_object[self.best_segment_idx]
 
         df = pd.DataFrame(
-            {"date": datetime.today().date(), "method": self.reg_method.name, "level": self.env.level.name,
+            {"date": datetime.today(), "method": self.reg_method.name, "level": self.env.level.name,
              "name": name,
              "seed": seed, "poke": self.pokes,
              "batch": batch,
