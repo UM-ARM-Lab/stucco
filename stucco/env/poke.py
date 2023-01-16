@@ -38,19 +38,22 @@ pandaNumDofs = 7
 class Levels(enum.IntEnum):
     # no clutter environments
     MUSTARD = 0
+    MUSTARD_SIDEWAYS = 9
+    MUSTARD_FALLEN = 10
+    MUSTARD_FALLEN_SIDEWAYS = 11
     # CRACKER = 1
     # COFFEE_CAN = 2
     # BANANA = 3
     DRILL = 4
-    HAMMER = 5
     DRILL_OPPOSITE = 6
     DRILL_SLANTED = 7
     DRILL_FALLEN = 8
-    MUSTARD_SIDEWAYS = 9
-    MUSTARD_FALLEN = 10
-    MUSTARD_FALLEN_SIDEWAYS = 11
+    HAMMER = 5
     HAMMER_1 = 12
     HAMMER_2 = 13
+    # cracker box
+    BOX = 14
+    BOX_FALLEN = 15
 
 
 task_map = {str(c).split('.')[1]: c for c in Levels}
@@ -67,6 +70,8 @@ level_to_obj_map = {
     Levels.MUSTARD_SIDEWAYS: "mustard",
     Levels.MUSTARD_FALLEN: "mustard",
     Levels.MUSTARD_FALLEN_SIDEWAYS: "mustard",
+    Levels.BOX: "box",
+    Levels.BOX_FALLEN: "box",
 }
 
 DEFAULT_MOVABLE_RGBA = [0.8, 0.7, 0.3, 0.8]
@@ -856,7 +861,8 @@ class PokeEnv(PybulletEnv):
             interior_pts = self.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < 0.0)
             for i, pt in enumerate(interior_pts):
                 self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
-            input("interior SDF points for target object (press enter to confirm)")
+            # input("interior SDF points for target object (press enter to confirm)")
+            time.sleep(1)
 
         # SDF for the robot (used for filling up freespace voxels)
         # should be fine to use the actual robot ID for the ground truth SDF since we won't be querying outside of the
@@ -873,7 +879,8 @@ class PokeEnv(PybulletEnv):
             for i, pt in enumerate(self.robot_interior_points_orig):
                 self.vis.draw_point(f"mipt.{i}", pt, color=(0, 1, 1), length=0.003, scale=4)
             self.vis.clear_visualization_after("mipt", i + 1)
-            input("interior SDF points for robot (press enter to confirm)")
+            # input("interior SDF points for robot (press enter to confirm)")
+            time.sleep(1)
             self.vis.clear_visualization_after("mipt", 0)
 
         # restore robot pose
@@ -1063,6 +1070,8 @@ class YCBObjectFactory(sdf.ObjectFactory):
         canonical_rot = p.getQuaternionFromEuler([0, 0, 0])
         obj_id = p.loadURDF(os.path.join(cfg.URDF_DIR, self.ycb_name, "model.urdf"),
                             canonical_pos, canonical_rot, globalScaling=self.scale, **self.other_load_kwargs)
+        # for some reason loadURDF does not actually put the object at the specified pose...
+        p.resetBasePositionAndOrientation(obj_id, canonical_pos, canonical_rot)
         if self.ranges is None:
             self.ranges = pybullet_obj_range(obj_id, 0.05)
 
@@ -1099,7 +1108,7 @@ def obj_factory_map(obj_name):
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.02, 0.01, -0.01])
     if obj_name == "box":
-        return YCBObjectFactory("box", "YcbCrackerBox",
+        return YCBObjectFactory("box", "YcbCrackerBox", scale=1.5,
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.03, 0.01, 0.02])
     # TODO create the other object factories
