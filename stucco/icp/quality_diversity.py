@@ -169,7 +169,7 @@ class CMAME(QDOptimization):
         self._create_ranges()
         self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
         emitters = [
-            EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=1.0, batch_size=self.B) for i in
+            EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
             range(self.num_emitters)
         ]
         scheduler = Scheduler(self.archive, emitters)
@@ -239,7 +239,12 @@ class CMAMEGA(CMAME):
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
         self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
-        emitters = [
+        emitters = []
+        # emitters += [
+        #     EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
+        #     range(self.num_emitters)
+        # ]
+        emitters += [
             GradientArborescenceEmitter(self.archive, x0=x[i], sigma0=self.sigma, lr=self.lr, grad_opt="adam",
                                         selection_rule="mu", bounds=None, batch_size=self.B - 1) for i in
             range(self.num_emitters)
@@ -260,7 +265,7 @@ class CMAMEGA(CMAME):
         x = ensure_tensor(self.device, self.dtype, solutions)
         x.requires_grad = True
         cost = self._f(x)
-        cost.mean().backward()
+        cost.sum().backward()
         objective_grad = -x.grad.cpu().numpy()
         objective = -cost.detach().cpu().numpy()
         # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
