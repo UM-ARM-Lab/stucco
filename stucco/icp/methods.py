@@ -562,12 +562,14 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
 
         ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
 
+        method_specific_kwargs = {}
         if optimization == volumetric.Optimization.CMAME:
             QD = quality_diversity.CMAME
         else:
             QD = quality_diversity.CMAMEGA
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                ranges=ranges, **kwargs)
+                iterations=100, num_emitters=1,
+                ranges=ranges, **method_specific_kwargs, **kwargs)
 
         if debug:
             # visualize archive
