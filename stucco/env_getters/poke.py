@@ -41,24 +41,28 @@ class PokeGetter(EnvGetter):
         goal = (0.25, 0.0, 0.2, 0.)
         if level in [poke.Levels.MUSTARD, poke.Levels.DRILL]:
             goal = (0.25, 0.0, 0.2, 0.)
-        if level in [poke.Levels.DRILL_OPPOSITE]:
+        elif level in [poke.Levels.DRILL_OPPOSITE]:
             goal = (0.42, 0.0, 0.2, math.pi)
-        if level in [poke.Levels.DRILL_SLANTED]:
+        elif level in [poke.Levels.DRILL_SLANTED]:
             goal = (0.35, 0.1, 0.2, 2 * math.pi/3)
-        if level in [poke.Levels.DRILL_FALLEN]:
+        elif level in [poke.Levels.DRILL_FALLEN]:
             goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
-        if level in [poke.Levels.MUSTARD_SIDEWAYS]:
+        elif level in [poke.Levels.MUSTARD_SIDEWAYS]:
             goal = (0.25, 0.0, 0.2, math.pi/2)
-        if level in [poke.Levels.MUSTARD_FALLEN]:
+        elif level in [poke.Levels.MUSTARD_FALLEN]:
             goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
-        if level in [poke.Levels.MUSTARD_FALLEN_SIDEWAYS]:
+        elif level in [poke.Levels.MUSTARD_FALLEN_SIDEWAYS]:
             goal = (0.25, 0.0, 0.2, math.pi/2, math.pi/2, 0.4)
-        if level in [poke.Levels.HAMMER]:
+        elif level in [poke.Levels.HAMMER]:
             goal = (0.25, -0.18, 0.42, -math.pi / 2, math.pi, math.pi / 2)
-        if level in [poke.Levels.HAMMER_1]:
+        elif level in [poke.Levels.HAMMER_1]:
             goal = (0.52, 0.0, 0.3, math.pi/2, 1.2, 0)
-        if level in [poke.Levels.HAMMER_2]:
+        elif level in [poke.Levels.HAMMER_2]:
             goal = (0.3, -0.1, 0.3, -0.3, 0.4, 0.4)
+        elif level in [poke.Levels.BOX]:
+            goal = (0.25, 0.0, 0.2, math.pi / 2)
+        elif level in [poke.Levels.BOX_FALLEN]:
+            goal = (0.25, 0.0, 0.2, math.pi/2, 0, 0.2)
         env = poke.PokeEnv(environment_level=level, goal=goal, log_video=log_video, **kwargs)
         cls.env_dir = '{}/floating'.format(poke.DIR)
         return env

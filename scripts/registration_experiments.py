@@ -90,6 +90,8 @@ def predetermined_poke_range():
         poke.Levels.HAMMER: ((0, -0.2, 0.2, 0.4), (0.05, 0.15, 0.25, 0.4)),
         poke.Levels.HAMMER_1: ((0, 0.15, -0.15), (0.05, 0.1, 0.2, 0.4)),
         poke.Levels.HAMMER_2: ((0, 0.15, 0.4, -0.15), (0.05, 0.15, 0.25)),
+        poke.Levels.BOX: ((0, 0.18, -0.2), (0.05, 0.15, 0.25, 0.37)),
+        poke.Levels.BOX_FALLEN: ((0, 0.15, 0.25, -0.1), (0.05, 0.15, 0.3)),
     }
 
 
@@ -1928,8 +1930,8 @@ def main(args):
                       object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
         # for num_points in (5, 10, 20, 30, 40, 50, 100):
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
-            for seed in range(10):
-                build_model(env.obj_factory, env.vis.dd, args.task, seed=seed, num_points=num_points,
+            for seed in args.seed:
+                build_model(env.obj_factory, env.vis, args.task, seed=seed, num_points=num_points,
                             pause_at_end=False)
     elif args.experiment == "plot-sdf":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
