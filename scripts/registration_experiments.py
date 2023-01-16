@@ -479,7 +479,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     df.loc[df["method"].str.contains("ICP"), "name"] = "non-freespace baseline"
     df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
     df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
-    df.loc[df["method"].str.contains("MEDIAL"), "name"] = "freespace baseline"
+    df.loc[df["method"].str.contains("MEDIAL_CONSTRAINT"), "name"] = "freespace baseline"
 
     method_to_name = df.set_index("method")["name"].to_dict()
     # order the methods should be shown
@@ -490,7 +490,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                          # variants with non-SGD optimization
                          "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD", "VOLUMETRIC_CMAMEGA",
                          # baselines
-                         "ICP", "ICP_REVERSE", "CVO", "MEDIAL"]
+                         "ICP", "ICP_REVERSE", "CVO", "MEDIAL_CONSTRAINT"]
     # order the categories should be shown
     methods_order = [m for m in full_method_order if m in method_to_name]
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
@@ -1898,7 +1898,7 @@ def plot_poke_plausible_diversity(args, level, obj_factory):
         df = df[(df["level"] == level.name)]
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
-        df = df[df.name == ""]
+        df = df[df.name == args.name]
         return df
 
     # choose from 0.50, 0.75, 1.0
