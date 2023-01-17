@@ -1248,9 +1248,11 @@ class PlausibleSetRunner(PokeRunner):
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
     def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=10000,
+                 max_plausible_set=1000, # prevent running out of memory and very long evaluation times
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_suboptimality = self.env.obj_factory.plausible_suboptimality
+        self.max_plausibile_set = max_plausible_set
         # self.gt_position_max_offset = gt_position_max_offset
         # self.position_steps = position_steps
         self.N_rot = N_rot
@@ -1338,7 +1340,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # if we've narrowed it down to a small number of plausible transforms, we only need to keep evaluating those
         # since new pokes can only prune previously plausible transforms
         if len(self.plausible_set) > 0:
-            trans_chunk = 5000
+            trans_chunk = 500
             Hall = self.plausible_set[self.pokes - 1]
             for i in range(0, Hall.shape[0], trans_chunk):
                 H = Hall[i:i + trans_chunk]
@@ -1378,6 +1380,9 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                 logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
 
         all_plausible_transforms = torch.cat(plausible_transforms)
+        if len(all_plausible_transforms) > self.max_plausibile_set:
+            to_keep = torch.randperm(len(all_plausible_transforms))[:self.max_plausibile_set]
+            all_plausible_transforms = all_plausible_transforms[to_keep]
         self.plausible_set[self.pokes] = all_plausible_transforms
         logger.info("poke %d with %d plausible completions gt cost: %f allowable cost: %f", self.pokes,
                     all_plausible_transforms.shape[0], gt_cost, gt_cost + self.plausible_suboptimality)
