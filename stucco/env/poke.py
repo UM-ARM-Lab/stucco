@@ -1119,13 +1119,16 @@ def obj_factory_map(obj_name):
                                 vis_frame_pos=[-0.02, 0.01, -0.01])
     if obj_name == "box":
         return YCBObjectFactory("box", "YcbCrackerBox", scale=1.5,
+                                plausible_suboptimality=0.0005,
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0]),
                                 vis_frame_pos=[-0.03, 0.01, 0.02])
     if obj_name == "can":
         return YCBObjectFactory("can", "YcbPottedMeatCan",
+                                plausible_suboptimality=0.0003,
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, 0.5]),
                                 vis_frame_pos=[0.006, -0.01, 0.0102])
     if obj_name == "clamp":
         return YCBObjectFactory("clamp", "YcbMediumClamp", scale=5,
+                                plausible_suboptimality=0.0007,
                                 vis_frame_rot=p.getQuaternionFromEuler([0.1, 0, 0]),
                                 vis_frame_pos=[-0.02, -0.005, -0.0407])
