@@ -49,8 +49,8 @@ class Levels(enum.IntEnum):
     DRILL_SLANTED = 7
     DRILL_FALLEN = 8
     HAMMER = 5
-    HAMMER_1 = 12
-    HAMMER_2 = 13
+    HAMMER_STRAIGHT = 12
+    HAMMER_FALLEN = 13
     # cracker box
     BOX = 14
     BOX_FALLEN = 15
@@ -68,8 +68,8 @@ level_to_obj_map = {
     # Levels.BANANA: "banana",
     Levels.DRILL: "drill",
     Levels.HAMMER: "hammer",
-    Levels.HAMMER_1: "hammer",
-    Levels.HAMMER_2: "hammer",
+    Levels.HAMMER_STRAIGHT: "hammer",
+    Levels.HAMMER_FALLEN: "hammer",
     Levels.DRILL_OPPOSITE: "drill",
     Levels.DRILL_SLANTED: "drill",
     Levels.DRILL_FALLEN: "drill",
@@ -841,7 +841,7 @@ class PokeEnv(PybulletEnv):
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5), object_id=self.vis.USE_DEFAULT_ID_FOR_NAME)
 
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
-        if self.level in [Levels.HAMMER, Levels.HAMMER_2]:
+        if self.level in [Levels.HAMMER, Levels.HAMMER_FALLEN]:
             self.freespace_ranges = np.array([[-0.1, 0.5],
                                               [-0.3, 0.5],
                                               [-0.075, 0.4]])

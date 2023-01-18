@@ -55,9 +55,9 @@ class PokeGetter(EnvGetter):
             goal = (0.25, 0.0, 0.2, math.pi / 2, math.pi / 2, 0.4)
         elif level in [poke.Levels.HAMMER]:
             goal = (0.25, -0.18, 0.42, -math.pi / 2, math.pi, math.pi / 2)
-        elif level in [poke.Levels.HAMMER_1]:
+        elif level in [poke.Levels.HAMMER_STRAIGHT]:
             goal = (0.52, 0.0, 0.3, math.pi / 2, 1.2, 0)
-        elif level in [poke.Levels.HAMMER_2]:
+        elif level in [poke.Levels.HAMMER_FALLEN]:
             goal = (0.3, -0.1, 0.3, -0.3, 0.4, 0.4)
         elif level in [poke.Levels.BOX]:
             goal = (0.25, 0.0, 0.2, math.pi / 2)
