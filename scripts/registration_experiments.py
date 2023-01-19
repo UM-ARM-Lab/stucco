@@ -1,5 +1,3 @@
-import enum
-import itertools
 import typing
 import re
 import copy
@@ -22,6 +20,7 @@ from stucco.icp import quality_diversity
 from stucco import voxel
 from stucco import sdf
 from stucco.env.pybullet_env import make_sphere
+from stucco.poking_controller import PokingController
 from torchmcubes import marching_cubes
 
 import torch
@@ -48,7 +47,6 @@ from stucco import util
 from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 
 from arm_pytorch_utilities.controller import Controller
-from stucco import tracking, detection
 from stucco.retrieval_controller import sample_mesh_points, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
 
@@ -526,199 +524,6 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         plt.close(fig)
     if show:
         plt.show()
-
-
-def predetermined_controls():
-    predetermined_control = {}
-
-    ctrl = []
-    # go up along one surface of the object
-    for i in range(4):
-        ctrl += [[1., 0., 0]] * 3
-        ctrl += [[-1., 0., 1]] * 2
-    # poke cap of mustard bottle, have to go in more
-    # ctrl += [[1., 0., 0]] * 4
-    ctrl += [[0., 0., 1]] * 2
-    # poke past the top of the mustard bottle
-    ctrl += [[1., 0., 0.1]] * 8
-    ctrl += [[-1., 0., 0.]] * 2
-    # move to the side then poke while going down
-    ctrl += [[-1., -0.9, 0]] * 3
-    ctrl += [[-1., 0., 0]] * 2
-    ctrl += [[0., 0., -1]] * 6
-    for i in range(4):
-        ctrl += [[1., 0., 0]] * 3
-        ctrl += [[-1., 0., 0]] * 2
-        ctrl += [[0., 0., -1]] * 2
-
-    # go directly down and sweep out
-    ctrl += [[0., -1, 0]] * 5
-    ctrl += [[1., 0., 0]] * 6
-    ctrl += [[0., 0., 1]] * 10
-
-    # go back to the left side
-    ctrl += [[-1., 0., 0]] * 4
-    ctrl += [[0., 1., 0]] * 10
-
-    ctrl += [[0., 0.9, 0]] * 6
-    ctrl += [[1., 0., 0]] * 5
-    ctrl += [[0., 0., -1]] * 13
-
-    rand.seed(0)
-    # noise = (np.random.rand(len(ctrl), 2) - 0.5) * 0.5
-    # ctrl = np.add(ctrl, noise)
-    predetermined_control[poke.Levels.MUSTARD] = ctrl
-
-    ctrl = []
-    # go up along one surface of the object
-    for i in range(3):
-        ctrl += [[1., 0., 0]] * 3
-        ctrl += [[-1., 0., 1]] * 2
-        ctrl.append(None)
-
-    ctrl += [[1., 0., 0]] * 2
-    ctrl += [[-1., 0., 0]] * 1
-    ctrl.append(None)
-    ctrl += [[0., 0., 1]] * 2
-    ctrl += [[0., 0., 1]] * 2
-    ctrl += [[1., 0., 0]] * 6
-    ctrl.append(None)
-
-    ctrl += [[-0.4, 1., 0]] * 3
-    ctrl += [[-0.4, 1., -0.5]] * 4
-
-    ctrl += [[1.0, -0.2, 0]] * 2
-    ctrl += [[1., 0., -0.4]] * 4
-    ctrl += [[-1., 0., -0.4]] * 4
-    ctrl.append(None)
-
-    # poke the side inwards once
-    ctrl += [[0., -1., 0]] * 2
-    ctrl += [[0., 1., 0]] * 1
-
-    # # try poking while going down
-    for _ in range(2):
-        ctrl += [[1., 0., -0.5]] * 4
-        ctrl += [[-1, 0., -0.5]] * 4
-        ctrl.append(None)
-
-    ctrl += [[-1., 0., 0]] * 5
-    ctrl += [[0., -.99, 0]] * 12
-    #
-    ctrl += [[1., 0., 0]] * 3
-    for _ in range(3):
-        ctrl += [[1., 0., 0.5]] * 4
-        ctrl += [[-1, 0., 0.5]] * 4
-        ctrl.append(None)
-
-    ctrl += [[-1, 0., 0]] * 2
-    predetermined_control[poke.Levels.DRILL] = ctrl
-
-    return predetermined_control
-
-
-class PokingController(Controller):
-    class Mode(enum.Enum):
-        GO_TO_NEXT_TARGET = 0
-        PUSH_FORWARD = 1
-        RETURN_BACKWARD = 2
-        DONE = 3
-
-    def __init__(self, contact_detector: detection.ContactDetector, contact_set: tracking.ContactSet,
-                 y_order=(0, 0.2, 0.3, -0.2, -0.3), z_order=(0.05, 0.15, 0.25, 0.325, 0.4, 0.5), x_rest=-0.05,
-                 Kp=30,
-                 push_forward_count=10, nu=3, dim=3, goal_tolerance=3e-4):
-        super().__init__()
-
-        self.x_rest = x_rest
-        self._all_targets = list(itertools.product(y_order, z_order))
-        self.target_yz = self._all_targets
-        self.push_forward_count = push_forward_count
-        self.mode = self.Mode.GO_TO_NEXT_TARGET
-        self.kp = Kp
-
-        self.goal_tolerance = goal_tolerance
-
-        # primitive state machine where we push forward for push_forward_count, then go back to x_rest
-        self.push_i = 0
-        self.i = 0
-        self.current_target = None
-
-        self.contact_detector = contact_detector
-        self.contact_set = contact_set
-        self.dim = dim
-        self.contact_indices = []
-
-        self.nu = nu
-
-        self.x_history = []
-        self.u_history = []
-
-    def reset(self):
-        self.target_yz = self._all_targets
-        self.mode = self.Mode.GO_TO_NEXT_TARGET
-        self.contact_indices = []
-        self.x_history = []
-        self.u_history = []
-        self.push_i = 0
-        self.i = 0
-        self.current_target = None
-
-    def update(self, obs, info, visualizer=None):
-        if self.contact_detector.in_contact():
-            self.contact_indices.append(self.i)
-
-        x = self.x_history[-1][:self.dim]
-        pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
-
-        info['u'] = torch.tensor(self.u_history[-1])
-        self.contact_set.update(x, dx, pt, info=info)
-
-    def done(self):
-        return len(self.target_yz) == 0
-
-    def command(self, obs, info=None, visualizer=None):
-        self.x_history.append(obs)
-
-        if len(self.x_history) > 1:
-            self.update(obs, info, visualizer=visualizer)
-
-        u = [0 for _ in range(self.nu)]
-        if self.done():
-            self.mode = self.Mode.DONE
-        else:
-            if self.mode == self.Mode.GO_TO_NEXT_TARGET:
-                # go to next target proportionally
-                target = self.target_yz[0]
-                diff = np.array(target) - np.array(obs[1:])
-                # TODO clamp?
-                u[1] = diff[0] * self.kp
-                u[2] = diff[1] * self.kp
-
-                if np.linalg.norm(diff) < self.goal_tolerance:
-                    self.mode = self.Mode.PUSH_FORWARD
-                    self.push_i = 0
-
-            # if we don't have a current target, find the next
-            elif self.mode == self.Mode.PUSH_FORWARD:
-                u[0] = 1.
-                self.push_i += 1
-                if self.push_i >= self.push_forward_count or np.linalg.norm(info['reaction']) > 5:
-                    self.mode = self.Mode.RETURN_BACKWARD
-            elif self.mode == self.Mode.RETURN_BACKWARD:
-                diff = self.x_rest - obs[0]
-                u[0] = diff * self.kp
-
-                if abs(diff) < self.goal_tolerance:
-                    self.mode = self.Mode.GO_TO_NEXT_TARGET
-                    self.target_yz = self.target_yz[1:]
-                    u = None
-
-            self.i += 1
-
-        if u is not None:
-            self.u_history.append(u)
-        return u
 
 
 def _export_pc(f, pc, augmented_data: typing.Any = ""):
