@@ -124,17 +124,17 @@ def run_poke(env: poke_real.RealPokeEnv, seed=0, control_wait=0.):
         with env.motion_status_input_lock:
             action = ctrl.command(obs, info)
 
-            if action is None:
-                pokes += 1
-                hook_after_poke()
+        if action is None:
+            pokes += 1
+            hook_after_poke()
 
-            if action is not None:
-                if torch.is_tensor(action):
-                    action = action.cpu()
+        if action is not None:
+            if torch.is_tensor(action):
+                action = action.cpu()
 
-                action = np.array(action).flatten()
-                obs, _, done, info = env.step(action)
-                print(f"pushed {action} state {obs}")
+            action = np.array(action).flatten()
+            obs, _, done, info = env.step({'dxyz': action})
+            print(f"pushed {action} state {obs}")
 
         rospy.sleep(control_wait)
 

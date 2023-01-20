@@ -1,9 +1,12 @@
 import copy
+import os
 import rospy
 import ros_numpy
 from threading import Lock
 
 import numpy as np
+
+from bubble_utils.bubble_envs import BubbleBaseEnv
 from pytorch_kinematics import transforms as tf
 
 from geometry_msgs.msg import Pose
@@ -16,6 +19,7 @@ import enum
 import torch
 
 from arm_pytorch_utilities import tensor_utils
+from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector, ContactSensor
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv, pose_msg_to_pos_quaternion
@@ -28,6 +32,7 @@ from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
 from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
 from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
 from wsg_50_utils.wsg_50_gripper import WSG50Gripper
+import gym.spaces
 
 import matplotlib.colors as colors
 
@@ -212,7 +217,7 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
         return pts, dx
 
 
-class RealPokeEnv(RealArmEnv):
+class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     nu = 3
     nx = 3
     MAX_FORCE = 30
@@ -232,6 +237,25 @@ class RealPokeEnv(RealArmEnv):
     EE_LINK_NAME = "med_kuka_link_7"
     WORLD_FRAME = "med_base"
     ACTIVE_MOVING_ARM = 0  # only 1 arm
+
+    # --- BubbleBaseEnv overrides
+    @classmethod
+    def get_name(cls):
+        return 'real_poke_env'
+
+    def _get_action_space(self):
+        u_min, u_max = self.get_control_bounds()
+        actions = gym.spaces.Box(u_min, u_max)
+        return gym.spaces.Dict({'dxyz': actions})
+        # u_names = self.control_names()
+        # action_dict = {name: gym.spaces.Box(low=u_min[i], high=u_max[i]) for i, name in enumerate(u_names)}
+        # return gym.spaces.Dict(action_dict)
+
+    def _get_observation(self):
+        obs = {}
+        obs.update(self._get_bubble_observation())
+        # TODO other things in here?
+        return obs
 
     @staticmethod
     def state_names():
@@ -285,23 +309,33 @@ class RealPokeEnv(RealArmEnv):
     def control_cost(cls):
         return np.diag([1 for _ in range(cls.nu)])
 
-    def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
-        self._need_to_force_planar = False
-        # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
+    def __init__(self, *args, environment_level=0, vel=0.2, use_cameras=True, **kwargs):
+        level = Levels(environment_level)
+        save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
+        BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path,
+                               bubble_left=use_cameras, bubble_right=use_cameras)
+        RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
+        # force an orientation; if None, uses the rest orientation
+        self.orientation = None
+
+    def _get_med(self):
         med = BubbleMed(display_goals=False,
                         base_kwargs={'cartesian_impedance_controller_kwargs': {'pose_distance_fn': xy_pose_distance,
                                                                                'timeout_per_m': 40 / self.vel,
                                                                                'position_close_enough': 0.003}})
-        self.robot = med
-        self.robot.connect()
+        return med
+
+    def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
+        self._need_to_force_planar = False
+        # adjust timeout according to velocity (at vel = 0.1 we expect 400s per 1m)
+        self.robot = self.med
         self.vis.init_ros(world_frame="world")
-        self.gripper = WSG50Gripper()
 
         self.motion_status_input_lock = Lock()
         self._temp_wrenches = []
         # subscribe to status messages
-        self.contact_listener = rospy.Subscriber(self.robot.ns("motion_status"), MotionStatus,
-                                                 self.contact_listener)
+        self.contact_ros_listener = rospy.Subscriber(self.robot.ns("motion_status"), MotionStatus,
+                                                     self.contact_listener)
         self.cleaned_wrench_publisher = rospy.Publisher(self.robot.ns("cleaned_wrench"), WrenchStamped, queue_size=10)
         self.large_wrench_publisher = rospy.Publisher(self.robot.ns("large_wrench"), WrenchStamped, queue_size=10)
         self.large_wrench_world_publisher = rospy.Publisher(self.robot.ns("large_wrench_world"), WrenchStamped,
@@ -319,12 +353,8 @@ class RealPokeEnv(RealArmEnv):
         if residual_precision is None:
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
-        use_cameras = True
-        camera_parser_right = BubbleParser(camera_name='pico_flexx_right') if use_cameras else None
-        camera_parser_left = BubbleParser(camera_name='pico_flexx_left') if use_cameras else None
-
         self._contact_detector = ContactDetectorPokeRealArmBubble(residual_precision,
-                                                                  camera_parser_left, camera_parser_right,
+                                                                  self.camera_parser_left, self.camera_parser_right,
                                                                   self.EE_LINK_NAME)
         # parallel visualizer for ROS and pybullet
         self.vis.sim = None
@@ -342,7 +372,8 @@ class RealPokeEnv(RealArmEnv):
         dz = action[2] * self.MAX_PUSH_DIST
         return dx, dy, dz
 
-    def step(self, action, dz=0., orientation=None):
+    def _do_action(self, action):
+        action = action['dxyz']
         self._clear_state_before_step()
 
         action = np.clip(action, *self.get_control_bounds())
@@ -351,6 +382,7 @@ class RealPokeEnv(RealArmEnv):
         dx, dy, dz = self._unpack_action(action)
 
         self._single_step_contact_info = {}
+        orientation = self.orientation
         if orientation is None:
             orientation = copy.deepcopy(self.REST_ORIENTATION)
             if self._need_to_force_planar:
@@ -360,12 +392,7 @@ class RealPokeEnv(RealArmEnv):
                                                   target_z=self.last_ee_pos[2] + dz,
                                                   # target_z=0.1,
                                                   blocking=True, step_size=0.025, target_orientation=orientation)
-        self.state = self._obs()
-        info = self.aggregate_info()
-
-        cost, done = self.evaluate_cost(self.state, action)
-
-        return np.copy(self.state), -cost, done, info
+        return self.aggregate_info()
 
 
 class RealPokeDataSource(EnvDataSource):
