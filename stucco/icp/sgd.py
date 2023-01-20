@@ -10,7 +10,7 @@ from pytorch3d.ops.points_alignment import ICPSolution, SimilarityTransform
 from pytorch3d.ops.knn import _KNN
 from pytorch3d.transforms import random_rotations, matrix_to_rotation_6d, rotation_6d_to_matrix
 
-from stucco.util import apply_similarity_transform
+from stucco.registration_util import apply_similarity_transform
 
 
 def iterative_closest_point_sgd(

@@ -5,7 +5,7 @@ from pytorch3d.ops.knn import knn_gather, _KNN
 
 from stucco import sdf
 from stucco import voxel
-from stucco.util import apply_similarity_transform
+from stucco.registration_util import apply_similarity_transform
 from typing import Any
 
 

@@ -15,7 +15,7 @@ from ribs.archives import GridArchive
 from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter
 from ribs.schedulers import Scheduler
 from stucco.icp.costs import RegistrationCost
-from stucco.util import plot_poke_losses, apply_init_transform, plot_qd_archive
+from stucco.registration_util import plot_poke_losses, plot_qd_archive, apply_init_transform
 
 logger = logging.getLogger(__name__)
 

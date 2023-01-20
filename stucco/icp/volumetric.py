@@ -14,7 +14,7 @@ from pytorch_kinematics.transforms import random_rotations, matrix_to_rotation_6
 from stucco.svgd import RBF, SVGD
 import logging
 
-from stucco.util import plot_poke_losses, plot_sgd_losses, apply_init_transform, apply_similarity_transform
+from stucco.registration_util import plot_poke_losses, plot_sgd_losses, apply_init_transform, apply_similarity_transform
 
 logger = logging.getLogger(__name__)
 

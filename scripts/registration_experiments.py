@@ -10,6 +10,8 @@ import argparse
 import matplotlib
 import numpy as np
 import seaborn as sns
+
+import stucco.registration_util
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
@@ -941,7 +943,7 @@ class PokeRunner:
             if action is None:
                 self.pokes += 1
                 self.hook_after_poke(name, seed)
-            util.poke_index = self.pokes
+            stucco.registration_util.poke_index = self.pokes
 
             if action is not None:
                 if torch.is_tensor(action):

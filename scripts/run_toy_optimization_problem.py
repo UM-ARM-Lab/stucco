@@ -10,7 +10,7 @@ import torch
 from arm_pytorch_utilities.rand import seed
 from arm_pytorch_utilities import grad
 
-from stucco.util import plot_poke_losses
+from stucco.registration_util import plot_poke_losses
 from stucco.svgd import RBF, SVGD
 import cma
 from ribs.archives import GridArchive
