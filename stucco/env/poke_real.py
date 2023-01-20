@@ -5,9 +5,7 @@ from threading import Lock
 
 import numpy as np
 from pytorch_kinematics import transforms as tf
-from stucco.util import move_figure
 
-from mmint_camera_utils.camera_utils import project_depth_points
 from geometry_msgs.msg import Pose
 
 import matplotlib
@@ -26,8 +24,9 @@ from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
 from tf2_geometry_msgs import WrenchStamped
 from bubble_utils.bubble_med.bubble_med import BubbleMed
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
-from mmint_camera_utils.point_cloud_parsers import PicoFlexxPointCloudParser
-from mmint_camera_utils.camera_utils import bilinear_interpolate
+# from mmint_camera_utils.camera_utils.camera_parsers import PicoFlexxPointCloudParser
+from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
+from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
 from wsg_50_utils.wsg_50_gripper import WSG50Gripper
 
 import matplotlib.colors as colors
@@ -124,7 +123,7 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
     """Contact detector using the bubble gripper"""
 
     def __init__(self, residual_precision,
-                 camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
+                 camera_l: BubbleParser, camera_r: BubbleParser,
                  ee_link_frame: str, imprint_threshold=0.004, deform_number_threshold=20,
                  window_size=5, dtype=torch.float, device='cpu'):
         super().__init__(residual_precision, window_size=window_size, dtype=dtype, device=device)
@@ -145,7 +144,6 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
             self.imprint_fig.colorbar(matplotlib.cm.ScalarMappable(norm=self.imprint_norm),
                                       ax=[self.imprint_ax_l, self.imprint_ax_r])
 
-            move_figure(self.imprint_fig, 0, 0)
             self.im_handle = {}
             self.removable_artists = []
             plt.show()
@@ -224,12 +222,15 @@ class RealPokeEnv(RealArmEnv):
     CLOSE_ANGLE = 0.0
 
     # TODO find rest position for Thanos
-    REST_POS = [0.7841804139585614, -0.34821761121288775, 0.973]
-    REST_ORIENTATION = [-np.pi / 2, np.pi - np.pi / 4, 0]
+    # REST_JOINTS = [0.142, 0.453, -0.133, -1.985, 0.027, -0.875, 0.041]
+    REST_JOINTS = [0.1141799424293767, 0.45077912971064055, -0.1378142121392566, -1.9944268727534853,
+                   -0.013151296594681122, -0.8713510018630727, 0.06839882517621013]
+    REST_POS = [0.530, 0, 0.433]
+    REST_ORIENTATION = [0, np.pi / 2, 0]
 
     # TODO find values for Thanos
-    EE_LINK_NAME = "thanos_kuka_link_7"
-    WORLD_FRAME = "thanos_base"
+    EE_LINK_NAME = "med_kuka_link_7"
+    WORLD_FRAME = "med_base"
     ACTIVE_MOVING_ARM = 0  # only 1 arm
 
     @staticmethod
@@ -306,12 +307,10 @@ class RealPokeEnv(RealArmEnv):
         self.large_wrench_world_publisher = rospy.Publisher(self.robot.ns("large_wrench_world"), WrenchStamped,
                                                             queue_size=10)
 
-        # to reset the rest pose, manually jog it there then read the values
-        rest_pose = pose_msg_to_pos_quaternion(self.robot.get_link_pose(self.EE_LINK_NAME))
-
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
-        self.gripper.move(0)
+
+        # self.gripper.move(0)
 
         self.last_ee_pos = self._observe_ee(return_z=True)
         self.REST_POS[2] = self.last_ee_pos[-1]
@@ -321,8 +320,8 @@ class RealPokeEnv(RealArmEnv):
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
         use_cameras = True
-        camera_parser_right = PicoFlexxPointCloudParser(camera_name='pico_flexx_right') if use_cameras else None
-        camera_parser_left = PicoFlexxPointCloudParser(camera_name='pico_flexx_left') if use_cameras else None
+        camera_parser_right = BubbleParser(camera_name='pico_flexx_right') if use_cameras else None
+        camera_parser_left = BubbleParser(camera_name='pico_flexx_left') if use_cameras else None
 
         self._contact_detector = ContactDetectorPokeRealArmBubble(residual_precision,
                                                                   camera_parser_left, camera_parser_right,

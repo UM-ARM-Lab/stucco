@@ -16,12 +16,13 @@ import numpy as np
 from pytorch_kinematics import transforms as tf
 from stucco.util import move_figure
 
-from mmint_camera_utils.camera_utils import project_depth_points
+from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
 from stucco import tracking
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.detection import ContactSensor
 from stucco import cfg
-from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, PlanarPointToConfig, InfoKeys
+from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, PlanarPointToConfig, \
+    InfoKeys
 
 from stucco.detection import ContactDetector
 from geometry_msgs.msg import Pose
@@ -33,9 +34,8 @@ from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
 from tf2_geometry_msgs import WrenchStamped
 from arm_robots.victor import Victor
 from bubble_utils.bubble_med.bubble_med import BubbleMed
+from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
-from mmint_camera_utils.point_cloud_parsers import PicoFlexxPointCloudParser
-from mmint_camera_utils.camera_utils import bilinear_interpolate
 from wsg_50_utils.wsg_50_gripper import WSG50Gripper
 
 # runner imports
@@ -679,8 +679,8 @@ class RealArmEnvMedusa(RealArmEnv):
             residual_precision = np.diag([1, 1, 0, 1, 1, 1])
 
         use_cameras = True
-        camera_parser_right = PicoFlexxPointCloudParser(camera_name='pico_flexx_right') if use_cameras else None
-        camera_parser_left = PicoFlexxPointCloudParser(camera_name='pico_flexx_left') if use_cameras else None
+        camera_parser_right = BubbleParser(camera_name='pico_flexx_right') if use_cameras else None
+        camera_parser_left = BubbleParser(camera_name='pico_flexx_left') if use_cameras else None
 
         self._contact_detector = ContactDetectorPlanarRealArmBubble("medusa", residual_precision, residual_threshold,
                                                                     camera_parser_left, camera_parser_right,
@@ -843,7 +843,7 @@ class BubbleResidualContactSensor(PybulletResidualPlanarContactSensor):
 
 
 class BubbleCameraContactSensor(ContactSensor):
-    def __init__(self, camera: PicoFlexxPointCloudParser, link_frame, imprint_threshold=0.004,
+    def __init__(self, camera: BubbleParser, link_frame, imprint_threshold=0.004,
                  deform_number_threshold=20, ref_img=None, dtype=torch.float, device='cpu'):
         self.camera = camera
         self.link_frame = link_frame
@@ -916,7 +916,7 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
     """Contact detector using the bubble gripper"""
 
     def __init__(self, name, residual_precision, residual_threshold,
-                 camera_l: PicoFlexxPointCloudParser, camera_r: PicoFlexxPointCloudParser,
+                 camera_l: BubbleParser, camera_r: BubbleParser,
                  ee_link_frame: str, imprint_threshold=0.004, deform_number_threshold=20,
                  window_size=5, dtype=torch.float, device='cpu', **kwargs):
         super().__init__(residual_precision, window_size=window_size, dtype=dtype, device=device)
