@@ -28,6 +28,7 @@ parser.add_argument('--dry', action='store_true', help='print the commands to ru
 
 args = parser.parse_args()
 
+runs = {}
 if __name__ == "__main__":
     if 'all' in args.task:
         args.task = task_map.keys()
@@ -43,6 +44,13 @@ if __name__ == "__main__":
             if args.read_stored:
                 to_run.append("--read_stored")
 
-            print(" ".join(to_run))
+            cmd = " ".join(to_run)
+            print(cmd)
             if not args.dry:
-                subprocess.run(to_run)
+                completed = subprocess.run(to_run)
+                runs[cmd] = completed.returncode
+# log runs
+print("\n\n\n")
+for cmd, status in runs.items():
+    print(f"{'FAILED' if status != 0 else 'SUCCESS'}:\n{cmd}")
+print(f"{len(runs)} command run, {len([status for status in runs.values() if status != 0])} failures\n\n\n")
