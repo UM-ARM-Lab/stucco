@@ -142,54 +142,13 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
                                                                        deform_number_threshold=deform_number_threshold,
                                                                        dtype=dtype, device=device))
 
-            plt.ion()
-            self.imprint_norm = matplotlib.colors.Normalize(vmin=-imprint_threshold, vmax=imprint_threshold)
-            self.imprint_fig, [self.imprint_ax_l, self.imprint_ax_r] = plt.subplots(ncols=2, sharex=True, sharey=True,
-                                                                                    figsize=(9, 3))
-            self.imprint_fig.colorbar(matplotlib.cm.ScalarMappable(norm=self.imprint_norm),
-                                      ax=[self.imprint_ax_l, self.imprint_ax_r])
-
-            self.im_handle = {}
-            self.removable_artists = []
-            plt.show()
         else:
             rospy.logwarn("Creating contact detector without camera")
-
-    def _draw_deformation(self, ax, **cache_content):
-        imprint = cache_content['imprint']
-        # debug visualization of depth images and imprints
-        if ax not in self.im_handle:
-            self.im_handle[ax] = ax.imshow(imprint.squeeze(), norm=self.imprint_norm)
-        else:
-            self.im_handle[ax].set_data(imprint.squeeze())
-        vu = cache_content.get('contact_avg_pixel', None)
-        if vu is not None:
-            self.removable_artists.append(ax.annotate('contact', xy=(vu[1], vu[0]), xycoords='data', xytext=(0, 25),
-                                                      textcoords='offset points',
-                                                      arrowprops=dict(facecolor='black', shrink=0.05),
-                                                      horizontalalignment='center',
-                                                      verticalalignment='top'))
-        plt.pause(0.0001)
-
-    def draw_deformation(self):
-        # always draw deformations even if we don't have an isolated contact (why moved outside isolate_contact)
-        sl, sr = self.sensors
-        assert isinstance(sl, PokeBubbleCameraContactSensor)
-        assert isinstance(sr, PokeBubbleCameraContactSensor)
-        cache_l = sl.cache
-        cache_r = sr.cache
-        for artist in self.removable_artists:
-            artist.remove()
-        self.removable_artists = []
-        if cache_l is not None:
-            self._draw_deformation(self.imprint_ax_l, **cache_l)
-        if cache_r is not None:
-            self._draw_deformation(self.imprint_ax_r, **cache_r)
 
     def get_last_contact_location(self, pose=None, **kwargs):
         # call this first to process the caches
         ret = super().get_last_contact_location(pose=pose, **kwargs)
-        self.draw_deformation()
+        # self.draw_deformation()
         return ret
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
@@ -312,6 +271,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def __init__(self, *args, environment_level=0, vel=0.2, use_cameras=True, **kwargs):
         level = Levels(environment_level)
         save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
+        self.vel = vel
         BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path,
                                bubble_left=use_cameras, bubble_right=use_cameras)
         RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
