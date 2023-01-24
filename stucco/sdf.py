@@ -141,6 +141,18 @@ class ObjectFrameSDF(abc.ABC):
             towards higher SDF values (away from surface when outside the object and towards the surface when inside)
         """
 
+    def outside_surface(self, points_in_object_frame, surface_level=0):
+        """
+        Check if query points are outside the surface level set; separate from querying the values since some
+        implementations may have a more efficient way of computing this
+        :param points_in_object_frame:
+        :param surface_level: The level set value for separating points
+        :return: B x N bool
+        """
+        sdf_values, _ = self.__call__(points_in_object_frame)
+        outside = sdf_values > surface_level
+        return outside
+
     def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
         """
         Get a voxel view of a part of the SDF
@@ -325,6 +337,17 @@ class CachedSDF(ObjectFrameSDF):
             within_bounds = self.voxels.get_valid_values(points_in_object_frame)
             assert torch.all(close_enough[within_bounds])
         return val, grad
+
+    def outside_surface(self, points_in_object_frame, surface_level=0):
+        keys = self.voxels.ensure_index_key(points_in_object_frame)
+        keys_ravelled = self.voxels.ravel_multi_index(keys, self.voxels.shape)
+
+        inbound_keys = self.voxels.get_valid_values(points_in_object_frame)
+
+        # assume out of bound keys are outside
+        outside = torch.ones(keys_ravelled.shape, device=self.device, dtype=torch.bool)
+        outside[inbound_keys] = self.voxels.raw_data[keys_ravelled[inbound_keys]] > surface_level
+        return outside
 
     def get_voxel_view(self, voxels: VoxelGrid = None) -> torch_view.TorchMultidimView:
         if voxels is None:
