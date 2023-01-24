@@ -474,6 +474,69 @@ class ReverseVolumetricCost(RegistrationCost):
         return apply_similarity_transform(points, R, T, s)
 
 
+class DiscreteNondifferentiableCost(RegistrationCost):
+    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
+                 vis=None, cmax=20.,
+                 obj_factory=None):
+        """
+        :param free_voxels: representation of freespace
+        :param sdf_voxels: voxels for which we know the exact SDF values for
+        :param obj_sdf: signed distance function of the target object in object frame
+        :param scale:
+        """
+
+        self.free_voxels = free_voxels
+        self.sdf_voxels = sdf_voxels
+
+        self.scale = scale
+        self.scale_known_freespace = cmax
+        self.scale_known_sdf = 1
+
+        # SDF gives us a volumetric representation of the target object
+        self.sdf = obj_sdf
+
+        # batch
+        self.B = None
+
+        self.vis = vis
+        self.obj_factory = obj_factory
+
+    def __call__(self, R, T, s, knn_res: _KNN = None):
+        # assign batch and reuse for later for efficiency
+        if self.B is None or self.B != R.shape[0]:
+            self.B = R.shape[0]
+
+        loss = torch.zeros(self.B, device=R.device, dtype=R.dtype)
+
+        # voxels are in world frame, translate them to model frame
+        if self.scale_known_freespace != 0:
+            world_frame_free_voxels, known_free = self.free_voxels.get_known_pos_and_values()
+            world_frame_free_voxels = world_frame_free_voxels[known_free.view(-1) == 1]
+            model_frame_free_voxels = self._transform_world_frame_points_to_model_frame(R, T, s,
+                                                                                        world_frame_free_voxels)
+            # interior points should not be occupied, set some threshold for interior points
+            free_voxels_in_free_space = self.sdf.outside_surface(model_frame_free_voxels, -0.01)
+            occupied = ~free_voxels_in_free_space
+            # interior points will have sdf_value < 0
+            known_free_space_loss = occupied
+            known_free_space_loss = known_free_space_loss.sum(dim=-1) / occupied.shape[-1]
+            loss += known_free_space_loss * self.scale_known_freespace
+        if self.scale_known_sdf != 0:
+            world_frame_known_sdf_voxels, known_sdf_values = self.sdf_voxels.get_known_pos_and_values()
+            model_frame_known_sdf_voxels = self._transform_world_frame_points_to_model_frame(R, T, s,
+                                                                                             world_frame_known_sdf_voxels)
+            sdf_values, _ = self.sdf(model_frame_known_sdf_voxels)
+
+            known_sdf_loss = (sdf_values - known_sdf_values).abs()
+            known_sdf_loss = known_sdf_loss.mean(dim=-1)
+            loss += known_sdf_loss * self.scale_known_sdf
+
+        return loss * self.scale
+
+    def _transform_world_frame_points_to_model_frame(self, R, T, s, points):
+        return apply_similarity_transform(points, R, T, s)
+
+
 class ICPPoseCostMatrixInputWrapper:
     def __init__(self, cost: RegistrationCost, action_cost_scale=1.0):
         self.cost = cost

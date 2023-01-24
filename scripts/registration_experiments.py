@@ -1067,6 +1067,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
         self.contact_pts = None
 
+    def create_volumetric_cost(self):
+        # placeholder for now; have to be filled manually
+        empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
+        self.volumetric_cost = icp_costs.DiscreteNondifferentiableCost(self.env.free_voxels, empty_sdf,
+                                                                       self.env.target_sdf,
+                                                                       cmax=20, vis=self.env.vis,
+                                                                       obj_factory=self.env.obj_factory)
+
     def hook_before_first_poke(self, seed):
         super(GeneratePlausibleSetRunner, self).hook_before_first_poke(seed)
         with rand.SavedRNG():
@@ -1194,9 +1202,10 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
 
 class PlotPlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, show_only_latest=True, sequential_delay=0.1, **kwargs):
+    def __init__(self, *args, show_only_latest=True, sequential_delay=0.1, max_shown=200, **kwargs):
         super(PlotPlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_set = {}
+        self.max_shown = max_shown
         self.show_only_latest = show_only_latest
         self.sequential_delay = sequential_delay
 
@@ -1210,7 +1219,7 @@ class PlotPlausibleSetRunner(PlausibleSetRunner):
             if not self.show_only_latest:
                 self.env.vis.clear_visualizations()
                 self.pose_obj_map = {}
-            draw_pose_distribution(ps, self.pose_obj_map, self.env.vis, self.env.obj_factory,
+            draw_pose_distribution(ps[:self.max_shown], self.pose_obj_map, self.env.vis, self.env.obj_factory,
                                    show_only_latest=self.show_only_latest, sequential_delay=self.sequential_delay)
 
     def hook_after_last_poke(self, seed):
