@@ -1502,8 +1502,10 @@ def plot_poke_chamfer_err(args, level, obj_factory):
 
 def plot_poke_plausible_diversity(args, level, obj_factory):
     def filter(df):
-        # df = df[(df["level"].str.contains(level.name))]
-        df = df[(df["level"] == level.name)]
+        if args.marginalize:
+            df = df[(df["level"].str.contains(level.name))]
+        else:
+            df = df[(df["level"] == level.name)]
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
         df = df[df.name == args.name]
@@ -1631,6 +1633,8 @@ if __name__ == "__main__":
     parser.add_argument('--read_stored', action='store_true',
                         help='read and process previously output results rather than'
                              ' rerunning where possible')
+    parser.add_argument('--marginalize', action='store_true',
+                        help='average results across configurations for each object for plotting')
 
     args = parser.parse_args()
 

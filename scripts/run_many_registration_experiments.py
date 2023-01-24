@@ -25,6 +25,7 @@ parser.add_argument('--task', type=str, nargs='+',
                     choices=['all'] + list(task_map.keys()), help='what tasks to run')
 parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--dry', action='store_true', help='print the commands to run without execution')
+parser.add_argument('rest', nargs='*', help='arguments to forward; should be separated from other arguments with --')
 
 args = parser.parse_args()
 
@@ -35,7 +36,8 @@ if __name__ == "__main__":
     for registration in args.registration:
         for task in args.task:
             to_run = ["python", f"{cfg.ROOT_DIR}/scripts/registration_experiments.py", args.experiment,
-                      "--registration", registration, "--task", task, "--seed"] + [str(s) for s in args.seed]
+                      "--registration", registration, "--task", task, "--seed"] + [str(s) for s in
+                                                                                   args.seed] + args.rest
             if args.name is not None:
                 to_run.append("--name")
                 to_run.append(args.name)
