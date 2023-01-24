@@ -1053,6 +1053,8 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
         # maps poke number to a set of plausible transforms
         self.plausible_set = {}
+        # without max restriction
+        self.plausible_set_all = {}
         self.gt_position_max_offset = gt_position_max_offset
         self.position_steps = position_steps
 
@@ -1072,7 +1074,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
         self.volumetric_cost = icp_costs.DiscreteNondifferentiableCost(self.env.free_voxels, empty_sdf,
                                                                        self.env.target_sdf,
-                                                                       cmax=20, vis=self.env.vis,
+                                                                       cmax=1000, vis=self.env.vis,
                                                                        obj_factory=self.env.obj_factory)
 
     def hook_before_first_poke(self, seed):
@@ -1143,7 +1145,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # since new pokes can only prune previously plausible transforms
         if len(self.plausible_set) > 0:
             trans_chunk = 500
-            Hall = self.plausible_set[self.pokes - 1]
+            Hall = self.plausible_set_all[self.pokes - 1]
             for i in range(0, Hall.shape[0], trans_chunk):
                 H = Hall[i:i + trans_chunk]
                 Hinv = H.inverse()
@@ -1182,12 +1184,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                 logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
 
         all_plausible_transforms = torch.cat(plausible_transforms)
+        self.plausible_set_all[self.pokes] = all_plausible_transforms
         if len(all_plausible_transforms) > self.max_plausibile_set:
             to_keep = torch.randperm(len(all_plausible_transforms))[:self.max_plausibile_set]
             all_plausible_transforms = all_plausible_transforms[to_keep]
         self.plausible_set[self.pokes] = all_plausible_transforms
-        logger.info("poke %d with %d plausible completions gt cost: %f allowable cost: %f", self.pokes,
-                    all_plausible_transforms.shape[0], gt_cost, gt_cost + self.plausible_suboptimality)
+        logger.info("poke %d with %d (%d) plausible completions gt cost: %f allowable cost: %f", self.pokes,
+                    all_plausible_transforms.shape[0], self.plausible_set_all[self.pokes].shape[0], gt_cost,
+                    gt_cost + self.plausible_suboptimality)
         # plot plausible transforms
         to_plot = torch.randperm(len(all_plausible_transforms))[:200]
         draw_pose_distribution(all_plausible_transforms[to_plot], self.pose_obj_map, self.env.vis, self.env.obj_factory,
