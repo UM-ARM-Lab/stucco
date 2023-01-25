@@ -11,9 +11,6 @@ from pytorch_kinematics import transforms as tf
 
 from geometry_msgs.msg import Pose
 
-import matplotlib
-import matplotlib.pyplot as plt
-
 import logging
 import enum
 import torch
@@ -25,13 +22,9 @@ from stucco.detection import ContactDetector, ContactSensor
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv, pose_msg_to_pos_quaternion
 
 from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
-from tf2_geometry_msgs import WrenchStamped
 from bubble_utils.bubble_med.bubble_med import BubbleMed
-from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
-# from mmint_camera_utils.camera_utils.camera_parsers import PicoFlexxPointCloudParser
 from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
 from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
-from wsg_50_utils.wsg_50_gripper import WSG50Gripper
 import gym.spaces
 
 import matplotlib.colors as colors
@@ -181,7 +174,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     nx = 3
     MAX_FORCE = 30
     MAX_GRIPPER_FORCE = 30
-    MAX_PUSH_DIST = 0.02
+    MAX_PUSH_DIST = 0.05
     OPEN_ANGLE = 0.055
     CLOSE_ANGLE = 0.0
 
@@ -202,6 +195,9 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def get_name(cls):
         return 'real_poke_env'
 
+    def _is_done(self, observation, a):
+        return a is None or a['dxyz'] is None
+
     def _get_action_space(self):
         u_min, u_max = self.get_control_bounds()
         actions = gym.spaces.Box(u_min, u_max)
@@ -213,7 +209,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def _get_observation(self):
         obs = {}
         obs.update(self._get_bubble_observation())
-        # TODO other things in here?
+        obs['xyz'] = self._observe_ee(return_z=True)
         return obs
 
     @staticmethod
@@ -273,7 +269,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
         self.vel = vel
         BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path,
-                               bubble_left=use_cameras, bubble_right=use_cameras)
+                               bubble_left=use_cameras, bubble_right=use_cameras, wrap_data=True)
         RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
         # force an orientation; if None, uses the rest orientation
         self.orientation = None
@@ -282,8 +278,17 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         med = BubbleMed(display_goals=False,
                         base_kwargs={'cartesian_impedance_controller_kwargs': {'pose_distance_fn': xy_pose_distance,
                                                                                'timeout_per_m': 40 / self.vel,
-                                                                               'position_close_enough': 0.003}})
+                                                                               'position_close_enough': 0.005}})
         return med
+
+    def enter_cartesian_mode(self):
+        self.robot.set_cartesian_impedance(self.vel, x_stiffness=1000, y_stiffness=5000, z_stiffnes=5000)
+
+    def reset(self):
+        # self.return_to_rest(self.robot.arm_group)
+        self.state = self._obs()
+        self.contact_detector.clear()
+        return np.copy(self.state), None
 
     def _setup_robot_ros(self, residual_threshold=10., residual_precision=None):
         self._need_to_force_planar = False
@@ -296,10 +301,6 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         # subscribe to status messages
         self.contact_ros_listener = rospy.Subscriber(self.robot.ns("motion_status"), MotionStatus,
                                                      self.contact_listener)
-        self.cleaned_wrench_publisher = rospy.Publisher(self.robot.ns("cleaned_wrench"), WrenchStamped, queue_size=10)
-        self.large_wrench_publisher = rospy.Publisher(self.robot.ns("large_wrench"), WrenchStamped, queue_size=10)
-        self.large_wrench_world_publisher = rospy.Publisher(self.robot.ns("large_wrench_world"), WrenchStamped,
-                                                            queue_size=10)
 
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
@@ -333,25 +334,26 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         return dx, dy, dz
 
     def _do_action(self, action):
-        action = action['dxyz']
         self._clear_state_before_step()
+        if action is not None:
+            action = action['dxyz']
 
-        action = np.clip(action, *self.get_control_bounds())
-        # normalize action such that the input can be within a fixed range
-        self.last_ee_pos = self._observe_ee(return_z=True)
-        dx, dy, dz = self._unpack_action(action)
+            action = np.clip(action, *self.get_control_bounds())
+            # normalize action such that the input can be within a fixed range
+            self.last_ee_pos = self._observe_ee(return_z=True)
+            dx, dy, dz = self._unpack_action(action)
 
-        self._single_step_contact_info = {}
-        orientation = self.orientation
-        if orientation is None:
-            orientation = copy.deepcopy(self.REST_ORIENTATION)
-            if self._need_to_force_planar:
-                orientation[1] += np.pi / 4
+            self._single_step_contact_info = {}
+            orientation = self.orientation
+            if orientation is None:
+                orientation = copy.deepcopy(self.REST_ORIENTATION)
+                if self._need_to_force_planar:
+                    orientation[1] += np.pi / 4
 
-        self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
-                                                  target_z=self.last_ee_pos[2] + dz,
-                                                  # target_z=0.1,
-                                                  blocking=True, step_size=0.025, target_orientation=orientation)
+            self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
+                                                      target_z=self.last_ee_pos[2] + dz,
+                                                      # target_z=0.1,
+                                                      blocking=True, step_size=0.025, target_orientation=orientation)
         return self.aggregate_info()
 
 

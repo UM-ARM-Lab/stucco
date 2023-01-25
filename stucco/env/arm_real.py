@@ -227,11 +227,14 @@ class RealArmEnv(Env):
     def vis(self) -> CombinedVisualizer:
         return self._vis
 
+    def enter_cartesian_mode(self):
+        self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
+
     def return_to_rest(self, group_name):
         self.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
         # self.robot.plan_to_pose(group_name, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
         self.robot.plan_to_joint_config(group_name, self.REST_JOINTS)
-        self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
+        self.enter_cartesian_mode()
 
     def recalibrate_static_wrench(self):
         start = time.time()
@@ -277,8 +280,6 @@ class RealArmEnv(Env):
             wr.wrench.torque.y = w.b
             wr.wrench.torque.z = w.c
             wr_world = self.robot.tf_wrapper.transform_to_frame(wr, self.WORLD_FRAME)
-            if np.linalg.norm([w.x, w.y, w.z]) > 10:
-                self.large_wrench_publisher.publish(wr)
             wr = wr_world.wrench
 
             # clean with static wrench
@@ -294,9 +295,6 @@ class RealArmEnv(Env):
             wr = WrenchStamped()
             wr.header.frame_id = self.WORLD_FRAME
             wr.wrench.force.x, wr.wrench.force.y, wr.wrench.force.z, wr.wrench.torque.x, wr.wrench.torque.y, wr.wrench.torque.z = wr_np
-            self.cleaned_wrench_publisher.publish(wr)
-            if np.linalg.norm([w.x, w.y, w.z]) > 10:
-                self.large_wrench_world_publisher.publish(wr)
 
             # print residual
             residual = wr_np.T @ self.contact_detector.residual_precision @ wr_np
@@ -426,10 +424,7 @@ class RealArmEnv(Env):
         return fs[median_mini_step], info[InfoKeys.HIGH_FREQ_REACTION_T][median_mini_step]
 
     def reset(self):
-        self.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.vel)
-        # reset to rest position
-        self.robot.plan_to_pose(self.robot.right_arm_group, self.EE_LINK_NAME, self.REST_POS + self.REST_ORIENTATION)
-        self.robot.set_control_mode(control_mode=ControlMode.CARTESIAN_IMPEDANCE, vel=self.vel)
+        self.return_to_rest(self.robot.right_arm_group)
         self.state = self._obs()
         self.contact_detector.clear()
         return np.copy(self.state), None
