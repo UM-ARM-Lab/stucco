@@ -149,7 +149,11 @@ class CMAME(QDOptimization):
                  **kwargs):
         if "sigma" not in kwargs:
             kwargs["sigma"] = 1.0
-        self.bins = bins
+        if isinstance(bins, (float, int)):
+            self.bins = [bins for _ in range(self.MEASURE_DIM)]
+        else:
+            assert len(bins) == self.MEASURE_DIM
+            self.bins = bins
         self.iterations = iterations
         self.ranges = ranges
         self.m = object_length_scale
@@ -171,8 +175,7 @@ class CMAME(QDOptimization):
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins for _ in range(self.MEASURE_DIM)],
-                                   ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges)
         emitters = [
             EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
             range(self.num_emitters)
@@ -254,7 +257,7 @@ class CMAMEGA(CMAME):
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins for _ in range(self.MEASURE_DIM)],
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins,
                                    ranges=self.ranges)
         emitters = []
         # emitters += [

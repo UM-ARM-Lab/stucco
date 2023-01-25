@@ -14,6 +14,9 @@ from stucco.icp.medial_constraints import MedialConstraintCost
 from stucco import util
 from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 from stucco.icp import quality_diversity
+import logging
+
+logger = logging.getLogger(__file__)
 
 
 # from https://github.com/richardos/icp
@@ -556,6 +559,10 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         pos_std = pos.std(dim=-2).cpu().numpy()
         centroid = pos.mean(dim=-2).cpu().numpy()
 
+        diff = pos - pos.mean(dim=-2)
+        s = diff.square().sum()
+        pos_total_std = (s / len(pos)).sqrt().cpu().numpy()
+
         method_specific_kwargs = {}
         if optimization == volumetric.Optimization.CMAME:
             QD = quality_diversity.CMAME
@@ -565,8 +572,12 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         centroid = centroid[:QD.MEASURE_DIM]
         pos_std = pos_std[:QD.MEASURE_DIM]
         ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
+        bins_per_std = 40
+        bins = pos_std / pos_total_std * bins_per_std
+        bins = np.round(bins).astype(int)
+        logger.info("QD position std %f bins %s", pos_total_std, bins)
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                iterations=100, num_emitters=1,
+                iterations=100, num_emitters=1, bins=bins,
                 ranges=ranges, **method_specific_kwargs, **kwargs)
 
         if debug:
