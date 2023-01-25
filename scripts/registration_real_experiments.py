@@ -4,7 +4,10 @@ import numpy as np
 import logging
 import torch
 
+from bubble_utils.bubble_data_collection.controller_base import ControllerBase
+from stucco.env.poke_real import RealPokeEnv
 from stucco.poking_controller import PokingController
+from bubble_utils.bubble_data_collection.env_data_collection import ReferencedEnvDataCollector
 
 # from stucco.env.real_env import VideoLogger
 from stucco.env_getters.getter import EnvGetter
@@ -15,6 +18,7 @@ from stucco import cfg
 from stucco.env import poke_real
 from stucco import tracking
 from stucco.tracking import ContactSet
+from victor_hardware_interface_msgs.msg import ControlMode
 
 try:
     import rospy
@@ -58,7 +62,8 @@ class StubContactSet(ContactSet):
 def predetermined_poke_range():
     # y,z order of poking
     return {
-        poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
+        poke_real.Levels.DRILL: ((0, ), (0.0, 0.05)),
+        # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
 
@@ -97,48 +102,114 @@ class RealPokeGetter(EnvGetter):
         return params
 
 
+class PokingControllerWrapper(ControllerBase):
+    def get_controller_params(self):
+        return {'kp': self.ctrl.kp, 'x_rest': self.ctrl.x_rest}
+
+    def __init__(self, env, *args, force_threshold=10, **kwargs):
+        super().__init__(env)
+        self.force_threshold = force_threshold
+        self.ctrl = PokingController(*args, **kwargs)
+
+    @classmethod
+    def get_name(cls):
+        return "predefined_poking_ctrl"
+
+    def control(self, obs, info=None):
+        with self.env.motion_status_input_lock:
+            obs = obs['xyz']
+
+        u = [0 for _ in range(self.ctrl.nu)]
+        if info is None:
+            return {'dxyz': u}
+        self.ctrl.x_history.append(obs)
+
+        if len(self.ctrl.x_history) > 1:
+            self.ctrl.update(obs, info)
+
+        if self.ctrl.done():
+            self.ctrl.mode = self.ctrl.Mode.DONE
+            return {'dxyz': None}
+        else:
+            # push along +x
+            u[0] = 1.
+            self.ctrl.push_i += 1
+            if self.ctrl.push_i >= self.ctrl.push_forward_count or np.linalg.norm(
+                    info['reaction']) > self.force_threshold:
+                # directly go to next target rather than return backward
+                assert isinstance(self.env, RealPokeEnv)
+
+                # move back so planning is allowed (don't start in collision)
+                target_pos = [self.ctrl.x_rest, self.ctrl.target_yz[0][0], obs[2]]
+                self.env.robot.cartesian_impedance_raw_motion(target_pos, frame_id=self.env.EE_LINK_NAME,
+                                                              ref_frame=self.env.WORLD_FRAME, blocking=True,
+                                                              goal_tolerance=np.array([0.001, 0.001, 0.01]))
+                self.env.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.env.vel)
+                self.ctrl.target_yz = self.ctrl.target_yz[1:]
+                if not self.ctrl.done():
+                    target_pos = [self.ctrl.x_rest] + list(self.ctrl.target_yz[0])
+                    self.env.robot.plan_to_pose(self.env.robot.arm_group, self.env.EE_LINK_NAME,
+                                                target_pos + self.env.REST_ORIENTATION)
+                    self.env.enter_cartesian_mode()
+                    self.ctrl.push_i = 0
+                return {'dxyz': None}
+
+            self.ctrl.i += 1
+
+        if u is not None:
+            self.ctrl.u_history.append(u)
+
+        return {'dxyz': u}
+
+
 def run_poke(env: poke_real.RealPokeEnv, seed=0, control_wait=0.):
-    def hook_after_poke():
-        logger.info(f"Finished poke {pokes} for seed {seed} of level {env.level}")
+    # def hook_after_poke():
+    #     logger.info(f"Finished poke {pokes} for seed {seed} of level {env.level}")
 
     # input("enter to start execution")
     y_order, z_order = predetermined_poke_range()[env.level]
     # these are specified relative to the rest position
-    y_order = (y + env.REST_POS[1] for y in y_order)
-    z_order = (z + env.REST_POS[2] for z in z_order)
-    ctrl = PokingController(env.contact_detector, StubContactSet(), y_order=y_order, z_order=z_order,
-                            x_rest=env.REST_POS[0], push_forward_count=2)
+    y_order = list(y + env.REST_POS[1] for y in y_order)
+    z_order = list(z + env.REST_POS[2] for z in z_order)
+    ctrl = PokingControllerWrapper(env, env.contact_detector, StubContactSet(), y_order=y_order, z_order=z_order,
+                                   x_rest=env.REST_POS[0], push_forward_count=3)
 
-    steps = 0
-    # trajectory is decomposed into pokes
-    pokes = 0
     env.recalibrate_static_wrench()
-    obs = env._obs()
-    info = None
+    data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)
+    dc = ReferencedEnvDataCollector(env, data_path, scene_name=env.level.name, reset_trajectories=True,
+                                    trajectory_length=100,
+                                    controller=ctrl,
+                                    reuse_prev_observation=True)
+
+    dc.collect_data(len(y_order) * len(z_order))
+    # trajectory is decomposed into pokes
+    # pokes = 0
+    # obs = env._obs()
+    # info = None
     # dtype = torch.float32
 
     # with VideoLogger(window_names=("medusa_flipped_inflated.rviz* - RViz", "medusa_flipped_inflated.rviz - RViz"),
     #                  log_external_video=True):
     # TODO logging telemetry
-    while not rospy.is_shutdown() and not ctrl.done():
-        with env.motion_status_input_lock:
-            action = ctrl.command(obs, info)
-
-        if action is None:
-            pokes += 1
-            hook_after_poke()
-
-        if action is not None:
-            if torch.is_tensor(action):
-                action = action.cpu()
-
-            action = np.array(action).flatten()
-            obs, _, done, info = env.step({'dxyz': action})
-            print(f"pushed {action} state {obs}")
-
-        rospy.sleep(control_wait)
-
-    rospy.sleep(1)
+    # while not rospy.is_shutdown() and not ctrl.done():
+    #     with env.motion_status_input_lock:
+    #         action = ctrl.command(obs, info)
+    #
+    #     if action is None:
+    #         pokes += 1
+    #         hook_after_poke()
+    #
+    #     if action is not None:
+    #         if torch.is_tensor(action):
+    #             action = action.cpu()
+    #
+    #         action = np.array(action).flatten()
+    #         obs, _, done, info = env.step({'dxyz': action})
+    #         print(f"pushed {action} state {obs}")
+    #
+    #     rospy.sleep(control_wait)
+    #
+    # rospy.sleep(1)
 
 
 def main(args):

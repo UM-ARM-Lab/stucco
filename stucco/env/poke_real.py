@@ -305,6 +305,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
 
+        self._calibrate_bubbles()
         # self.gripper.move(0)
 
         self.last_ee_pos = self._observe_ee(return_z=True)
@@ -335,9 +336,8 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
 
     def _do_action(self, action):
         self._clear_state_before_step()
+        action = action['dxyz']
         if action is not None:
-            action = action['dxyz']
-
             action = np.clip(action, *self.get_control_bounds())
             # normalize action such that the input can be within a fixed range
             self.last_ee_pos = self._observe_ee(return_z=True)
