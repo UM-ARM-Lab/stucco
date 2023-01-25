@@ -556,17 +556,15 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         pos_std = pos.std(dim=-2).cpu().numpy()
         centroid = pos.mean(dim=-2).cpu().numpy()
 
-        # extract XY (leave Z to be searched on)
-        centroid = centroid[:2]
-        pos_std = pos_std[:2]
-
-        ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
-
         method_specific_kwargs = {}
         if optimization == volumetric.Optimization.CMAME:
             QD = quality_diversity.CMAME
         else:
             QD = quality_diversity.CMAMEGA
+        # extract translation measure
+        centroid = centroid[:QD.MEASURE_DIM]
+        pos_std = pos_std[:QD.MEASURE_DIM]
+        ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                 iterations=100, num_emitters=1,
                 ranges=ranges, **method_specific_kwargs, **kwargs)

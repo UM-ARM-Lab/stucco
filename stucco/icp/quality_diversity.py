@@ -137,7 +137,10 @@ class CMAES(QDOptimization):
 
 
 class CMAME(QDOptimization):
-    def __init__(self, *args, bins=40, iterations=100,
+    # how many dimensions of translation to use, in the order of XYZ
+    MEASURE_DIM = 3
+
+    def __init__(self, *args, bins=20, iterations=100,
                  # can either specify an explicit range
                  ranges=None,
                  # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
@@ -164,10 +167,12 @@ class CMAME(QDOptimization):
             centroid = centroid[:2]
             centroid += self.m * np.array(self.poke_offset_direction)
             self.ranges = np.array((centroid - self.m, centroid + self.m)).T
+        assert len(self.ranges) == self.MEASURE_DIM
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins for _ in range(self.MEASURE_DIM)],
+                                   ranges=self.ranges)
         emitters = [
             EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
             range(self.num_emitters)
@@ -178,10 +183,18 @@ class CMAME(QDOptimization):
     def is_done(self):
         return self.i >= self.iterations
 
-    @staticmethod
-    def _measure(x):
-        # behavior is the xy translation
-        return x[..., 6:8]
+    @classmethod
+    def _measure(cls, x):
+        # behavior is the xyz translation
+        return x[..., 6:6 + cls.MEASURE_DIM]
+
+    @classmethod
+    def _measure_grad(cls, x):
+        # measure (aka behavior) is just the translation so jacobian is just identity for the corresponding dimensions
+        grad = np.zeros((cls.MEASURE_DIM, x.shape[-1]))
+        grad[:, 6:6 + cls.MEASURE_DIM] = np.eye(cls.MEASURE_DIM)
+        grad = np.tile(grad, (x.shape[0], 1, 1))
+        return grad
 
     def step(self):
         self.i += 1
@@ -206,7 +219,10 @@ class CMAME(QDOptimization):
     def restore_previous_results(self):
         if previous_solutions is None:
             return
-        self.add_solutions(previous_solutions)
+        # avoid running out of memory
+        SOLUTION_CHUNK = 300
+        for i in range(0, previous_solutions.shape[0], SOLUTION_CHUNK):
+            self.add_solutions(previous_solutions[i:i + SOLUTION_CHUNK])
 
     def process_final_results(self, s, losses):
         global previous_solutions
@@ -238,7 +254,8 @@ class CMAMEGA(CMAME):
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins, self.bins], ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=[self.bins for _ in range(self.MEASURE_DIM)],
+                                   ranges=self.ranges)
         emitters = []
         # emitters += [
         #     EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
@@ -268,12 +285,10 @@ class CMAMEGA(CMAME):
         cost.sum().backward()
         objective_grad = -x.grad.cpu().numpy()
         objective = -cost.detach().cpu().numpy()
-        # measure (aka behavior) is just the x,y, so jacobian is just identity for the corresponding dimensions
-        behavior_grad = np.zeros((bcs.shape[-1], solutions.shape[-1]))
-        behavior_grad[:, 6:8] = np.eye(2)
-        behavior_grad = np.tile(behavior_grad, (x.shape[0], 1, 1))
+        objective_grad = objective_grad.reshape(x.shape[0], 1, -1)
+        measure_grad = self._measure_grad(x)
 
-        jacobian = np.concatenate((objective_grad.reshape(x.shape[0], 1, -1), behavior_grad), axis=1)
+        jacobian = np.concatenate((objective_grad, measure_grad), axis=1)
         self.scheduler.tell_dqd(objective, bcs, jacobian)
 
         return super(CMAMEGA, self).step()
