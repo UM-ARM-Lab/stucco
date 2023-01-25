@@ -61,19 +61,22 @@ class PokingController(Controller):
         x = self.x_history[-1][:self.dim]
         pt, dx = self.contact_detector.get_last_contact_location(visualizer=visualizer)
 
-        info['u'] = torch.tensor(self.u_history[-1])
-        self.contact_set.update(x, dx, pt, info=info)
+        if info is not None:
+            info['u'] = torch.tensor(self.u_history[-1])
+            self.contact_set.update(x, dx, pt, info=info)
 
     def done(self):
         return len(self.target_yz) == 0
 
     def command(self, obs, info=None, visualizer=None):
+        u = [0 for _ in range(self.nu)]
+        if info is None:
+            return u
         self.x_history.append(obs)
 
         if len(self.x_history) > 1:
             self.update(obs, info, visualizer=visualizer)
 
-        u = [0 for _ in range(self.nu)]
         if self.done():
             self.mode = self.Mode.DONE
         else:
