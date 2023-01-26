@@ -264,7 +264,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def control_cost(cls):
         return np.diag([1 for _ in range(cls.nu)])
 
-    def __init__(self, *args, environment_level=0, vel=0.2, use_cameras=True, **kwargs):
+    def __init__(self, *args, environment_level=0, vel=0.2, downsample_info=50, use_cameras=True, **kwargs):
         level = Levels(environment_level)
         save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
         self.vel = vel
@@ -273,6 +273,8 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
         # force an orientation; if None, uses the rest orientation
         self.orientation = None
+        # prevent saving gigantic arrays to csv
+        self.downsample_info = downsample_info
 
     def _get_med(self):
         med = BubbleMed(display_goals=False,
@@ -354,7 +356,15 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
                                                       target_z=self.last_ee_pos[2] + dz,
                                                       # target_z=0.1,
                                                       blocking=True, step_size=0.025, target_orientation=orientation)
-        return self.aggregate_info()
+        full_info = self.aggregate_info()
+        info = {}
+        for key, value in full_info.items():
+            if not isinstance(value, np.ndarray) or len(value.shape) == 1:
+                info[key] = value
+            else:
+                info[key] = value[::self.downsample_info]
+
+        return info
 
 
 class RealPokeDataSource(EnvDataSource):
