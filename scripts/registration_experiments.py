@@ -1530,6 +1530,8 @@ def main(args):
     obj_factory = obj_factory_map(obj_name)
 
     rand.seed(0)
+    logger.info(
+        f"--experiment {args.experiment} --registration {args.registration} --task {level.name} --seeds {args.seed}")
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
