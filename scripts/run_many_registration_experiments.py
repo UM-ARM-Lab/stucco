@@ -3,6 +3,18 @@ import subprocess
 
 from stucco.env import poke
 from stucco import cfg
+import logging
+import os
+from datetime import datetime
+
+logger = logging.getLogger(__file__)
+ch = logging.StreamHandler()
+fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}_run_many.log".format(datetime.now())))
+
+logging.basicConfig(level=logging.INFO, force=True,
+                    format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
+                    datefmt='%m-%d %H:%M:%S', handlers=[ch, fh])
+
 
 parser = argparse.ArgumentParser(description='Run many registration poking experiments')
 parser.add_argument('--experiment',
@@ -47,12 +59,13 @@ if __name__ == "__main__":
                 to_run.append("--read_stored")
 
             cmd = " ".join(to_run)
-            print(cmd)
+            logger.info(cmd)
             if not args.dry:
                 completed = subprocess.run(to_run)
                 runs[cmd] = completed.returncode
 # log runs
-print("\n\n\n")
+logger.info("\n\n\n")
 for cmd, status in runs.items():
-    print(f"{'FAILED' if status != 0 else 'SUCCESS'}:\n{cmd}")
-print(f"{len(runs)} command run, {len([status for status in runs.values() if status != 0])} failures\n\n\n")
+    if status != 0:
+        logger.info(f"FAILED: {cmd}")
+logger.info(f"{len(runs)} command run, {len([status for status in runs.values() if status != 0])} failures\n\n\n")
