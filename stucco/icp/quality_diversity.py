@@ -138,7 +138,7 @@ class CMAES(QDOptimization):
 
 class CMAME(QDOptimization):
     # how many dimensions of translation to use, in the order of XYZ
-    MEASURE_DIM = 3
+    MEASURE_DIM = 2
 
     def __init__(self, *args, bins=20, iterations=100,
                  # can either specify an explicit range

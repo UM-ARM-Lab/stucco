@@ -572,9 +572,10 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         centroid = centroid[:QD.MEASURE_DIM]
         pos_std = pos_std[:QD.MEASURE_DIM]
         ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
-        bins_per_std = 40
-        bins = pos_std / pos_total_std * bins_per_std
-        bins = np.round(bins).astype(int)
+        # bins_per_std = 40
+        # bins = pos_std / pos_total_std * bins_per_std
+        # bins = np.round(bins).astype(int)
+        bins = 40
         logger.info("QD position std %f bins %s", pos_total_std, bins)
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                 iterations=100, num_emitters=1, bins=bins,
