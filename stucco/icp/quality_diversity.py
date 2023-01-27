@@ -175,9 +175,11 @@ class CMAME(QDOptimization):
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges)
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges,
+                                   seed=np.random.randint(0, 10000))
         emitters = [
-            EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
+            EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B,
+                                     seed=np.random.randint(0, 10000)) for i in
             range(self.num_emitters)
         ]
         scheduler = Scheduler(self.archive, emitters)
@@ -257,7 +259,7 @@ class CMAMEGA(CMAME):
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins,
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, seed=np.random.randint(0, 10000),
                                    ranges=self.ranges)
         emitters = []
         # emitters += [
@@ -266,7 +268,8 @@ class CMAMEGA(CMAME):
         # ]
         emitters += [
             GradientArborescenceEmitter(self.archive, x0=x[i], sigma0=self.sigma, lr=self.lr, grad_opt="adam",
-                                        selection_rule="mu", bounds=None, batch_size=self.B - 1) for i in
+                                        selection_rule="mu", bounds=None, batch_size=self.B - 1,
+                                        seed=np.random.randint(0, 10000)) for i in
             range(self.num_emitters)
         ]
         scheduler = Scheduler(self.archive, emitters)

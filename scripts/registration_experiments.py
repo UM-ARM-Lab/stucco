@@ -1069,6 +1069,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
         self.contact_pts = None
 
+    # needs more tuning for the suboptimality for this loss
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
         empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
