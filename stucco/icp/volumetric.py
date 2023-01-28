@@ -31,7 +31,7 @@ def iterative_closest_point_volumetric(
         volumetric_cost: VolumetricCost,
         X: Union[torch.Tensor, "Pointclouds"],
         init_transform: Optional[SimilarityTransform] = None,
-        max_iterations: int = 20,
+        max_iterations: int = 10,  # quite robust to this parameter (number of restarts)
         relative_rmse_thr: float = 1e-6,
         estimate_scale: bool = False,
         verbose: bool = False,
