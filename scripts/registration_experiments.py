@@ -211,12 +211,14 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
     balls_path = f"{saved_traj_dir_for_method(icp.ICPMethod.MEDIAL_CONSTRAINT)}/{level.name}_{seed}_balls.txt"
     # if it hasn't been already generated (it generates for all pokes so only needs to be run once per traj)
     if not os.path.isfile(balls_path):
+        os.makedirs(os.path.dirname(balls_path), exist_ok=True)
         subprocess.run([ball_generate_exe, free_surface_path, points_path, balls_path])
         if not os.path.isfile(balls_path):
             raise RuntimeError(f"Medial balls file not created after execution - errors in ball generation!")
 
     # to efficiently batch process them, we'll be using it as just a tensor with semantics attached to each dimension
     balls = None
+    elapsed = 0
     with open(balls_path) as f:
         data = f.readlines()
         i = 0
@@ -224,6 +226,8 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
             header = data[i].split()
             this_poke = int(header[0])
             num_balls = int(header[1])
+            if len(header) > 2:
+                elapsed = float(header[2])
             if this_poke < pokes:
                 # keep going forward
                 i += num_balls + 1
@@ -246,6 +250,7 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
                 make_sphere(ball[MedialBall.R], ball[MedialBall.X: MedialBall.Z + 1], mass=0, visual_only=True,
                             rgba=(0.7, 0.1, 0.2, 0.3)))
 
+    start = timer()
     balls = balls.to(device=model_points_world_frame.device, dtype=model_points_world_frame.dtype)
     T, distances = icp.icp_medial_constraints(obj_sdf, balls,
                                               model_points_world_frame,
@@ -257,8 +262,12 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
                                               save_loss_plot=False,
                                               vis=vis, obj_factory=obj_factory)
     T = T.inverse()
+    end = timer()
+    elapsed += end - start
+    # approximate extra time for generating the mesh from the swept freespace
+    elapsed += 1
     logger.info(f"medial constraint RMSE: {distances.mean().item()}")
-    return T, distances
+    return T, distances, elapsed
 
 
 def saved_traj_dir_base(level: poke.Levels):
@@ -281,6 +290,7 @@ def read_offline_output(reg_method: icp.ICPMethod, level: poke.Levels, seed: int
 
     T = []
     distances = []
+    elapsed = None
     with open(filepath) as f:
         data = f.readlines()
         i = 0
@@ -301,13 +311,15 @@ def read_offline_output(reg_method: icp.ICPMethod, level: poke.Levels, seed: int
             # lower is better
             rmse = float(header[2])
             distances.append(rmse)
+            if len(header) > 3:
+                elapsed = float(header[3])
             i += 5
 
     # current_to_link transform (world to base frame)
     T = torch.stack(T)
     T = T.inverse()
     distances = torch.tensor(distances)
-    return T, distances
+    return T, distances, elapsed
 
 
 def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_delay=0.1,
@@ -583,7 +595,7 @@ def export_registration(stored_file: str, to_export):
             B = T.shape[0]
             assert B == d.shape[0]
             for b in range(B):
-                f.write(f"{pokes} {b} {d[b]}\n")
+                f.write(f"{pokes} {b} {d[b]} {data['elapsed']}\n")
                 _export_transform(f, T[b])
 
 
@@ -713,6 +725,7 @@ class PokeRunner:
         # for debug rendering of object meshes and keeping track of their object IDs
         self.pose_obj_map = {}
         # for exporting out to file, maps poke # -> data
+        self.elapsed = None
         self.to_export = {}
         self.cache = None
 
@@ -733,6 +746,7 @@ class PokeRunner:
         self.transforms_per_object = []
         self.rmse_per_object = []
         self.best_segment_idx = None
+        self.elapsed = None
         for k, this_pts in enumerate(self.method):
             N = len(this_pts)
             if N < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
@@ -751,24 +765,26 @@ class PokeRunner:
             if registration_method_uses_only_contact_points(self.reg_method) and N in self.num_points_to_T_cache:
                 T, distances = self.num_points_to_T_cache[N]
             else:
-                start = timer()
                 if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
-                    T, distances = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
+                    T, distances, self.elapsed = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
                 elif self.reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
-                    T, distances = do_medial_constraint_registration(this_pts, self.volumetric_cost.sdf,
-                                                                     self.best_tsf_guess, self.B, self.env.level,
-                                                                     seed, self.pokes,
-                                                                     vis=self.env.vis,
-                                                                     obj_factory=self.env.obj_factory)
+                    T, distances, self.elapsed = do_medial_constraint_registration(this_pts, self.volumetric_cost.sdf,
+                                                                                   self.best_tsf_guess, self.B,
+                                                                                   self.env.level,
+                                                                                   seed, self.pokes,
+                                                                                   vis=self.env.vis,
+                                                                                   obj_factory=self.env.obj_factory)
                 else:
+                    start = timer()
                     T, distances = do_registration(this_pts, self.model_points_register, self.best_tsf_guess, self.B,
                                                    self.volumetric_cost,
                                                    self.reg_method)
+                    end = timer()
+                    self.elapsed = end - start
                 self.num_points_to_T_cache[N] = T, distances
-                end = timer()
-                logger.info("registration elapsed %fs", end - start)
+                logger.info("registration elapsed %fs", self.elapsed)
 
             self.transforms_per_object.append(T)
             T = T.inverse()
@@ -863,6 +879,7 @@ class PokeRunner:
              'num_freespace_voxels': _n,
              "freespace_violation_percent": _r,
              "rmse": rmse.cpu().numpy(),
+             "elapsed": self.elapsed,
              })
         cache = pd.concat([cache, df])
         cache.to_pickle(self.dbname)
@@ -870,6 +887,7 @@ class PokeRunner:
         self.to_export[self.pokes] = {
             'T': self.transforms_per_object[self.best_segment_idx],
             'rmse': rmse,
+            'elapsed': self.elapsed,
         }
         return cache
 
