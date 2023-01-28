@@ -12,11 +12,11 @@ rviz_session_name='rviz'
 
 # - LCM Bridge
 tmux new-session -d -s $lcm_bridge
-tmux send-keys -t $lcm_bridge 'roslaunch med_hardware_interface med_lcm_bridge.launch finger:=bubbles'
+tmux send-keys -t $lcm_bridge 'roslaunch med_hardware_interface med_lcm_bridge.launch finger:=bubbles_flipped'
 
 # - Med Planner
 tmux new-session -d -s $med_planner
-tmux send-keys -t $med_planner 'roslaunch arm_robots med.launch finger:=bubbles'
+tmux send-keys -t $med_planner 'roslaunch arm_robots med.launch finger:=bubbles_flipped'
 
 # - Gripper
 tmux new-session -d -s $gripper_node
@@ -25,7 +25,7 @@ tmux rename-window -t $gripper_node:$window 'launch_gripper'
 tmux send-keys -t $gripper_node:$window 'roslaunch wsg_50_driver wsg_50_tcp.launch'
 window=1
 tmux new-window -t $gripper_node:$window -n 'move_gripper'
-tmux send-keys -t $gripper_node:$window 'rosservice call /wsg_50_driver/move 30 50'
+tmux send-keys -t $gripper_node:$window 'rosservice call /wsg_50_driver/move 0 50'
 tmux swap-window -s 1 -t 0
 
 # - Bubbles
