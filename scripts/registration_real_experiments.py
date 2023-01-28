@@ -62,7 +62,7 @@ class StubContactSet(ContactSet):
 def predetermined_poke_range():
     # y,z order of poking
     return {
-        poke_real.Levels.DRILL: ((0, ), (0.0, 0.05)),
+        poke_real.Levels.DRILL: ((0.05,), (0.0, 0.05, 0.12)),
         # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
@@ -115,6 +115,14 @@ class PokingControllerWrapper(ControllerBase):
     def get_name(cls):
         return "predefined_poking_ctrl"
 
+    def head_to_next_poke_yz(self):
+        target_pos = [self.ctrl.x_rest] + list(self.ctrl.target_yz[0])
+        self.env.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.env.vel)
+        self.env.robot.plan_to_pose(self.env.robot.arm_group, self.env.EE_LINK_NAME,
+                                    target_pos + self.env.REST_ORIENTATION)
+        self.env.enter_cartesian_mode()
+        self.ctrl.push_i = 0
+
     def control(self, obs, info=None):
         with self.env.motion_status_input_lock:
             obs = obs['xyz']
@@ -122,6 +130,11 @@ class PokingControllerWrapper(ControllerBase):
         u = [0 for _ in range(self.ctrl.nu)]
         if info is None:
             return {'dxyz': u}
+
+        # first target
+        if self.ctrl.i == 0 and not self.ctrl.done():
+            self.head_to_next_poke_yz()
+
         self.ctrl.x_history.append(obs)
 
         if len(self.ctrl.x_history) > 1:
@@ -144,14 +157,9 @@ class PokingControllerWrapper(ControllerBase):
                 self.env.robot.cartesian_impedance_raw_motion(target_pos, frame_id=self.env.EE_LINK_NAME,
                                                               ref_frame=self.env.WORLD_FRAME, blocking=True,
                                                               goal_tolerance=np.array([0.001, 0.001, 0.01]))
-                self.env.robot.set_control_mode(control_mode=ControlMode.JOINT_POSITION, vel=self.env.vel)
                 self.ctrl.target_yz = self.ctrl.target_yz[1:]
                 if not self.ctrl.done():
-                    target_pos = [self.ctrl.x_rest] + list(self.ctrl.target_yz[0])
-                    self.env.robot.plan_to_pose(self.env.robot.arm_group, self.env.EE_LINK_NAME,
-                                                target_pos + self.env.REST_ORIENTATION)
-                    self.env.enter_cartesian_mode()
-                    self.ctrl.push_i = 0
+                    self.head_to_next_poke_yz()
                 return {'dxyz': None}
 
             self.ctrl.i += 1
@@ -217,7 +225,7 @@ def main(args):
     # obj_name = poke_real.level_to_obj_map[level]
 
     np.set_printoptions(suppress=True, precision=2, linewidth=200)
-    env = RealPokeGetter.env(level)
+    env = RealPokeGetter.env(level, seed=args.seed)
 
     # move to the actual left side
     # env.vis.clear_visualizations(["0", "0a", "1", "1a", "c", "reaction", "tmptbest", "residualmag"])
