@@ -27,7 +27,7 @@ parser.add_argument('--registration', nargs='+',
                     default=['volumetric'],
                     help='which registration methods to run')
 parser.add_argument('--seed', metavar='N', type=int, nargs='+',
-                    default=[0, 1, 2, 3, 4],
+                    default=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
                     help='random seed(s) to run')
 parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 parser.add_argument('--read_stored', action='store_true', help='read stored output instead of rerunning when possible')
