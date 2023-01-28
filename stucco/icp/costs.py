@@ -82,17 +82,22 @@ class KnownFreeSpaceCost(torch.autograd.Function):
 
 
 class ReverseKnownFreeSpaceCost(torch.autograd.Function):
+    # alpha < 0 to tolerate some amount of penetration to compensate for resolution and precision issues
+    interior_threshold = -0.01
+
     @staticmethod
     def forward(ctx: Any, sdf: sdf.ObjectFrameSDF, model_frame_free_voxels: torch.tensor) -> torch.tensor:
-        # this full lookup is much, much slower than the version above, but are about equivalent
-        sdf_value, sdf_grad = sdf(model_frame_free_voxels)
-        # interior points should not be occupied, set some threshold for interior points
-        occupied = sdf_value < -0.01
+        definitely_not_violating = sdf.outside_surface(model_frame_free_voxels,
+                                                       surface_level=ReverseKnownFreeSpaceCost.interior_threshold)
+        violating = ~definitely_not_violating
+        # this full lookup is much, much slower than the cached version with points, but are about equivalent
+        sdf_value, sdf_grad = sdf(model_frame_free_voxels[violating])
         # interior points will have sdf_value < 0
-        loss = occupied * -sdf_value
+        loss = torch.zeros(model_frame_free_voxels.shape[:-1], dtype=model_frame_free_voxels.dtype,
+                           device=model_frame_free_voxels.device)
+        loss[violating] = -sdf_value
         loss = loss.sum(dim=-1)
-        ctx.occupied = occupied
-        ctx.save_for_backward(sdf_value, sdf_grad)
+        ctx.save_for_backward(violating, sdf_value, sdf_grad)
         return loss
 
     @staticmethod
@@ -100,16 +105,44 @@ class ReverseKnownFreeSpaceCost(torch.autograd.Function):
         # need to output the gradient of the loss w.r.t. all the inputs of forward
         dl_dsdf = None
         dl_dvoxels = None
-        if ctx.needs_input_grad[0]:
-            sdf_value, sdf_grad = ctx.saved_tensors
+        if ctx.needs_input_grad[1]:
+            violating, sdf_value, sdf_grad = ctx.saved_tensors
             # SDF grads point away from the surface; in this case we want to move the surface away from the occupied
+            grads = torch.zeros(list(violating.shape) + [3], dtype=grad_outputs.dtype, device=grad_outputs.device)
             # free space point, so the surface needs to go in the opposite direction
-            grads = ctx.occupied[:, :, None] * sdf_grad * sdf_value[None, :, None]
-            # TODO consider averaging the gradients out across all points?
+            violation = ReverseKnownFreeSpaceCost.interior_threshold - sdf_value
+            grads[violating] = violation.unsqueeze(-1) * sdf_grad
+            # TODO resolve bug here requiring -grad instead of grad which in theroy should be correct
             dl_dvoxels = grad_outputs[:, None, None] * -grads
 
         # gradients for the other inputs not implemented
         return dl_dsdf, dl_dvoxels
+
+
+class KnownSDFLookupCost(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx: Any, sdf: sdf.ObjectFrameSDF, model_frame_positions: torch.tensor,
+                expected_sdf_values: torch.tensor) -> torch.tensor:
+        # should be fast since they should be in cache
+        sdf_value, sdf_grad = sdf(model_frame_positions)
+        diff = expected_sdf_values - sdf_value
+        # interior points will have sdf_value < 0
+        ctx.save_for_backward(diff, sdf_grad)
+        return diff.abs().sum(dim=-1)
+
+    @staticmethod
+    def backward(ctx: Any, grad_outputs: Any) -> Any:
+        # need to output the gradient of the loss w.r.t. all the inputs of forward
+        dl_dsdf = None
+        dl_dx = None
+        dl_dv = None
+        if ctx.needs_input_grad[1]:
+            diff, sdf_grad = ctx.saved_tensors
+            grads = sdf_grad * diff.unsqueeze(-1)
+            dl_dx = grad_outputs[:, None, None] * grads
+
+        # gradients for the other inputs not implemented
+        return dl_dsdf, dl_dx, dl_dv
 
 
 class KnownSDFDistanceCost:
@@ -392,6 +425,39 @@ class VolumetricCost(RegistrationCost):
                         self.vis.clear_visualization_after("intgrad", j + 1)
 
 
+class VolumetricDirectSDFCost(VolumetricCost):
+    """Use SDF queries for the known SDF points instead of using cached grads"""
+
+    def __call__(self, R, T, s, knn_res: _KNN = None):
+        if self.B is None or self.B != R.shape[0]:
+            self.B = R.shape[0]
+            self.model_interior_points = self.model_interior_points_orig.repeat(self.B, 1, 1)
+            self.model_interior_normals = self.model_interior_normals_orig.repeat(self.B, 1, 1)
+
+        # voxels are in world frame
+        self._transform_model_to_world_frame(R, T, s)
+
+        loss = torch.zeros(self.B, device=R.device, dtype=R.dtype)
+
+        if self.scale_known_freespace != 0:
+            known_free_space_loss = KnownFreeSpaceCost.apply(self._pts_interior, self._grad,
+                                                             self.model_interior_weights,
+                                                             self.free_voxels)
+            loss += known_free_space_loss * self.scale_known_freespace
+        if self.scale_known_sdf != 0:
+            world_frame_known_sdf_voxels, known_sdf_values = self.sdf_voxels.get_known_pos_and_values()
+            known_sdf_model_frame = self._transform_world_frame_points_to_model_frame(R, T, s,
+                                                                                      world_frame_known_sdf_voxels)
+
+            known_sdf_loss = KnownSDFLookupCost.apply(self.sdf, known_sdf_model_frame, known_sdf_values)
+            loss += known_sdf_loss * self.scale_known_sdf
+
+        return loss * self.scale
+
+    def _transform_world_frame_points_to_model_frame(self, R, T, s, points):
+        return apply_similarity_transform(points, R, T, s)
+
+
 class ReverseVolumetricCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels
     (much slower than the voxelized version above)"""
@@ -475,6 +541,8 @@ class ReverseVolumetricCost(RegistrationCost):
 
 
 class DiscreteNondifferentiableCost(RegistrationCost):
+    """Flat high cost for any known free space point violations"""
+
     def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
                  vis=None, cmax=20.,
                  obj_factory=None):

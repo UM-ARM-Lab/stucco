@@ -719,9 +719,11 @@ class PokeRunner:
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
         empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
-        self.volumetric_cost = icp_costs.VolumetricCost(self.env.free_voxels, empty_sdf, self.env.target_sdf, scale=1,
-                                                        scale_known_freespace=20,
-                                                        vis=self.env.vis, obj_factory=self.env.obj_factory, debug=False)
+        self.volumetric_cost = icp_costs.VolumetricDirectSDFCost(self.env.free_voxels, empty_sdf, self.env.target_sdf,
+                                                                 scale=1,
+                                                                 scale_known_freespace=20,
+                                                                 vis=self.env.vis, obj_factory=self.env.obj_factory,
+                                                                 debug=False)
 
     def register_transforms_with_points(self, seed):
         """Exports best_segment_idx, transforms_per_object, and rmse_per_object"""
@@ -1513,7 +1515,7 @@ def plot_poke_plausible_diversity(args, level, obj_factory):
         return df
 
     # choose from 0.50, 0.75, 1.0
-    quantile = 0.75
+    quantile = 1.0
     for y in ['plausibility', 'coverage', 'plausible_diversity']:
         plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
                          key_columns=PokeRunner.KEY_COLUMNS,
