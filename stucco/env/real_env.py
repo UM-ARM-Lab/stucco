@@ -78,6 +78,28 @@ class DebugRvizDrawer(Visualizer):
         id = int(tokens[1]) if len(tokens) == 2 else 0
         return tokens[0], id
 
+    def draw_points(self, name, points, color=(0, 0, 0), height=None, scale=1):
+        ns, this_id = self._extract_ns_id_from_name(name)
+        marker = self.make_marker(ns, marker_type=Marker.POINTS, scale=self.BASE_SCALE * scale, id=this_id)
+        for i, point in enumerate(points):
+            z = height if height is not None else point[2]
+            p = Point()
+            p.x = point[0]
+            p.y = point[1]
+            p.z = z
+            c = ColorRGBA()
+            c.a = 1
+            if len(color) > 4:
+                cc = color[i]
+            else:
+                cc = color
+            c.r = cc[0]
+            c.g = cc[1]
+            c.b = cc[2]
+            marker.colors.append(c)
+            marker.points.append(p)
+        self.marker_pub.publish(marker)
+
     def draw_point(self, name, point, color=(0, 0, 0), length=0.01, length_ratio=1, rot=0, height=None, label=None,
                    scale=1):
         ns, this_id = self._extract_ns_id_from_name(name)
