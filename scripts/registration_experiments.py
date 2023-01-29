@@ -11,19 +11,18 @@ import matplotlib
 import numpy as np
 import seaborn as sns
 
+import stucco.icp
 import stucco.registration_util
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
 # marching cubes free surface extraction
-import open3d as o3d
 
-from stucco.icp import quality_diversity
+from stucco.icp import quality_diversity, registration_method_uses_only_contact_points, initialize_transform_estimates
 from stucco import voxel
 from stucco import sdf
 from stucco.env.pybullet_env import make_sphere
 from stucco.poking_controller import PokingController
-from torchmcubes import marching_cubes
 
 import torch
 import pybullet as p
@@ -110,13 +109,6 @@ def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_point
 def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, device="cpu"):
     return build_model(env.obj_factory, env.vis, env.obj_factory.name, seed, num_points, pause_at_end=pause_at_end,
                        device=device)
-
-
-def registration_method_uses_only_contact_points(reg_method: icp.ICPMethod):
-    if reg_method in [icp.ICPMethod.ICP, icp.ICPMethod.ICP_SGD, icp.ICPMethod.ICP_REVERSE,
-                      icp.ICPMethod.ICP_SGD_REVERSE, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE]:
-        return True
-    return False
 
 
 def do_registration(model_points_world_frame, model_points_register, best_tsf_guess, B,
@@ -363,7 +355,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
     points_free = []
     B = 30
 
-    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = stucco.icp.random_upright_transforms(B, dtype, device)
 
     for num_points in num_points_list:
         model_points, model_normals, _ = sample_mesh_points(num_points=num_points, name=obj_name, seed=seed,
@@ -726,7 +718,9 @@ class PokeRunner:
                                                                                    device=self.device))
 
             if self.best_tsf_guess is None:
-                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env, self.init_method, self.method)
+                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env.freespace_ranges,
+                                                                     self.init_method, None,
+                                                                     device=self.env.device, dtype=self.env.dtype)
             if self.ground_truth_initialization:
                 self.best_tsf_guess = self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1)
 
@@ -976,7 +970,9 @@ class ExportProblemRunner(PokeRunner):
     def hook_after_poke(self, name, seed):
         if self.pokes >= self.start_at_num_pts:
             if self.best_tsf_guess is None:
-                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env, self.init_method, self.method)
+                self.best_tsf_guess = initialize_transform_estimates(self.B, self.env.freespace_ranges,
+                                                                     self.init_method, None,
+                                                                     device=self.env.device, dtype=self.env.dtype)
                 export_init_transform(self.transform_file, self.best_tsf_guess)
             export_pc_to_register(self.pc_to_register_file, self.pokes, self.env, self.method)
             self.do_export_free_surface()
@@ -1331,26 +1327,6 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         dd.to_pickle(self.dbname)
 
         return dd
-
-
-def initialize_transform_estimates(B, env: poke.PokeEnv, init_method: icp.InitMethod, tracker: TrackingMethod):
-    dtype = env.dtype
-    device = env.device
-    # translation is 0,0,0
-    best_tsf_guess = exploration.random_upright_transforms(B, dtype, device)
-    if init_method == icp.InitMethod.ORIGIN:
-        pass
-    elif init_method == icp.InitMethod.CONTACT_CENTROID:
-        _, points = tracker.get_labelled_moved_points()
-        centroid = points.mean(dim=0).to(device=device, dtype=dtype)
-        best_tsf_guess[:, :3, 3] = centroid
-    elif init_method == icp.InitMethod.RANDOM:
-        trans = np.random.uniform(env.freespace_ranges[:, 0], env.freespace_ranges[:, 1], (B, 3))
-        trans = torch.tensor(trans, device=device, dtype=dtype)
-        best_tsf_guess[:, :3, 3] = trans
-    else:
-        raise RuntimeError(f"Unsupported initialization method: {init_method}")
-    return best_tsf_guess
 
 
 def create_tracking_method(env, method_name) -> TrackingMethod:

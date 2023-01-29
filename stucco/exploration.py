@@ -5,7 +5,6 @@ import math
 import os
 import gpytorch
 import numpy as np
-import pybullet as p
 import torch
 
 import logging
@@ -16,8 +15,8 @@ from pytorch_kinematics import transforms as tf
 from stucco import cfg
 from stucco import icp
 from stucco.env.env import Visualizer
-from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 from stucco import util
+from stucco.icp import random_upright_transforms
 from stucco.sdf import ObjectFrameSDF
 
 from stucco.sdf import ObjectFactory
@@ -387,7 +386,6 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # TODO actually go to this state again so we can see it in the visualizer
                 do_plot(f"{(x, y)}", (x, y))
 
-
     def _debug_icp_distribution(self, new_points_world_frame, icp_error_var):
         # create visual objects
         # transform to the ICP'd pose
@@ -649,19 +647,6 @@ class GPVarianceExploration(ShapeExplorationPolicy):
         # normalize to be magnitude alpha
         dx = dx / dx.norm() * self.alpha
         return dx
-
-
-def random_upright_transforms(B, dtype, device, translation=None):
-    # initialize guesses with a prior; since we're trying to retrieve an object, it's reasonable to have the prior
-    # that the object only varies in yaw (and is upright)
-    axis_angle = torch.zeros((B, 3), dtype=dtype, device=device)
-    axis_angle[:, -1] = torch.rand(B, dtype=dtype, device=device) * 2 * np.pi
-    R = tf.axis_angle_to_matrix(axis_angle)
-    init_pose = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
-    init_pose[:, :3, :3] = R
-    if translation is not None:
-        init_pose[:, :3, 3] = translation
-    return init_pose
 
 
 def fit_gpis(x, df, threedimensional=True, training_iter=50, use_df=True, scale=5, likelihood=None, model=None):
