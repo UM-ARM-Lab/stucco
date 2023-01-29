@@ -4,7 +4,9 @@ from datetime import datetime
 import argparse
 
 import pybullet as p
+
 from stucco.env import poke_real
+from stucco.env import poke_real_nonros
 from stucco import cfg
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
@@ -109,7 +111,7 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
     return contact_pts
 
 
-def saved_traj_dir_base(level: poke_real.Levels):
+def saved_traj_dir_base(level: poke_real_nonros.Levels):
     return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{level.name}")
 
 
@@ -118,7 +120,7 @@ def saved_traj_dir_for_method(reg_method):
     return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{name}")
 
 
-def saved_traj_file(reg_method, level: poke_real.Levels, seed):
+def saved_traj_file(reg_method, level: poke_real_nonros.Levels, seed):
     return f"{saved_traj_dir_for_method(reg_method)}/{level.name}_{seed}.txt"
 
 
@@ -158,7 +160,7 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
             point_cloud_file = f"{saved_traj_dir_base(task)}_{cur_seed}.txt"
             export_pc_to_register(point_cloud_file, pokes_to_data)
 
-            obj_factory = poke_real.obj_factory_map(poke_real.level_to_obj_map[task])
+            obj_factory = poke_real_nonros.obj_factory_map(poke_real_nonros.level_to_obj_map[task])
             _, ranges = obj_factory.make_collision_obj(0)
             obj_frame_sdf = sdf.MeshSDF(obj_factory)
             sdf_resolution = 0.005
@@ -197,7 +199,7 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
         cur_poke = new_poke
 
     for i, sample in enumerate(dataset):
-        if poke_real.Levels[sample['task']] != task:
+        if poke_real_nonros.Levels[sample['task']] != task:
             continue
         seed = sample['seed']
         poke = sample['poke']
@@ -239,7 +241,7 @@ if __name__ == "__main__":
                         default='extract-known-points',
                         help='which experiment to run')
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
-    task_map = {level.name.lower(): level for level in poke_real.Levels}
+    task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
     parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
     parser.add_argument('--no_gui', action='store_true', help='force no GUI')
 

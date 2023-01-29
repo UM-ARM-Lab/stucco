@@ -2,7 +2,6 @@
 import argparse
 import numpy as np
 import logging
-import torch
 
 from bubble_utils.bubble_data_collection.controller_base import ControllerBase
 from stucco.env.poke_real import RealPokeEnv
@@ -16,6 +15,7 @@ from datetime import datetime
 
 from stucco import cfg
 from stucco.env import poke_real
+from stucco.env import poke_real_nonros
 from stucco import tracking
 from stucco.tracking import ContactSet
 from victor_hardware_interface_msgs.msg import ControlMode
@@ -62,7 +62,7 @@ class StubContactSet(ContactSet):
 def predetermined_poke_range():
     # y,z order of poking
     return {
-        poke_real.Levels.DRILL: ((0.05,), (0.0, 0.05, 0.12)),
+        poke_real_nonros.Levels.DRILL: ((0.05,), (0.0, 0.05, 0.12)),
         # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
@@ -74,8 +74,8 @@ class RealPokeGetter(EnvGetter):
         return "poke_real"
 
     @classmethod
-    def env(cls, level=poke_real.Levels.MUSTARD, **kwargs):
-        level = poke_real.Levels(level)
+    def env(cls, level=poke_real_nonros.Levels.MUSTARD, **kwargs):
+        level = poke_real_nonros.Levels(level)
         env = poke_real.RealPokeEnv(environment_level=level)
         return env
 
@@ -189,35 +189,9 @@ def run_poke(env: poke_real.RealPokeEnv, seed=0, control_wait=0.):
                                     controller=ctrl,
                                     reuse_prev_observation=True)
 
-    dc.collect_data(len(y_order) * len(z_order))
-    # trajectory is decomposed into pokes
-    # pokes = 0
-    # obs = env._obs()
-    # info = None
-    # dtype = torch.float32
-
-    # with VideoLogger(window_names=("medusa_flipped_inflated.rviz* - RViz", "medusa_flipped_inflated.rviz - RViz"),
+    # with VideoLogger(window_names=("cartpole.rviz* - RViz", "cartpole.rviz - RViz"),
     #                  log_external_video=True):
-    # TODO logging telemetry
-    # while not rospy.is_shutdown() and not ctrl.done():
-    #     with env.motion_status_input_lock:
-    #         action = ctrl.command(obs, info)
-    #
-    #     if action is None:
-    #         pokes += 1
-    #         hook_after_poke()
-    #
-    #     if action is not None:
-    #         if torch.is_tensor(action):
-    #             action = action.cpu()
-    #
-    #         action = np.array(action).flatten()
-    #         obs, _, done, info = env.step({'dxyz': action})
-    #         print(f"pushed {action} state {obs}")
-    #
-    #     rospy.sleep(control_wait)
-    #
-    # rospy.sleep(1)
+    dc.collect_data(len(y_order) * len(z_order))
 
 
 def main(args):
@@ -241,6 +215,6 @@ if __name__ == "__main__":
                         help='random seed to run')
     # run parameters
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
-    task_map = {level.name.lower(): level for level in poke_real.Levels}
+    task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
     parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
     main(parser.parse_args())

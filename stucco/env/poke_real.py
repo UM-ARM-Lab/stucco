@@ -16,16 +16,14 @@ from pytorch_kinematics import transforms as tf
 from geometry_msgs.msg import Pose
 
 import logging
-import enum
 import torch
-import pybullet as p
 
 from arm_pytorch_utilities import tensor_utils
-from stucco import cfg, sdf
+from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
-from stucco.detection import ContactDetector, ContactSensor
+from stucco.detection import ContactDetector
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
-from stucco.env.poke import YCBObjectFactory
+from stucco.env.poke_real_nonros import Levels
 
 from victor_hardware_interface_msgs.msg import MotionStatus
 from bubble_utils.bubble_med.bubble_med import BubbleMed
@@ -36,32 +34,9 @@ from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
 
 import gym.spaces
 
-import matplotlib.colors as colors
-
 logger = logging.getLogger(__name__)
 
 DIR = "poke_real"
-
-kukaEndEffectorIndex = 6
-pandaNumDofs = 7
-
-
-class Levels(enum.IntEnum):
-    # no clutter environments
-    MUSTARD = 0
-    DRILL = 4
-    # clamp
-    CLAMP = 18
-
-
-task_map = {str(c).split('.')[1]: c for c in Levels}
-level_to_obj_map = {
-    Levels.MUSTARD: "mustard",
-    Levels.DRILL: "drill",
-    Levels.CLAMP: "clamp",
-}
-
-DEFAULT_MOVABLE_RGBA = [0.8, 0.7, 0.3, 0.8]
 
 
 def xy_pose_distance(a: Pose, b: Pose):
@@ -86,28 +61,10 @@ class RealPokeLoader(TrajectoryLoader):
         return xu, y, cc
 
 
-class DebugVisualization(enum.IntEnum):
-    STATE = 2
-    ACTION = 3
-    REACTION_MINI_STEP = 4
-    REACTION_IN_STATE = 5
-    GOAL = 6
-    INIT = 7
-    FREE_VOXELS = 8
-    STATE_TRANSITION = 9
-
-
-class ReactionForceStrategy(enum.IntEnum):
-    MAX_OVER_CONTROL_STEP = 0
-    MAX_OVER_MINI_STEPS = 1
-    AVG_OVER_MINI_STEPS = 2
-    MEDIAN_OVER_MINI_STEPS = 3
-
-
 class PokeBubbleCameraContactSensor(BubbleCameraContactSensor):
     def _get_link_frame_deform_point(self, cache, camera):
         # TODO hill climbing on imprint to find local maxima imprints to extract those as contact points
-
+        # NOT actually needed since I process the points from the bubbles offline afterwards
         # return the undeformed point to prevent penetration with the model
         depth_im = cache['ref_img']
         mask = cache['mask']
@@ -447,22 +404,3 @@ class PokeBubbleDataset(BubbleDatasetBase):
             # can use despite it being points
             sample[camera][f"pts_world_filtered"] = process_bubble_img(pts_world)
         return sample
-
-
-def obj_factory_map(obj_name):
-    if obj_name == "mustard":
-        return YCBObjectFactory("mustard", "YcbMustardBottle", scale=1,
-                                plausible_suboptimality=0.0003,
-                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
-                                vis_frame_pos=[-0.005, -0.005, 0.015])
-    if obj_name == "drill":
-        return YCBObjectFactory("drill", "YcbPowerDrill", scale=1,
-                                plausible_suboptimality=0.001,
-                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
-                                vis_frame_pos=[-0.002, -0.011, -.06])
-    # TODO make sure the clamp is properly scaled with respect to the URDF
-    if obj_name == "clamp":
-        return YCBObjectFactory("clamp", "YcbMediumClamp", scale=2,
-                                plausible_suboptimality=0.0007,
-                                vis_frame_rot=p.getQuaternionFromEuler([0.1, 0, 0]),
-                                vis_frame_pos=[-0.02, -0.005, -0.0407])
