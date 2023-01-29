@@ -1430,15 +1430,11 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0):
 
 def plot_poke_chamfer_err(args, level, obj_factory):
     def filter(df):
-        # df = df[df["level"].str.contains(level.name) & (
-        #         (df["method"] == "VOLUMETRIC") | (df["method"] == "VOLUMETRIC_SVGD") | (
-        #         df["method"] == "VOLUMETRIC_CMAES"))]
-        # df = df[(df["level"] == level.name) & (df["method"].str.contains("VOLUMETRIC"))]
-
         # show each level individually or marginalize over all of them
-        # df = df[(df["level"] == level.name)]
-        df = df[(df["level"].str.contains(level.name))]
-
+        if args.marginalize:
+            df = df[(df["level"].str.contains(level.name))]
+        else:
+            df = df[(df["level"] == level.name)]
         return df
 
     def filter_single(df):
