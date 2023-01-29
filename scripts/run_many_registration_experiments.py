@@ -15,13 +15,12 @@ logging.basicConfig(level=logging.INFO, force=True,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh])
 
-
 parser = argparse.ArgumentParser(description='Run many registration poking experiments')
 parser.add_argument('--experiment',
                     choices=['build', 'baseline', 'poke', 'generate-plausible-set', 'evaluate-plausible-diversity',
                              'plot-plausible-set', 'plot-poke-ce', 'plot-poke-pd',
                              'debug'],
-                    default='poke',
+                    default=['poke'], nargs='+',
                     help='which experiment to run')
 parser.add_argument('--registration', nargs='+',
                     default=['volumetric'],
@@ -35,7 +34,6 @@ task_map = {level.name.lower(): level for level in poke.Levels}
 parser.add_argument('--task', type=str, nargs='+',
                     default=['all'],
                     choices=['all'] + list(task_map.keys()), help='what tasks to run')
-parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
 parser.add_argument('--dry', action='store_true', help='print the commands to run without execution')
 parser.add_argument('rest', nargs='*', help='arguments to forward; should be separated from other arguments with --')
 
@@ -45,24 +43,24 @@ runs = {}
 if __name__ == "__main__":
     if 'all' in args.task:
         args.task = task_map.keys()
-    for registration in args.registration:
-        for task in args.task:
-            to_run = ["python", f"{cfg.ROOT_DIR}/scripts/registration_experiments.py", args.experiment,
-                      "--registration", registration, "--task", task, "--seed"] + [str(s) for s in
-                                                                                   args.seed] + args.rest
-            if args.name is not None:
-                to_run.append("--name")
-                to_run.append(args.name)
-            if args.no_gui:
-                to_run.append("--no_gui")
-            if args.read_stored:
-                to_run.append("--read_stored")
+    for experiment in args.experiment:
+        for registration in args.registration:
+            for task in args.task:
+                to_run = ["python", f"{cfg.ROOT_DIR}/scripts/registration_experiments.py", experiment,
+                          "--registration", registration, "--task", task, "--seed"] + [str(s) for s in
+                                                                                       args.seed] + args.rest
+                if args.no_gui:
+                    to_run.append("--no_gui")
+                if args.read_stored:
+                    to_run.append("--read_stored")
 
-            cmd = " ".join(to_run)
-            logger.info(cmd)
-            if not args.dry:
-                completed = subprocess.run(to_run)
-                runs[cmd] = completed.returncode
+                cmd = " ".join(to_run)
+                logger.info(cmd)
+                if not args.dry:
+                    completed = subprocess.run(to_run, stderr=subprocess.PIPE)
+                    runs[cmd] = completed.returncode
+                    if completed.returncode != 0:
+                        logger.info(f"FAILED with return code {completed.returncode} and error: {completed.stderr}")
 # log runs
 logger.info("\n\n\n")
 for cmd, status in runs.items():
