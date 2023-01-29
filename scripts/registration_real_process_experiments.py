@@ -2,14 +2,18 @@ import os
 import typing
 from datetime import datetime
 import argparse
+
+import pybullet as p
 from stucco.env import poke_real
 from stucco import cfg
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
 import torch
 import logging
-from stucco import voxel
 import scipy
+from stucco import voxel
+from stucco import sdf
+from stucco import serialization
 
 try:
     import rospy
@@ -105,7 +109,32 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
     return contact_pts
 
 
-def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Optional[DebugRvizDrawer] = None):
+def saved_traj_dir_base(level: poke_real.Levels):
+    return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{level.name}")
+
+
+def saved_traj_dir_for_method(reg_method):
+    name = reg_method.name.lower().replace('_', '-')
+    return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{name}")
+
+
+def saved_traj_file(reg_method, level: poke_real.Levels, seed):
+    return f"{saved_traj_dir_for_method(reg_method)}/{level.name}_{seed}.txt"
+
+
+def export_pc_to_register(point_cloud_file: str, pokes_to_data):
+    os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
+    with open(point_cloud_file, 'w') as f:
+        for poke, data in pokes_to_data.items():
+            # write out the poke index and the size of the point cloud
+            total_pts = len(data['free']) + len(data['contact'])
+            f.write(f"{poke} {total_pts}\n")
+            serialization.export_pcs(f, data['free'], data['contact'])
+
+
+def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Optional[DebugRvizDrawer] = None,
+                         clean_cache=False):
+    p.connect(p.DIRECT)
     device = 'cpu'
     data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)
     dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False)
@@ -113,21 +142,72 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
     default_freespace_range = np.array([[0.7, 0.8], [-0.1, 0.1], [0.39, 0.45]])
 
     # values for each trajectory
-    free_voxels = None
+    pokes_to_data = {}
+    free_voxels: typing.Optional[voxel.ExpandingVoxelGrid] = None
     cur_seed = None
+    cur_poke = None
     contact_pts = []
+
+    def end_current_trajectory(new_seed):
+        nonlocal cur_seed, free_voxels, contact_pts, pokes_to_data
+        logger.info(f"{task.name} finished seed {cur_seed} processing {new_seed}")
+        # ending an "empty" first trajectory
+        if cur_seed is None:
+            pass
+        else:
+            point_cloud_file = f"{saved_traj_dir_base(task)}_{cur_seed}.txt"
+            export_pc_to_register(point_cloud_file, pokes_to_data)
+
+            obj_factory = poke_real.obj_factory_map(poke_real.level_to_obj_map[task])
+            _, ranges = obj_factory.make_collision_obj(0)
+            obj_frame_sdf = sdf.MeshSDF(obj_factory)
+            sdf_resolution = 0.005
+            target_sdf = sdf.CachedSDF(obj_factory.name, sdf_resolution, ranges, obj_frame_sdf,
+                                       device=device)
+
+            pc_register_against_file = f"{saved_traj_dir_base(task)}.txt"
+            if not os.path.exists(pc_register_against_file) or clean_cache:
+                surface_thresh = 0.002
+                serialization.export_pc_register_against(pc_register_against_file, target_sdf,
+                                                         surface_thresh=surface_thresh)
+                if vis is not None:
+                    pc_surface = target_sdf.get_filtered_points(
+                        lambda voxel_sdf: (voxel_sdf < surface_thresh) & (voxel_sdf > -surface_thresh))
+                    vis.draw_points(f"surface.0", pc_surface, color=(1, 1, 1), scale=0.1)
+
+        cur_seed = seed
+        free_voxels = voxel.ExpandingVoxelGrid(freespace_voxel_resolution, default_freespace_range, device=device)
+        contact_pts = []
+        pokes_to_data = {}
+
+    def end_current_poke(new_poke):
+        nonlocal cur_poke
+        free_surface_file = f"{saved_traj_dir_base(task)}_{cur_seed}_free_surface.txt"
+        # empty poke
+        if cur_poke is None:
+            pass
+        else:
+            # first poke, remove file
+            if cur_poke == 1:
+                try:
+                    os.remove(free_surface_file)
+                except OSError:
+                    pass
+            serialization.export_free_surface(free_surface_file, free_voxels, cur_poke)
+        cur_poke = new_poke
 
     for i, sample in enumerate(dataset):
         if poke_real.Levels[sample['task']] != task:
             continue
         seed = sample['seed']
         poke = sample['poke']
+
+        # start of new poke
+        if cur_poke is None or cur_poke != poke:
+            end_current_poke(poke)
         # start of new trajectory
         if cur_seed is None or cur_seed != seed:
-            logger.info(f"Process new {task.name} trajectory seed {seed}")
-            cur_seed = seed
-            free_voxels = voxel.ExpandingVoxelGrid(freespace_voxel_resolution, default_freespace_range, device=device)
-            contact_pts = []
+            end_current_trajectory(seed)
 
         bubbles = dataset.get_bubble_info(i)
         # complete the gripper from the points since there are gaps in between
@@ -137,15 +217,19 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
         contact = contact_points_from_gripper(bubbles, sample)
         contact_pts += contact
 
-        # TODO write to file
         c_pts = np.concatenate(contact_pts)
         f_pts, _ = free_voxels.get_known_pos_and_values()
         logger.info(f"Poke {poke} with {len(c_pts)} contact points {len(f_pts)} free points")
+        pokes_to_data[poke] = {'free': f_pts, 'contact': c_pts}
 
         if vis is not None:
             vis.draw_points(f"known.0", pts_free, color=(0, 1, 1), scale=0.1)
             vis.draw_points(f"free.0", f_pts, color=(1, 0, 1), scale=0.2)
             vis.draw_points(f"contact.0", c_pts, color=(1, 0, 0), scale=0.5)
+
+    # last poke of the last sample
+    end_current_poke(None)
+    end_current_trajectory(None)
 
 
 if __name__ == "__main__":

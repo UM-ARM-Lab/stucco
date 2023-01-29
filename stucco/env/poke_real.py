@@ -18,12 +18,14 @@ from geometry_msgs.msg import Pose
 import logging
 import enum
 import torch
+import pybullet as p
 
 from arm_pytorch_utilities import tensor_utils
-from stucco import cfg
+from stucco import cfg, sdf
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector, ContactSensor
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
+from stucco.env.poke import YCBObjectFactory
 
 from victor_hardware_interface_msgs.msg import MotionStatus
 from bubble_utils.bubble_med.bubble_med import BubbleMed
@@ -49,7 +51,6 @@ class Levels(enum.IntEnum):
     MUSTARD = 0
     DRILL = 4
     # clamp
-    # TODO make sure the clamp is properly scaled with respect to the URDF
     CLAMP = 18
 
 
@@ -185,14 +186,12 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     OPEN_ANGLE = 0.055
     CLOSE_ANGLE = 0.0
 
-    # TODO find rest position for Thanos
     # REST_JOINTS = [0.142, 0.453, -0.133, -1.985, 0.027, -0.875, 0.041]
     REST_JOINTS = [0.1141799424293767, 0.45077912971064055, -0.1378142121392566, -1.9944268727534853,
                    -0.013151296594681122, -0.8713510018630727, 0.06839882517621013]
     REST_POS = [0.530, 0, 0.433]
     REST_ORIENTATION = [0, np.pi / 2, 0]
 
-    # TODO find values for Thanos
     EE_LINK_NAME = "med_kuka_link_7"
     WORLD_FRAME = "med_base"
     ACTIVE_MOVING_ARM = 0  # only 1 arm
@@ -448,3 +447,22 @@ class PokeBubbleDataset(BubbleDatasetBase):
             # can use despite it being points
             sample[camera][f"pts_world_filtered"] = process_bubble_img(pts_world)
         return sample
+
+
+def obj_factory_map(obj_name):
+    if obj_name == "mustard":
+        return YCBObjectFactory("mustard", "YcbMustardBottle", scale=1,
+                                plausible_suboptimality=0.0003,
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, 1.57 - 0.1]),
+                                vis_frame_pos=[-0.005, -0.005, 0.015])
+    if obj_name == "drill":
+        return YCBObjectFactory("drill", "YcbPowerDrill", scale=1,
+                                plausible_suboptimality=0.001,
+                                vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
+                                vis_frame_pos=[-0.002, -0.011, -.06])
+    # TODO make sure the clamp is properly scaled with respect to the URDF
+    if obj_name == "clamp":
+        return YCBObjectFactory("clamp", "YcbMediumClamp", scale=2,
+                                plausible_suboptimality=0.0007,
+                                vis_frame_rot=p.getQuaternionFromEuler([0.1, 0, 0]),
+                                vis_frame_pos=[-0.02, -0.005, -0.0407])

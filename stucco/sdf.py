@@ -8,6 +8,7 @@ import open3d as o3d
 import torch
 from arm_pytorch_utilities import tensor_utils
 from multidim_indexing import torch_view
+from stucco.env.env import Visualizer
 
 from stucco.voxel import VoxelGrid, get_divisible_range_by_resolution, get_coordinates_and_points_in_grid
 from stucco import util, cfg
@@ -53,7 +54,7 @@ class ObjectFactory(abc.ABC):
         """Return the path to the high poly mesh resource file"""
         return self.get_mesh_resource_filename()
 
-    def draw_mesh(self, dd, name, pose, rgba, object_id=None):
+    def draw_mesh(self, dd: Visualizer, name, pose, rgba, object_id=None):
         frame_pos = np.array(self.vis_frame_pos) * self.scale
         return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
                             object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)

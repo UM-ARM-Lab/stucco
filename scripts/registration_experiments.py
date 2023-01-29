@@ -46,6 +46,7 @@ from stucco.icp import costs as icp_costs
 from stucco.icp import volumetric
 from stucco.icp.medial_constraints import MedialBall
 from stucco import util
+from stucco import serialization
 from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 
 from arm_pytorch_utilities.controller import Controller
@@ -441,7 +442,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
     with open(export_traj_filename, "w") as f:
         for i in range(len(points)):
             f.write(f"{i} {len(points_free[i]) + len(points[i])}\n")
-            _export_pcs(f, points_free[i], points[i])
+            serialization.export_pcs(f, points_free[i], points[i])
 
 
 def marginalize_over_suffix(name):
@@ -540,40 +541,6 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         plt.show()
 
 
-def _export_pc(f, pc, augmented_data: typing.Any = ""):
-    pc_serialized = [f"{pt[0]:.4f} {pt[1]:.4f} {pt[2]:.4f} {augmented_data}" for pt in pc]
-    f.write("\n".join(pc_serialized))
-    f.write("\n")
-
-
-def _export_pcs(f, pc_free, pc_occ):
-    if len(pc_free):
-        _export_pc(f, pc_free, 0)
-    if len(pc_occ):
-        _export_pc(f, pc_occ, 1)
-
-
-def _export_transform(f, T):
-    T_serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T]
-    f.write("\n".join(T_serialized))
-    f.write("\n")
-
-
-def export_pc_register_against(point_cloud_file: str, env: poke.PokeEnv):
-    os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
-    with open(point_cloud_file, 'w') as f:
-        surface_thresh = 0.01
-        pc_surface = env.target_sdf.get_filtered_points(
-            lambda voxel_sdf: (voxel_sdf < surface_thresh) & (voxel_sdf > -surface_thresh))
-        if len(pc_surface) == 0:
-            raise RuntimeError(f"Surface threshold of {surface_thresh} leads to no surface points")
-        pc_free = env.target_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf >= surface_thresh)
-
-        total_pts = len(pc_free) + len(pc_surface)
-        f.write(f"{total_pts}\n")
-        _export_pcs(f, pc_free, pc_surface)
-
-
 def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, method: TrackingMethod):
     # append to the end and create it if it doesn't exist
     os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
@@ -583,7 +550,7 @@ def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, 
         _, pc_occ = method.get_labelled_moved_points()
         total_pts = len(pc_free) + len(pc_occ)
         f.write(f"{pokes} {total_pts}\n")
-        _export_pcs(f, pc_free, pc_occ)
+        serialization.export_pcs(f, pc_free, pc_occ)
 
 
 def export_registration(stored_file: str, to_export):
@@ -598,7 +565,7 @@ def export_registration(stored_file: str, to_export):
             assert B == d.shape[0]
             for b in range(B):
                 f.write(f"{pokes} {b} {d[b]} {data['elapsed']}\n")
-                _export_transform(f, T[b])
+                serialization.export_transform(f, T[b])
 
 
 def export_init_transform(transform_file: str, T: torch.tensor):
@@ -995,7 +962,7 @@ class ExportProblemRunner(PokeRunner):
         self.free_surface_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_free_surface.txt"
         transform_gt_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_gt_trans.txt"
         # exporting data for offline baselines, remove the stale file
-        export_pc_register_against(pc_register_against_file, self.env)
+        serialization.export_pc_register_against(pc_register_against_file, self.env.target_sdf)
         export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
         try:
             os.remove(self.pc_to_register_file)
@@ -1017,45 +984,8 @@ class ExportProblemRunner(PokeRunner):
     def do_export_free_surface(self, debug=False):
         if not self.export_free_surface:
             return
-        verts, faces = marching_cubes(self.env.free_voxels.get_voxel_values(), 1)
-
-        verts = verts.cpu().numpy()
-        faces = faces.cpu().numpy()
-
-        # Use Open3D for visualization
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(verts)
-        mesh.triangles = o3d.utility.Vector3iVector(faces)
-        mesh.compute_triangle_normals()
-        mesh.compute_vertex_normals()
-        sa = mesh.get_surface_area()
-        points_to_sample_per_area = 0.5
-        points_to_sample = round(points_to_sample_per_area * sa)
-        pcd = mesh.sample_points_uniformly(number_of_points=points_to_sample)
-        # convert back to our coordinates
-        points = np.asarray(pcd.points)
-        # x and z seems to be swapped for some reason
-        points = np.stack((points[:, 2], points[:, 1], points[:, 0])).T
-        points = self.env.free_voxels.voxels.ensure_value_key(
-            torch.tensor(points, dtype=self.dtype, device=self.device), force=True)
-        # by default will be pointing towards the inside of the object
-        normals = np.asarray(pcd.normals)
-        normals = np.stack((normals[:, 2], normals[:, 1], normals[:, 0])).T
-
-        if debug:
-            # o3d.visualization.draw_geometries([mesh, pcd], window_name='Marching cubes (CUDA)')
-            normal_scale = 0.02
-            for i, pt in enumerate(points):
-                self.env.vis.draw_point(f"free_surface.{i}", pt, color=(0, 1, 0), scale=0.5, length=0.005)
-                self.env.vis.draw_2d_line(f"free_surface_normal.{i}", pt, normals[i], color=(1, 0, 0),
-                                          scale=normal_scale)
-
-        os.makedirs(os.path.dirname(self.free_surface_file), exist_ok=True)
-        with open(self.free_surface_file, 'a') as f:
-            # write out the poke index and the size of the point cloud
-            f.write(f"{self.pokes} {points_to_sample}\n")
-            _export_pc(f, points)
-            _export_pc(f, normals)
+        serialization.export_free_surface(self.free_surface_file, self.env.free_voxels, self.pokes,
+                                          self.env.vis if debug else None)
 
 
 class PlausibleSetRunner(PokeRunner):
