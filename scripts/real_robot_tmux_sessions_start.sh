@@ -67,7 +67,7 @@ tmux send-keys -t $pycharm_session_name 'pycharm.sh'
 
 # - Rviz
 tmux new-session -d -s $rviz_session_name
-tmux send-keys -t $rviz_session_name 'rosrun rviz rviz -d $(rospack find bubble_control)/rviz/cartpole.rviz'
+tmux send-keys -t $rviz_session_name 'rosrun rviz rviz -d ~/Desktop/cartpole.rviz'
 
 # - Move robot
 session_name='move_robot_mik'
