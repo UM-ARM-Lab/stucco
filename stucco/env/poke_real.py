@@ -5,6 +5,10 @@ import ros_numpy
 from threading import Lock
 
 import numpy as np
+# for converting strings to dictionary
+from numpy import array
+from torch import tensor
+from mmint_camera_utils.ros_utils.utils import pose_to_matrix
 
 from bubble_utils.bubble_envs import BubbleBaseEnv
 from pytorch_kinematics import transforms as tf
@@ -19,12 +23,15 @@ from arm_pytorch_utilities import tensor_utils
 from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector, ContactSensor
-from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv, pose_msg_to_pos_quaternion
+from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
 
-from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
+from victor_hardware_interface_msgs.msg import MotionStatus
 from bubble_utils.bubble_med.bubble_med import BubbleMed
 from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
-from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
+from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points, project_depth_image
+from bubble_utils.bubble_datasets.base_datasets.bubble_dataset_base import BubbleDatasetBase
+from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
+
 import gym.spaces
 
 import matplotlib.colors as colors
@@ -209,7 +216,9 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def _get_observation(self):
         obs = {}
         obs.update(self._get_bubble_observation())
+        obs['tfs'] = self._get_tfs()
         obs['xyz'] = self._observe_ee(return_z=True)
+        obs['seed'] = self.seed
         return obs
 
     @staticmethod
@@ -265,10 +274,11 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         return np.diag([1 for _ in range(cls.nu)])
 
     def __init__(self, *args, environment_level=0, vel=0.2, downsample_info=50, use_cameras=True, **kwargs):
+        self.seed = np.random.randint(0, 100000)
         level = Levels(environment_level)
         save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
         self.vel = vel
-        BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path,
+        BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path, record_bubble_pcs=True,
                                bubble_left=use_cameras, bubble_right=use_cameras, wrap_data=True)
         RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
         # force an orientation; if None, uses the rest orientation
@@ -308,7 +318,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         self.return_to_rest(self.robot.arm_group)
 
         self._calibrate_bubbles()
-        # self.gripper.move(0)
+        self.robot.grasp(0)
 
         self.last_ee_pos = self._observe_ee(return_z=True)
         self.REST_POS[2] = self.last_ee_pos[-1]
@@ -354,7 +364,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
 
             self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
                                                       target_z=self.last_ee_pos[2] + dz,
-                                                      # target_z=0.1,
+                                                      stop_on_force_threshold=15,
                                                       blocking=True, step_size=0.025, target_orientation=orientation)
         full_info = self.aggregate_info()
         info = {}
@@ -377,3 +387,63 @@ class RealPokeDataSource(EnvDataSource):
     def _loader_map(env_type):
         loader_map = {RealPokeEnv: RealPokeLoader, }
         return loader_map.get(env_type, None)
+
+
+class PokeBubbleDataset(BubbleDatasetBase):
+    def get_name(self):
+        return 'poke_bubble_dataset'
+
+    def _get_common_info(self, sample_code):
+        dl_line = self.dl.iloc[sample_code]  # read the line from the datalegend with that
+        # e.g. DRILL, DRILL_SLANTED
+        task = dl_line['Scene']
+        init_fc = int(dl_line['InitialStateFC'])
+        final_fc = int(dl_line['FinalStateFC'])
+        ref_fc = int(dl_line['ReferenceStateFC'])
+        return task, init_fc, final_fc, ref_fc
+
+    def _get_sample(self, sample_code):
+        """
+        Retruns the sample corresponding to the sample code sample_code
+        :param sample_code:
+        :return:
+        """
+        dl_line = self.dl.iloc[sample_code]  # read the line from the datalegend with that
+        task, init_fc, final_fc, ref_fc = self._get_common_info(sample_code)
+        info = eval(dl_line['Info'])
+        seed = int(dl_line['seed_init'])
+
+        # get z axis of wrist in world frame since we'll need to extend the point clouds along it to generate free space
+        pose = self._get_tfs(final_fc, task, frame_id=f'med_kuka_link_ee', ref_id='med_base')[0]
+        T = pose_to_matrix(pose)
+        z_axis = T[:3, :3] @ np.array([0, 0, 1])
+        sample = {
+            'sample_code': sample_code,
+            'task': task,
+            'info': info,
+            'seed': seed,
+            'wrist_z': z_axis,
+        }
+        return sample
+
+    def get_bubble_info(self, sample_code):
+        """More expensive bubble information to retrieve when it has relevant common info"""
+        task, init_fc, final_fc, ref_fc = self._get_common_info(sample_code)
+        sample = {}
+        for camera in ['left', 'right']:
+            data = self._get_bubble_sample_data(init_fc, final_fc, ref_fc, task, camera_name=camera)
+            sample[camera] = data
+
+            pose = self._get_tfs(final_fc, task, frame_id=f'pico_flexx_{camera}_optical_frame', ref_id='med_base')[0]
+            T = pose_to_matrix(pose)
+            # project depth images to world frame
+            pts = project_depth_image(data['depth_final'].squeeze(-1), data['camera_info_depth']['K'], usvs=None)
+            pts_homogenous = np.concatenate((pts, np.ones(pts.shape[:-1] + (1,))), axis=-1)
+            pts_world = pts_homogenous.reshape(-1, 4)
+            pts_world = T @ pts_world.transpose()
+            pts_world = pts_world.transpose().reshape(*pts.shape[:-1], 4)
+            pts_world = pts_world[..., :3]  # strip the 1 at the end
+            sample[camera][f"pts_world"] = pts_world
+            # can use despite it being points
+            sample[camera][f"pts_world_filtered"] = process_bubble_img(pts_world)
+        return sample

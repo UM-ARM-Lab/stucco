@@ -170,7 +170,7 @@ class PokingControllerWrapper(ControllerBase):
         return {'dxyz': u}
 
 
-def run_poke(env: poke_real.RealPokeEnv, seed=0, control_wait=0.):
+def run_poke(env: poke_real.RealPokeEnv, control_wait=0.):
     # def hook_after_poke():
     #     logger.info(f"Finished poke {pokes} for seed {seed} of level {env.level}")
 
@@ -225,20 +225,17 @@ def main(args):
     # obj_name = poke_real.level_to_obj_map[level]
 
     np.set_printoptions(suppress=True, precision=2, linewidth=200)
-    env = RealPokeGetter.env(level, seed=args.seed)
+    env = RealPokeGetter.env(level)
 
     # move to the actual left side
     # env.vis.clear_visualizations(["0", "0a", "1", "1a", "c", "reaction", "tmptbest", "residualmag"])
 
-    run_poke(env, args.seed)
+    run_poke(env)
     env.vis.clear_visualizations()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run pokes with a real robot')
-    parser.add_argument('--seed', type=int,
-                        default=0,
-                        help='random seed to run')
     # run parameters
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
     task_map = {level.name.lower(): level for level in poke_real.Levels}
