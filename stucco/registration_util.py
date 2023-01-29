@@ -4,6 +4,8 @@ from typing import Optional
 import torch
 from matplotlib import pyplot as plt, cm as cm
 from ribs.visualize import grid_archive_heatmap
+from pytorch3d.ops import utils as oputil
+from pytorch3d.ops.points_alignment import SimilarityTransform
 
 from stucco import cfg
 
