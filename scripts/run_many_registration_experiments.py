@@ -57,7 +57,7 @@ if __name__ == "__main__":
                 cmd = " ".join(to_run)
                 logger.info(cmd)
                 if not args.dry:
-                    completed = subprocess.run(to_run, stderr=subprocess.PIPE)
+                    completed = subprocess.run(to_run)
                     runs[cmd] = completed.returncode
                     if completed.returncode != 0:
                         logger.info(f"FAILED with return code {completed.returncode} and error: {completed.stderr}")
