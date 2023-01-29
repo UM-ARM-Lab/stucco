@@ -273,8 +273,8 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def control_cost(cls):
         return np.diag([1 for _ in range(cls.nu)])
 
-    def __init__(self, *args, environment_level=0, vel=0.2, downsample_info=50, use_cameras=True, **kwargs):
-        self.seed = np.random.randint(0, 100000)
+    def __init__(self, *args, seed=0, environment_level=0, vel=0.2, downsample_info=50, use_cameras=True, **kwargs):
+        self.seed = seed
         level = Levels(environment_level)
         save_path = os.path.join(cfg.DATA_DIR, DIR, level.name)
         self.vel = vel
@@ -422,6 +422,7 @@ class PokeBubbleDataset(BubbleDatasetBase):
             'task': task,
             'info': info,
             'seed': seed,
+            'poke': dl_line['TrajectoryIndex'],
             'wrist_z': z_axis,
         }
         return sample
