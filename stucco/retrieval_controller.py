@@ -347,8 +347,9 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
 
 
 def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
-                       clean_cache=False, dtype=torch.float, min_init_sample_points=200, device="cpu"):
-    fullname = os.path.join(cfg.DATA_DIR, f'model_points_cache.pkl')
+                       clean_cache=False, dtype=torch.float, min_init_sample_points=200,
+                       dbname='model_points_cache.pkl', device="cpu"):
+    fullname = os.path.join(cfg.DATA_DIR, dbname)
     if os.path.exists(fullname):
         cache = torch.load(fullname)
         if name not in cache:

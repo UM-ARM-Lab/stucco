@@ -13,9 +13,8 @@ import numpy as np
 import torch
 import logging
 import scipy
-from stucco import voxel
-from stucco import sdf
 from stucco import serialization
+from stucco.experiments import registration
 
 try:
     import rospy
@@ -37,6 +36,8 @@ logging.basicConfig(level=logging.INFO,
 
 logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
+
+experiment_name = 'poke_real_processed'
 
 
 def cartesian_product(*arrays):
@@ -111,19 +112,6 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
     return contact_pts
 
 
-def saved_traj_dir_base(level: poke_real_nonros.Levels):
-    return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{level.name}")
-
-
-def saved_traj_dir_for_method(reg_method):
-    name = reg_method.name.lower().replace('_', '-')
-    return os.path.join(cfg.DATA_DIR, f"poke_real_processed/{name}")
-
-
-def saved_traj_file(reg_method, level: poke_real_nonros.Levels, seed):
-    return f"{saved_traj_dir_for_method(reg_method)}/{level.name}_{seed}.txt"
-
-
 def export_pc_to_register(point_cloud_file: str, pokes_to_data):
     os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
     with open(point_cloud_file, 'w') as f:
@@ -155,10 +143,10 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         if cur_seed is None:
             pass
         else:
-            point_cloud_file = f"{saved_traj_dir_base(task)}_{cur_seed}.txt"
+            point_cloud_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}.txt"
             export_pc_to_register(point_cloud_file, pokes_to_data)
 
-            pc_register_against_file = f"{saved_traj_dir_base(task)}.txt"
+            pc_register_against_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}.txt"
             if not os.path.exists(pc_register_against_file) or clean_cache:
                 surface_thresh = 0.002
                 serialization.export_pc_register_against(pc_register_against_file, env.target_sdf,
@@ -175,7 +163,7 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
 
     def end_current_poke(new_poke):
         nonlocal cur_poke
-        free_surface_file = f"{saved_traj_dir_base(task)}_{cur_seed}_free_surface.txt"
+        free_surface_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}_free_surface.txt"
         # empty poke
         if cur_poke is None:
             pass
