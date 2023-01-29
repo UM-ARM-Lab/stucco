@@ -916,7 +916,7 @@ class PokeRunner:
                 if torch.is_tensor(action):
                     action = action.cpu()
 
-                action = np.array(action).flatten()
+                action = np.array(action, dtype=float).flatten()
                 action += action_noise[simTime]
                 obs, rew, done, info = env.step(action)
 
@@ -980,6 +980,7 @@ class ExportProblemRunner(PokeRunner):
                 export_init_transform(self.transform_file, self.best_tsf_guess)
             export_pc_to_register(self.pc_to_register_file, self.pokes, self.env, self.method)
             self.do_export_free_surface()
+            logger.info(f"Export poke {self.pokes} data for {self.env.level.name} seed {seed}")
 
     def do_export_free_surface(self, debug=False):
         if not self.export_free_surface:
@@ -1392,7 +1393,7 @@ def plot_sdf(env: poke.PokeEnv, filter_pts=None):
     input("finished")
 
 
-def plot_exported_pcd(env: poke.PokeEnv, seed=0):
+def plot_exported_pcd(env: poke.PokeEnv, seed=0, surface_only=True):
     target_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}.txt")
     source_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}_{seed}.txt")
 
@@ -1403,6 +1404,8 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0):
         env.draw_user_text(f"target pcd", xy=[-0.3, 1., -0.5])
         for i, pt in enumerate(points):
             if pt[-1] == 0:
+                if surface_only:
+                    continue
                 c = (1, 0, 1)
             else:
                 c = (0, 1, 1)
