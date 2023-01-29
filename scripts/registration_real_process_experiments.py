@@ -134,24 +134,22 @@ def export_pc_to_register(point_cloud_file: str, pokes_to_data):
             serialization.export_pcs(f, data['free'], data['contact'])
 
 
-def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Optional[DebugRvizDrawer] = None,
+def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
                          clean_cache=False):
     p.connect(p.DIRECT)
     device = 'cpu'
     data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)
     dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False)
 
-    default_freespace_range = np.array([[0.7, 0.8], [-0.1, 0.1], [0.39, 0.45]])
-
     # values for each trajectory
     pokes_to_data = {}
-    free_voxels: typing.Optional[voxel.ExpandingVoxelGrid] = None
+    env: typing.Optional[poke_real_nonros.PokeRealNoRosEnv] = None
     cur_seed = None
     cur_poke = None
     contact_pts = []
 
     def end_current_trajectory(new_seed):
-        nonlocal cur_seed, free_voxels, contact_pts, pokes_to_data
+        nonlocal cur_seed, env, contact_pts, pokes_to_data
         logger.info(f"{task.name} finished seed {cur_seed} processing {new_seed}")
         # ending an "empty" first trajectory
         if cur_seed is None:
@@ -160,25 +158,18 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
             point_cloud_file = f"{saved_traj_dir_base(task)}_{cur_seed}.txt"
             export_pc_to_register(point_cloud_file, pokes_to_data)
 
-            obj_factory = poke_real_nonros.obj_factory_map(poke_real_nonros.level_to_obj_map[task])
-            _, ranges = obj_factory.make_collision_obj(0)
-            obj_frame_sdf = sdf.MeshSDF(obj_factory)
-            sdf_resolution = 0.005
-            target_sdf = sdf.CachedSDF(obj_factory.name, sdf_resolution, ranges, obj_frame_sdf,
-                                       device=device)
-
             pc_register_against_file = f"{saved_traj_dir_base(task)}.txt"
             if not os.path.exists(pc_register_against_file) or clean_cache:
                 surface_thresh = 0.002
-                serialization.export_pc_register_against(pc_register_against_file, target_sdf,
+                serialization.export_pc_register_against(pc_register_against_file, env.target_sdf,
                                                          surface_thresh=surface_thresh)
                 if vis is not None:
-                    pc_surface = target_sdf.get_filtered_points(
+                    pc_surface = env.target_sdf.get_filtered_points(
                         lambda voxel_sdf: (voxel_sdf < surface_thresh) & (voxel_sdf > -surface_thresh))
                     vis.draw_points(f"surface.0", pc_surface, color=(1, 1, 1), scale=0.1)
 
         cur_seed = seed
-        free_voxels = voxel.ExpandingVoxelGrid(freespace_voxel_resolution, default_freespace_range, device=device)
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device=device)
         contact_pts = []
         pokes_to_data = {}
 
@@ -195,7 +186,7 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
                     os.remove(free_surface_file)
                 except OSError:
                     pass
-            serialization.export_free_surface(free_surface_file, free_voxels, cur_poke)
+            serialization.export_free_surface(free_surface_file, env.free_voxels, cur_poke)
         cur_poke = new_poke
 
     for i, sample in enumerate(dataset):
@@ -214,13 +205,13 @@ def extract_known_points(task, freespace_voxel_resolution=0.01, vis: typing.Opti
         bubbles = dataset.get_bubble_info(i)
         # complete the gripper from the points since there are gaps in between
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
-        free_voxels[torch.from_numpy(pts_to_set)] = 1
+        env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
         contact = contact_points_from_gripper(bubbles, sample)
         contact_pts += contact
 
         c_pts = np.concatenate(contact_pts)
-        f_pts, _ = free_voxels.get_known_pos_and_values()
+        f_pts, _ = env.free_voxels.get_known_pos_and_values()
         logger.info(f"Poke {poke} with {len(c_pts)} contact points {len(f_pts)} free points")
         pokes_to_data[poke] = {'free': f_pts, 'contact': c_pts}
 
