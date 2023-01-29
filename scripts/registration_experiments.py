@@ -920,6 +920,7 @@ class PokeRunner:
         self.chamfer_err = []
         self.freespace_violations = []
         self.num_freespace_voxels = []
+        self.num_points_to_T_cache = {}
         # for debug rendering of object meshes and keeping track of their object IDs
         self.pose_obj_map = {}
         # for exporting out to file, maps poke # -> data
