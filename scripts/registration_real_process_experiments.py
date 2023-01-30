@@ -14,7 +14,7 @@ import torch
 import logging
 import scipy
 from stucco import serialization
-from stucco.experiments import registration
+from stucco.experiments import registration_nopytorch3d
 
 try:
     import rospy
@@ -143,10 +143,10 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         if cur_seed is None:
             pass
         else:
-            point_cloud_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}.txt"
+            point_cloud_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}.txt"
             export_pc_to_register(point_cloud_file, pokes_to_data)
 
-            pc_register_against_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}.txt"
+            pc_register_against_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}.txt"
             if not os.path.exists(pc_register_against_file) or clean_cache:
                 surface_thresh = 0.002
                 serialization.export_pc_register_against(pc_register_against_file, env.target_sdf,
@@ -163,7 +163,7 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
 
     def end_current_poke(new_poke):
         nonlocal cur_poke
-        free_surface_file = f"{registration.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}_free_surface.txt"
+        free_surface_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}_free_surface.txt"
         # empty poke
         if cur_poke is None:
             pass
@@ -213,18 +213,28 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
     end_current_trajectory(None)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Process pokes from a real robot')
-    parser.add_argument('--experiment',
-                        choices=['extract-known-points'],
-                        default='extract-known-points',
-                        help='which experiment to run')
-    parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
-    task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
-    parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
-    parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+# TODO plot plausible set
+def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer):
+    # TODO set approximate pose by estimating it in the visual frame
+    pose = None
+    # use breakpoints
+    approx_pose_file = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_approx_pose.txt"
+    while True:
+        # TODO check if it entered something correct, if not then exit and save
+        try:
+            nums = [float(v) for v in input().split()]
+            pose = (nums[:3], nums[3:])
+        except:
+            break
+        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 1),
+                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
 
-    args = parser.parse_args()
+    os.makedirs(os.path.dirname(approx_pose_file), exist_ok=True)
+    with open(approx_pose_file, 'w') as f:
+        f.write(f"{pose[0]}\n{pose[1]}")
+
+
+def main(args):
     task = task_map[args.task]
 
     if args.no_gui:
@@ -234,3 +244,33 @@ if __name__ == "__main__":
 
     if args.experiment == "extract-known-points":
         extract_known_points(task, vis=vis)
+    elif args.experiment == "plot-sdf":
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+
+        def filter(pts):
+            c1 = (pts[:, 0] > -0.15) & (pts[:, 0] < 0.15)
+            c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
+            c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.4)
+            c = c1 & c2 & c3
+            return pts[c][::2]
+
+        registration_nopytorch3d.plot_sdf(env.obj_factory, env.target_sdf, vis, filter_pts=filter)
+
+    elif args.experiment == "set-approximate-pose":
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+        set_approximate_pose(env, vis)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Process pokes from a real robot')
+    parser.add_argument('--experiment',
+                        choices=['extract-known-points', 'plot-sdf', 'set-approximate-pose', 'plot-plausible-set'],
+                        default='extract-known-points',
+                        help='which experiment to run')
+    parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
+    task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
+    parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
+    parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+
+    args = parser.parse_args()
+    main(args)

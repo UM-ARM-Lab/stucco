@@ -5,22 +5,20 @@ import pandas as pd
 from timeit import default_timer as timer
 
 import argparse
-import matplotlib
 import numpy as np
-import seaborn as sns
 
 import stucco.icp
 import stucco.registration_util
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
-from stucco.experiments.registration import do_registration, do_medial_constraint_registration, saved_traj_dir_base, \
-    saved_traj_file, read_offline_output
+from stucco.experiments.registration import do_registration, do_medial_constraint_registration
+from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_file, read_offline_output, \
+    build_model, plot_sdf, plot_poke_chamfer_err, plot_poke_plausible_diversity
 # marching cubes free surface extraction
 
 from stucco.icp import quality_diversity, registration_method_uses_only_contact_points, initialize_transform_estimates
 from stucco import voxel
-from stucco import sdf
 from stucco.poking_controller import PokingController
 
 import torch
@@ -29,7 +27,6 @@ import logging
 import os
 from datetime import datetime
 
-import matplotlib.colors, matplotlib.cm
 from matplotlib import pyplot as plt
 from arm_pytorch_utilities import tensor_utils, rand
 
@@ -42,10 +39,10 @@ from stucco.evaluation import evaluate_chamfer_distance
 from stucco.icp import costs as icp_costs
 from stucco import util
 from stucco import serialization
-from stucco.sdf import draw_pose_distribution
+from stucco.sdf import draw_pose_distribution, sample_mesh_points
 
 from arm_pytorch_utilities.controller import Controller
-from stucco.retrieval_controller import sample_mesh_points, TrackingMethod, OurSoftTrackingMethod, \
+from stucco.retrieval_controller import TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
 
 plt.switch_backend('Qt5Agg')
@@ -83,23 +80,6 @@ def predetermined_poke_range():
         poke.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
         poke.Levels.CLAMP_SIDEWAYS: ((0, 0.22, -0.23), (0.05, 0.18, 0.26, 0.32)),
     }
-
-
-def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
-                device="cpu"):
-    points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
-                                            seed=seed, clean_cache=True,
-                                            name=model_name,
-                                            device=device)
-    for i, pt in enumerate(points):
-        vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
-        vis.draw_2d_line(f"mn.{i}", pt, normals[i], color=(0, 0, 0), size=2., scale=0.03)
-
-    print(f"finished building {model_name} {seed} {num_points}")
-    if pause_at_end:
-        input("paused for inspection")
-    vis.clear_visualization_after("mpt", 0)
-    vis.clear_visualization_after("mn", 0)
 
 
 def build_model_poke(env: poke.PokeEnv, seed, num_points, pause_at_end=False, device="cpu"):
@@ -240,87 +220,6 @@ def marginalize_over_prefix(name):
 def marginalize_over_registration_num(name):
     registration_num = re.search(r"\d+", name)
     return f"{registration_num[0]} registered points" if registration_num is not None else name
-
-
-def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='chamfer_err',
-                     key_columns=("method", "name", "seed", "points", "batch"),
-                     keep_lowest_y_quantile=0.5,
-                     keep_lowest_y_wrt=None,
-                     scatter=False,
-                     save_path=None, show=True,
-                     leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
-    fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
-    df = pd.read_pickle(fullname)
-
-    # clean up the database by removing duplicates (keeping latest results)
-    df = df.drop_duplicates(subset=key_columns, keep='last')
-    # save this version to keep the size small and not waste the filtering work we just did
-    df.to_pickle(fullname)
-    df.reset_index(inplace=True)
-
-    if filter is not None:
-        df = filter(df)
-
-    group = [x, "method", "name", "seed"]
-    if "level" in key_columns:
-        group.append("level")
-    if keep_lowest_y_wrt is None:
-        keep_lowest_y_wrt = y
-    df = df[df[keep_lowest_y_wrt] <= df.groupby(group)[keep_lowest_y_wrt].transform('quantile', keep_lowest_y_quantile)]
-    df.loc[df["method"].str.contains("ICP"), "name"] = "non-freespace baseline"
-    df.loc[df["method"].str.contains("VOLUMETRIC"), "name"] = "ours"
-    df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
-    df.loc[df["method"].str.contains("MEDIAL_CONSTRAINT"), "name"] = "freespace baseline"
-
-    method_to_name = df.set_index("method")["name"].to_dict()
-    # order the methods should be shown
-    full_method_order = ["VOLUMETRIC",
-                         # variants of our method
-                         "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE",
-                         "VOLUMETRIC_LIMITED_REINIT", "VOLUMETRIC_LIMITED_REINIT_FULL",
-                         # variants with non-SGD optimization
-                         "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD", "VOLUMETRIC_CMAMEGA",
-                         # baselines
-                         "ICP", "ICP_REVERSE", "CVO", "MEDIAL_CONSTRAINT"]
-    # order the categories should be shown
-    methods_order = [m for m in full_method_order if m in method_to_name]
-    full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
-    category_order = [m for m in full_category_order if m in method_to_name.values()]
-    fig = plt.figure()
-    if scatter:
-        res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
-    else:
-        res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
-                           estimator=np.median if plot_median else np.mean,
-                           hue_order=methods_order, style_order=category_order,
-                           errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
-    if logy:
-        res.set(yscale='log')
-    else:
-        res.set(ylim=(0, None))
-
-    # combine hue and styles in the legend
-    handles, labels = res.get_legend_handles_labels()
-    next_title_index = labels.index('name')
-    style_dict = {label: (handle.get_linestyle(), handle.get_marker(), handle._dashSeq)
-                  for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
-
-    for handle, label in zip(handles[1:next_title_index], labels[1:next_title_index]):
-        handle.set_linestyle(style_dict[method_to_name[label]][0])
-        handle.set_marker(style_dict[method_to_name[label]][1])
-        dashes = style_dict[method_to_name[label]][2]
-        if dashes is not None:
-            handle.set_dashes(dashes)
-
-    # create a legend only using the items
-    res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
-    # plt.tight_layout()
-    if save_path is not None:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path)
-        plt.close(fig)
-    if show:
-        plt.show()
 
 
 def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, method: TrackingMethod):
@@ -735,7 +634,7 @@ class ExportProblemRunner(PokeRunner):
 
 class PlausibleSetRunner(PokeRunner):
     def plausible_set_filename(self, seed):
-        return os.path.join(cfg.DATA_DIR, f"poke/{self.env.level.name}_plausible_set_{seed}.pkl")
+        return f"{saved_traj_dir_base(self.env.level)}_plausible_set_{seed}.pkl"
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
@@ -1095,28 +994,6 @@ def create_tracking_method(env, method_name) -> TrackingMethod:
         raise RuntimeError(f"Unsupported tracking method {method_name}")
 
 
-def plot_sdf(env: poke.PokeEnv, filter_pts=None):
-    env.obj_factory.draw_mesh(env.vis, "objframe", ([0, 0, 0], [0, 0, 0, 1]), (0.3, 0.3, 0.3, 0.5),
-                              object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
-    s = env.target_sdf
-    assert isinstance(s, sdf.CachedSDF)
-    coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, s.ranges)
-    if filter_pts is not None:
-        pts = filter_pts(pts)
-    sdf_val, sdf_grad = s(pts)
-
-    # color code them
-    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min(), vmax=sdf_val.max())
-    color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
-    rgb = color_map.to_rgba(sdf_val.reshape(-1))
-    rgb = rgb[:, :-1]
-
-    for i in range(len(pts)):
-        env.vis.draw_point(f"sdf_pt.{i}", pts[i], color=rgb[i], length=0.003)
-        env.vis.draw_2d_line(f"sdf_n.{i}", pts[i], sdf_grad[i], color=rgb[i], size=1., scale=0.01)
-    input("finished")
-
-
 def plot_exported_pcd(env: poke.PokeEnv, seed=0, surface_only=True):
     target_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}.txt")
     source_file = os.path.join(cfg.DATA_DIR, f"poke/{env.level.name}_{seed}.txt")
@@ -1155,50 +1032,6 @@ def plot_exported_pcd(env: poke.PokeEnv, seed=0, surface_only=True):
             input()
 
 
-def plot_poke_chamfer_err(args, level, obj_factory):
-    def filter(df):
-        # show each level individually or marginalize over all of them
-        if args.marginalize:
-            df = df[(df["level"].str.contains(level.name))]
-        else:
-            df = df[(df["level"] == level.name)]
-        return df
-
-    def filter_single(df):
-        # df = df[(df["level"] == level.name) & (df["seed"] == 0) & (df["method"] == "VOLUMETRIC")]
-        df = df[(df["level"] == level.name) & (df["seed"] == args.seed[0])]
-        return df
-
-    plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                     key_columns=PokeRunner.KEY_COLUMNS,
-                     logy=True, keep_lowest_y_wrt="rmse",
-                     save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}.png"),
-                     show=not args.no_gui,
-                     plot_median=False, x='poke', y='chamfer_err')
-
-
-def plot_poke_plausible_diversity(args, level, obj_factory):
-    def filter(df):
-        if args.marginalize:
-            df = df[(df["level"].str.contains(level.name))]
-        else:
-            df = df[(df["level"] == level.name)]
-        df = df[df.batch == 0]
-        df = df[df['plausibility_q1.0'].notnull()]
-        df = df[df.name == args.name]
-        return df
-
-    # choose from 0.50, 0.75, 1.0
-    quantile = 1.0
-    for y in ['plausibility', 'coverage', 'plausible_diversity']:
-        plot_icp_results(filter=filter, icp_res_file=f"poking_{obj_factory.name}.pkl",
-                         key_columns=PokeRunner.KEY_COLUMNS,
-                         logy=True, keep_lowest_y_quantile=1.0,
-                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.png"),
-                         show=not args.no_gui,
-                         plot_median=True, x='poke', y=f'{y}_q{quantile}')
-
-
 def main(args):
     level = task_map[args.task]
     tracking_method_name = args.tracking
@@ -1230,7 +1063,7 @@ def main(args):
             c = c1 & c2 & c3
             return pts[c][::2]
 
-        plot_sdf(env, filter_pts=filter)
+        plot_sdf(env.obj_factory, env.target_sdf, env.vis, filter_pts=filter)
     elif args.experiment == "poke-visualize-sdf":
         env = PokeGetter.env(level=level, mode=p.GUI, clean_cache=True)
         env.close()
@@ -1271,10 +1104,10 @@ def main(args):
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
     elif args.experiment == "plot-poke-ce":
-        plot_poke_chamfer_err(args, level, obj_factory)
+        plot_poke_chamfer_err(args, level, obj_factory, PokeRunner.KEY_COLUMNS)
 
     elif args.experiment == "plot-poke-pd":
-        plot_poke_plausible_diversity(args, level, obj_factory)
+        plot_poke_plausible_diversity(args, level, obj_factory, PokeRunner.KEY_COLUMNS, quantile=1.0)
 
     elif args.experiment == "debug":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")

@@ -9,7 +9,6 @@ from arm_pytorch_utilities.math_utils import angular_diff
 from arm_pytorch_utilities.controller import Controller
 from pynput import keyboard
 
-import stucco.sdf
 from stucco import detection, tracking
 from stucco import exploration
 from stucco.defines import NO_CONTACT_ID
@@ -344,53 +343,6 @@ def sample_model_points(object_id=None, num_points=100, reject_too_close=0.002, 
     torch.save(cache, fullname)
 
     return points.to(device=device), normals.to(device=device), bb.to(device=device)
-
-
-def sample_mesh_points(obj_factory: stucco.sdf.ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
-                       clean_cache=False, dtype=torch.float, min_init_sample_points=200,
-                       dbname='model_points_cache.pkl', device="cpu"):
-    fullname = os.path.join(cfg.DATA_DIR, dbname)
-    if os.path.exists(fullname):
-        cache = torch.load(fullname)
-        if name not in cache:
-            cache[name] = {}
-        if seed not in cache[name]:
-            cache[name][seed] = {}
-        if not clean_cache and num_points in cache[name][seed]:
-            res = cache[name][seed][num_points]
-            return (v.to(device=device, dtype=dtype) if v is not None else None for v in res)
-    else:
-        cache = {name: {seed: {}}}
-
-    if obj_factory is None:
-        raise RuntimeError(f"Expect model points to be cached for {name} {seed} {num_points}")
-
-    mesh = obj_factory._mesh
-
-    with rand.SavedRNG():
-        rand.seed(seed)
-
-        # because the point sampling is not dispersed, we do the dispersion ourselves
-        # we accomplish this by sampling more points than we need then randomly selecting a subset
-        sample_num_points = max(min_init_sample_points, 2 * num_points)
-
-        # assume mesh is in object frame
-        # pcd = mesh.sample_points_poisson_disk(number_of_points=num_points, init_factor=init_factor, seed=seed)
-        pcd = mesh.sample_points_uniformly(number_of_points=sample_num_points, seed=seed)
-        points = np.asarray(pcd.points)
-
-        # subsample
-        points = np.random.permutation(points)[:num_points]
-
-        res = obj_factory.object_frame_closest_point(points, compute_normal=True)
-
-    points = torch.tensor(points)
-    normals = res.normal
-
-    cache[name][seed][num_points] = points, normals.cpu(), None
-    torch.save(cache, fullname)
-
-    return points.to(device=device, dtype=dtype), normals.to(device=device, dtype=dtype), None
 
 
 def pose_error(target_pose, guess_pose):

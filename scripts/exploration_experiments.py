@@ -25,7 +25,7 @@ from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, surfa
 from stucco.env.real_env import CombinedVisualizer
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
-from stucco.retrieval_controller import sample_mesh_points
+from stucco.sdf import sample_mesh_points
 
 
 def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,

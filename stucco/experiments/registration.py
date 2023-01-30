@@ -6,8 +6,10 @@ from timeit import default_timer as timer
 import pybullet as p
 import torch
 
-from stucco import icp, cfg
+from stucco import cfg
+from stucco import icp
 from stucco.env.pybullet_env import make_sphere
+from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_dir_for_method
 from stucco.icp import costs as icp_costs, volumetric
 from stucco.icp.medial_constraints import MedialBall
 from stucco.sdf import ObjectFrameSDF
@@ -171,53 +173,3 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
     return T, distances, elapsed
 
 
-def saved_traj_dir_base(level, experiment_name="poke"):
-    return os.path.join(cfg.DATA_DIR, f"{experiment_name}/{level.name}")
-
-
-def saved_traj_dir_for_method(reg_method: icp.ICPMethod, experiment_name="poke"):
-    name = reg_method.name.lower().replace('_', '-')
-    return os.path.join(cfg.DATA_DIR, f"{experiment_name}/{name}")
-
-
-def saved_traj_file(reg_method: icp.ICPMethod, level, seed, experiment_name="poke"):
-    return f"{saved_traj_dir_for_method(reg_method, experiment_name=experiment_name)}/{level.name}_{seed}.txt"
-
-
-def read_offline_output(reg_method: icp.ICPMethod, level, seed: int, pokes: int, experiment_name="poke"):
-    filepath = saved_traj_file(reg_method, level, seed, experiment_name=experiment_name)
-    if not os.path.isfile(filepath):
-        raise RuntimeError(f"Missing path, should run offline method first: {filepath}")
-
-    T = []
-    distances = []
-    elapsed = None
-    with open(filepath) as f:
-        data = f.readlines()
-        i = 0
-        while i < len(data):
-            header = data[i].split()
-            this_poke = int(header[0])
-            if this_poke < pokes:
-                # keep going forward
-                i += 5
-                continue
-            elif this_poke > pokes:
-                # assuming the pokes are ordered, if we're past then there won't be anymore of this poke later
-                break
-
-            transform = torch.tensor([[float(v) for v in line.strip().split()] for line in data[i + 1:i + 5]])
-            T.append(transform)
-            batch = int(header[1])
-            # lower is better
-            rmse = float(header[2])
-            distances.append(rmse)
-            if len(header) > 3:
-                elapsed = float(header[3])
-            i += 5
-
-    # current_to_link transform (world to base frame)
-    T = torch.stack(T)
-    T = T.inverse()
-    distances = torch.tensor(distances)
-    return T, distances, elapsed
