@@ -94,20 +94,20 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
                           object_id=vis.USE_DEFAULT_ID_FOR_NAME)
     s = target_sdf
     assert isinstance(s, sdf.CachedSDF)
-    coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, s.ranges)
+    coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, s.ranges, device=s.device)
     if filter_pts is not None:
         pts = filter_pts(pts)
     sdf_val, sdf_grad = s(pts)
 
     # color code them
-    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min(), vmax=sdf_val.max())
+    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min().cpu(), vmax=sdf_val.max().cpu())
     color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
-    rgb = color_map.to_rgba(sdf_val.reshape(-1))
+    rgb = color_map.to_rgba(sdf_val.reshape(-1).cpu())
     rgb = rgb[:, :-1]
 
     for i in range(len(pts)):
-        vis.draw_point(f"sdf_pt.{i}", pts[i], color=rgb[i], length=0.003)
-        vis.draw_2d_line(f"sdf_n.{i}", pts[i], sdf_grad[i], color=rgb[i], size=1., scale=0.01)
+        vis.draw_point(f"sdf_pt.{i}", pts[i].cpu(), color=rgb[i], length=0.003)
+        vis.draw_2d_line(f"sdf_n.{i}", pts[i].cpu(), sdf_grad[i].cpu(), color=rgb[i], size=1., scale=0.01)
     input("finished")
 
 
