@@ -689,11 +689,16 @@ def main(args):
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
         env.obj_factory.precompute_sdf()
+        cache = None
+        model_points_cache = os.path.join(cfg.DATA_DIR, model_points_dbname)
+        if os.path.exists:
+            cache = torch.load(model_points_cache)
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in args.seed:
-                registration_nopytorch3d.build_model(env.obj_factory, None, args.task, seed=seed,
-                                                     num_points=num_points,
-                                                     pause_at_end=False, dbname=model_points_dbname)
+                cache = registration_nopytorch3d.build_model(env.obj_factory, None, args.task, seed=seed,
+                                                             num_points=num_points, dbname=model_points_dbname,
+                                                             pause_at_end=False, cache=cache)
+        torch.save(cache, model_points_cache)
     elif args.experiment == "generate-plausible-set":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
         runner = GeneratePlausibleSetRunner(env, registration_method,

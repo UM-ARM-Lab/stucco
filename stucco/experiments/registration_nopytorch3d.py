@@ -75,10 +75,10 @@ def read_offline_output(reg_method, level, seed: int, pokes: int, experiment_nam
 
 def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu", **kwargs):
-    points, normals, _ = sample_mesh_points(obj_factory, num_points=num_points,
-                                            seed=seed, clean_cache=True,
-                                            name=model_name,
-                                            device=device, **kwargs)
+    points, normals, cache = sample_mesh_points(obj_factory, num_points=num_points,
+                                                seed=seed, clean_cache=True,
+                                                name=model_name,
+                                                device=device, **kwargs)
     print(f"finished building {model_name} {seed} {num_points}")
     if vis is not None:
         for i, pt in enumerate(points):
@@ -89,6 +89,7 @@ def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_point
             input("paused for inspection")
         vis.clear_visualization_after("mpt", 0)
         vis.clear_visualization_after("mn", 0)
+    return cache
 
 
 def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):

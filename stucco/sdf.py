@@ -385,17 +385,21 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
 
 def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
                        clean_cache=False, dtype=torch.float, min_init_sample_points=200,
-                       dbname='model_points_cache.pkl', device="cpu"):
+                       dbname='model_points_cache.pkl', device="cpu", cache=None):
+    given_cache = cache is not None
     fullname = os.path.join(cfg.DATA_DIR, dbname)
-    if os.path.exists(fullname):
-        cache = torch.load(fullname)
+    if cache is not None or os.path.exists(fullname):
+        if cache is None:
+            cache = torch.load(fullname)
+
         if name not in cache:
             cache[name] = {}
         if seed not in cache[name]:
             cache[name][seed] = {}
         if not clean_cache and num_points in cache[name][seed]:
             res = cache[name][seed][num_points]
-            return (v.to(device=device, dtype=dtype) if v is not None else None for v in res)
+            res = list(v.to(device=device, dtype=dtype) if v is not None else None for v in res)
+            return *res[:-1], cache
     else:
         cache = {name: {seed: {}}}
 
@@ -425,6 +429,8 @@ def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, init_f
     normals = res.normal
 
     cache[name][seed][num_points] = points, normals.cpu(), None
-    torch.save(cache, fullname)
+    # otherwise assume will be saved by the user
+    if not given_cache:
+        torch.save(cache, fullname)
 
-    return points.to(device=device, dtype=dtype), normals.to(device=device, dtype=dtype), None
+    return points.to(device=device, dtype=dtype), normals.to(device=device, dtype=dtype), cache

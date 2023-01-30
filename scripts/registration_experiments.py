@@ -59,6 +59,8 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 
 logger = logging.getLogger(__name__)
 
+model_points_dbname = 'model_points_cache.pkl'
+
 
 def predetermined_poke_range():
     # y,z order of poking
@@ -1049,11 +1051,15 @@ def main(args):
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=True, device="cuda")
         env.draw_mesh(name='objframe', pose=([0, 0, 0], [0, 0, 0, 1]), rgba=(1, 1, 1, 0.5),
                       object_id=env.vis.USE_DEFAULT_ID_FOR_NAME)
-        # for num_points in (5, 10, 20, 30, 40, 50, 100):
+        cache = None
+        model_points_cache = os.path.join(cfg.DATA_DIR, model_points_dbname)
+        if os.path.exists:
+            cache = torch.load(model_points_cache)
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in args.seed:
-                build_model(env.obj_factory, env.vis, args.task, seed=seed, num_points=num_points,
-                            pause_at_end=False)
+                cache = build_model(env.obj_factory, env.vis, args.task, seed=seed, num_points=num_points,
+                                    pause_at_end=False, cache=cache)
+        torch.save(cache, model_points_cache)
     elif args.experiment == "plot-sdf":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")
 
