@@ -95,7 +95,8 @@ class ReverseKnownFreeSpaceCost(torch.autograd.Function):
         # interior points will have sdf_value < 0
         loss = torch.zeros(model_frame_free_voxels.shape[:-1], dtype=model_frame_free_voxels.dtype,
                            device=model_frame_free_voxels.device)
-        loss[violating] = -sdf_value
+        violation = ReverseKnownFreeSpaceCost.interior_threshold - sdf_value
+        loss[violating] = violation
         loss = loss.sum(dim=-1)
         ctx.save_for_backward(violating, sdf_value, sdf_grad)
         return loss
@@ -112,7 +113,6 @@ class ReverseKnownFreeSpaceCost(torch.autograd.Function):
             # free space point, so the surface needs to go in the opposite direction
             violation = ReverseKnownFreeSpaceCost.interior_threshold - sdf_value
             grads[violating] = violation.unsqueeze(-1) * sdf_grad
-            # TODO resolve bug here requiring -grad instead of grad which in theroy should be correct
             dl_dvoxels = grad_outputs[:, None, None] * -grads
 
         # gradients for the other inputs not implemented
@@ -125,7 +125,7 @@ class KnownSDFLookupCost(torch.autograd.Function):
                 expected_sdf_values: torch.tensor) -> torch.tensor:
         # should be fast since they should be in cache
         sdf_value, sdf_grad = sdf(model_frame_positions)
-        diff = expected_sdf_values - sdf_value
+        diff = sdf_value - expected_sdf_values
         # interior points will have sdf_value < 0
         ctx.save_for_backward(diff, sdf_grad)
         return diff.abs().sum(dim=-1)
@@ -159,46 +159,6 @@ class KnownSDFDistanceCost:
         # vector from each known voxel's center with known value to each point
         # B x M x Nknown x 3
         known_voxel_to_pt = all_points.unsqueeze(-2) - known_voxel_centers
-        # B x M x Nknown
-        known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
-
-        # loss for each point, corresponding to each known voxel center
-        # only consider points with sdf_diff less than epsilon between desired and model (take the level set)
-        mask = sdf_diff < epsilon
-        # ensure we have at least one element included in the mask
-        while torch.any(mask.sum(dim=0) == 0):
-            epsilon *= 2
-            mask = sdf_diff < epsilon
-        # low distance should have low difference
-        # remove those not masked from contention
-        known_voxel_to_pt_dist[:, ~mask] = 10000
-
-        loss = known_voxel_to_pt_dist
-        # each point may not satisfy two targets simulatenously, so we just care about the best one
-        # B x Nknown
-        loss = loss.min(dim=1).values
-        loss = loss.mean(dim=-1)
-
-        return loss
-
-
-class ReverseKnownSDFDistanceCost:
-    @staticmethod
-    def apply(model_frame_all_points: torch.tensor, all_point_weights: torch.tensor,
-              model_frame_known_sdf_centers: torch.tensor, known_voxel_values: torch.tensor,
-              epsilon=0.01) -> torch.tensor:
-        # difference between current SDF value at each point and the desired one
-        # M number of all SDF voxels
-        # Nknown number of points with known SDF values
-        # M x Nknown
-        sdf_diff = torch.cdist(all_point_weights.view(-1, 1), known_voxel_values.view(-1, 1))
-
-        # vector from each known voxel's center with known value to each point
-        # inputs are M x 3 and B x Nknown x 3
-        known_voxel_to_pt = model_frame_known_sdf_centers.unsqueeze(-2) - model_frame_all_points
-        # B x M x Nknown x 3
-        # want all points - known points so it needs to be flipped
-        known_voxel_to_pt = -known_voxel_to_pt.transpose(1, 2)
         # B x M x Nknown
         known_voxel_to_pt_dist = known_voxel_to_pt.norm(dim=-1)
 
@@ -458,9 +418,9 @@ class VolumetricDirectSDFCost(VolumetricCost):
         return apply_similarity_transform(points, R, T, s)
 
 
-class ReverseVolumetricCost(RegistrationCost):
+class VolumetricDoubleDirectCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels
-    (much slower than the voxelized version above)"""
+    (slower than the voxelized version above)"""
 
     def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
                  vis=None, scale_known_freespace=1., scale_known_sdf=1.,
@@ -526,12 +486,11 @@ class ReverseVolumetricCost(RegistrationCost):
             known_free_space_loss = ReverseKnownFreeSpaceCost.apply(self.sdf, model_frame_free_voxels)
             loss += known_free_space_loss * self.scale_known_freespace
         if self.scale_known_sdf != 0:
-            world_frame_known_sdf_voxels, world_frame_known_sdf_values = self.sdf_voxels.get_known_pos_and_values()
+            world_frame_known_sdf_voxels, known_sdf_values = self.sdf_voxels.get_known_pos_and_values()
             known_sdf_model_frame = self._transform_world_frame_points_to_model_frame(R, T, s,
                                                                                       world_frame_known_sdf_voxels)
 
-            known_sdf_loss = ReverseKnownSDFDistanceCost.apply(self.model_all_points_orig, self.model_all_weights,
-                                                               known_sdf_model_frame, world_frame_known_sdf_values)
+            known_sdf_loss = KnownSDFLookupCost.apply(self.sdf, known_sdf_model_frame, known_sdf_values)
             loss += known_sdf_loss * self.scale_known_sdf
 
         return loss * self.scale

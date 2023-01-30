@@ -672,7 +672,7 @@ class PokeEnv(PybulletEnv):
             info[name] = info[name].sum(axis=0)
         else:
             info[name] = np.zeros(3)
-        most_frequent_contact = scipy.stats.mode(self._mini_step_contact['id'])
+        most_frequent_contact = scipy.stats.mode(self._mini_step_contact['id'], keepdims=True)
         info[InfoKeys.CONTACT_ID] = int(most_frequent_contact[0])
 
         # ground truth object information
