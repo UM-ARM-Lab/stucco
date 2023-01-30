@@ -232,6 +232,11 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
 def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer):
     pose = None
     # use breakpoints
+    approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
+    if os.path.exists(approx_pose_file):
+        pose = serialization.import_pose(approx_pose_file)
+        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
+
     while True:
         try:
             nums = [float(v) for v in input('xyz then ypr').split()]
@@ -246,9 +251,16 @@ def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizD
             break
         env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
 
-    approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
     # rotation saved as xyzw
     serialization.export_pose(approx_pose_file, pose)
+
+
+def plot_optimal_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed):
+    optimal_pose_file = registration_nopytorch3d.optimal_pose_file(env.level, seed=seed,
+                                                                   experiment_name=experiment_name)
+    pose = serialization.import_pose(optimal_pose_file)
+    logger.info(pose)
+    env.obj_factory.draw_mesh(vis, "optimal_pose", pose, (0., 0.5, 0.5, 0.5), object_id=0)
 
 
 def main(args):
@@ -276,18 +288,23 @@ def main(args):
     elif args.experiment == "set-approximate-pose":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
         set_approximate_pose(env, vis)
+    elif args.experiment == "plot-optimal-pose":
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+        plot_optimal_pose(env, vis, args.seed)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process pokes from a real robot')
     parser.add_argument('--experiment',
-                        choices=['extract-known-points', 'plot-sdf', 'set-approximate-pose', 'plot-plausible-set'],
+                        choices=['extract-known-points', 'plot-sdf', 'set-approximate-pose', 'plot-optimal-pose',
+                                 'plot-plausible-set'],
                         default='extract-known-points',
                         help='which experiment to run')
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
     task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
     parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
     parser.add_argument('--no_gui', action='store_true', help='force no GUI')
+    parser.add_argument('--seed', type=int, default=0, help='random seed to process')
 
     args = parser.parse_args()
     main(args)
