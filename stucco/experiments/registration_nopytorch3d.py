@@ -25,10 +25,12 @@ def saved_traj_file(reg_method, level, seed, experiment_name="poke"):
 
 
 def approximate_pose_file(level, experiment_name="poke"):
+    # rotation saved as xyzw
     return f"{saved_traj_dir_base(level, experiment_name=experiment_name)}_approx_pose.txt"
 
 
 def optimal_pose_file(level, seed, experiment_name="poke"):
+    # rotation saved as xyzw
     return f"{saved_traj_dir_base(level, experiment_name=experiment_name)}_{seed}_optimal_pose.txt"
 
 
