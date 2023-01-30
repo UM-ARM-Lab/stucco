@@ -9,6 +9,7 @@ import pytorch_kinematics as tf
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
 from stucco import cfg
+from stucco.env.env import draw_AABB
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
 import torch
@@ -186,6 +187,8 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
                                                                                    'contact'])
                 transform_file = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_{seed}_trans.txt"
                 serialization.export_init_transform(transform_file, best_tsf_guess)
+                if vis is not None:
+                    draw_AABB(vis, env.freespace_ranges)
             serialization.export_free_surface(free_surface_file, env.free_voxels, cur_poke)
         cur_poke = new_poke
 

@@ -7,7 +7,7 @@ from pytorch3d.ops import iterative_closest_point
 from pytorch3d.ops.points_alignment import SimilarityTransform
 import pytorch3d.transforms as tf
 
-from stucco.env.pybullet_env import draw_AABB
+from stucco.env.env import draw_AABB
 from stucco.icp.sgd import iterative_closest_point_sgd
 from stucco.icp import volumetric
 from stucco.icp.medial_constraints import MedialConstraintCost

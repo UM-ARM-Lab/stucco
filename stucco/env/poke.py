@@ -14,9 +14,9 @@ import matplotlib.cm as cmx
 from arm_pytorch_utilities import tensor_utils
 
 from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
-    ContactInfo, closest_point_on_surface, pybullet_obj_range, draw_AABB
+    ContactInfo, closest_point_on_surface, pybullet_obj_range
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
-    PlanarPointToConfig
+    PlanarPointToConfig, draw_AABB
 from stucco.env.panda import PandaJustGripperID
 from stucco.env.pybullet_sim import PybulletSim
 from stucco import cfg

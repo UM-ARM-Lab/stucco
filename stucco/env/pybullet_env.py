@@ -46,7 +46,8 @@ def make_cylinder(radius, height, position, euler_angles, mass=1., lateral_frict
     return obj_id
 
 
-def make_sphere(radius, position, visual_only=False, mass=1., lateral_friction=1.5, spinning_friction=0.1, rgba=(0.8, 0.7, 0.3, 0.8)):
+def make_sphere(radius, position, visual_only=False, mass=1., lateral_friction=1.5, spinning_friction=0.1,
+                rgba=(0.8, 0.7, 0.3, 0.8)):
     col_id = -1
     if not visual_only:
         col_id = p.createCollisionShape(p.GEOM_SPHERE, radius=radius)
@@ -498,51 +499,3 @@ def pybullet_obj_range(obj_id, padding=0):
     ranges[:, 0] -= padding
     ranges[:, 1] += padding
     return ranges
-
-
-def draw_AABB(vis: Visualizer, aabb):
-    aabbMin = aabb[:, 0]
-    aabbMax = aabb[:, 1]
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    vis.draw_2d_line("bb.0", f, t - f, (1, 0, 0), scale=1)
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.1", f, t - f, (0, 1, 0), scale=1)
-    f = np.array([aabbMin[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.2", f, t - f, (0, 0, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.3", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMin[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.4", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.5", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMin[1], aabbMin[2]])
-    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.6", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.7", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMin[0], aabbMax[1], aabbMin[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.8", f, t - f, (1, 1, 1), scale=1)
-
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMin[0], aabbMax[1], aabbMax[2]])
-    vis.draw_2d_line("bb.9", f, t - f, (1, 0.5, 0.5), scale=1)
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMin[1], aabbMax[2]])
-    vis.draw_2d_line("bb.10", f, t - f, (1, 1.0, 1.0), scale=1)
-    f = np.array([aabbMax[0], aabbMax[1], aabbMax[2]])
-    t = np.array([aabbMax[0], aabbMax[1], aabbMin[2]])
-    vis.draw_2d_line("bb.11", f, t - f, (1, 1.0, 1.0), scale=1)

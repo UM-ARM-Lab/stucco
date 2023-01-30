@@ -57,12 +57,13 @@ class PokeRealNoRosEnv:
         self.freespace_resolution = freespace_voxel_resolution
 
         # known cabinet workspace, can discard queries outside it
-        self.freespace_ranges = np.array([[0.7, 1.0],
-                                          [-0.15, 0.15],
-                                          [0.35, 0.5]])
+        self.freespace_ranges = np.array([[0.7, 1.1],
+                                          [-0.2, 0.2],
+                                          [0.33, 0.65]])
 
-        self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
-                                                    device=self.device)
+        self.free_voxels = voxel.VoxelGrid(self.freespace_resolution, self.freespace_ranges, device=self.device)
+        # self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
+        #                                             device=self.device)
         self.obj_factory = obj_factory_map(level_to_obj_map[self.level])
         _, ranges = self.obj_factory.make_collision_obj(0)
         obj_frame_sdf = sdf.MeshSDF(self.obj_factory)

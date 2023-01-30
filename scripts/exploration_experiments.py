@@ -22,7 +22,8 @@ from torchmcubes import marching_cubes
 import stucco.sdf
 from stucco import cfg, exploration, icp
 from stucco.env.poke import obj_factory_map
-from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point, draw_AABB
+from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point
+from stucco.env.env import draw_AABB
 from stucco.env.real_env import CombinedVisualizer
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
