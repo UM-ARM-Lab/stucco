@@ -529,23 +529,7 @@ class PokeRunner:
                 self.best_segment_idx = k
 
     def reinitialize_best_tsf_guess(self):
-        # sample rotation and translation around the previous best solution to reinitialize
-        radian_sigma = 0.3
-        translation_sigma = 0.05
-
-        # sample delta rotations in axis angle form
-        temp = torch.eye(4, dtype=self.dtype, device=self.device).repeat(self.B, 1, 1)
-
-        delta_R = torch.randn((self.B, 3), dtype=self.dtype, device=self.device) * radian_sigma
-        delta_R = tf.axis_angle_to_matrix(delta_R)
-        temp[:, :3, :3] = delta_R @ self.best_tsf_guess[:3, :3]
-        temp[:, :3, 3] = self.best_tsf_guess[:3, 3]
-
-        delta_t = torch.randn((self.B, 3), dtype=self.dtype, device=self.device) * translation_sigma
-        temp[:, :3, 3] += delta_t
-        # ensure one of them (first of the batch) has the exact transform
-        temp[0] = self.best_tsf_guess
-        self.best_tsf_guess = temp
+        self.best_tsf_guess = icp.reinitialize_transform_estimates(self.B, self.best_tsf_guess)
         return self.best_tsf_guess
 
     def evaluate_registrations(self):
