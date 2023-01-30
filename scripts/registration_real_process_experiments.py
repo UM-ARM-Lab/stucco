@@ -4,6 +4,7 @@ from datetime import datetime
 import argparse
 
 import pybullet as p
+import pytorch_kinematics as tf
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
@@ -215,23 +216,30 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
 
 # TODO plot plausible set
 def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer):
-    # TODO set approximate pose by estimating it in the visual frame
     pose = None
     # use breakpoints
-    approx_pose_file = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_approx_pose.txt"
+    approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
     while True:
-        # TODO check if it entered something correct, if not then exit and save
         try:
-            nums = [float(v) for v in input().split()]
-            pose = (nums[:3], nums[3:])
+            nums = [float(v) for v in input('xyz then ypr').split()]
+            pos = nums[:3]
+            rot = nums[3:]
+            # xyzw quaternions
+            rot = tf.matrix_to_quaternion(tf.euler_angles_to_matrix(torch.tensor(rot), "ZYX"))
+            rot = tf.wxyz_to_xyzw(rot)
+            pose = (pos, list(rot.numpy()))
+            logger.info(pose)
         except:
             break
-        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 1),
-                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
+        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
 
     os.makedirs(os.path.dirname(approx_pose_file), exist_ok=True)
+    # rotation saved as xyzw
     with open(approx_pose_file, 'w') as f:
-        f.write(f"{pose[0]}\n{pose[1]}")
+        for pose_part in pose:
+            for val in pose_part:
+                f.write(f"{val} ")
+            f.write("\n")
 
 
 def main(args):

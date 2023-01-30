@@ -24,6 +24,14 @@ def saved_traj_file(reg_method, level, seed, experiment_name="poke"):
     return f"{saved_traj_dir_for_method(reg_method, experiment_name=experiment_name)}/{level.name}_{seed}.txt"
 
 
+def approximate_pose_file(level, experiment_name="poke"):
+    return f"{saved_traj_dir_base(level, experiment_name=experiment_name)}_approx_pose.txt"
+
+
+def optimal_pose_file(level, seed, experiment_name="poke"):
+    return f"{saved_traj_dir_base(level, experiment_name=experiment_name)}_{seed}_optimal_pose.txt"
+
+
 def read_offline_output(reg_method, level, seed: int, pokes: int, experiment_name="poke"):
     filepath = saved_traj_file(reg_method, level, seed, experiment_name=experiment_name)
     if not os.path.isfile(filepath):

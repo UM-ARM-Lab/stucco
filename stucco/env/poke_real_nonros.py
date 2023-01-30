@@ -49,8 +49,11 @@ default_freespace_range = np.array([[0.7, 0.8], [-0.1, 0.1], [0.39, 0.45]])
 
 class PokeRealNoRosEnv:
     def __init__(self, environment_level=0, device="cpu", freespace_voxel_resolution=0.01, ):
+        p.connect(p.DIRECT)
+
         self.level = Levels(environment_level)
         self.device = device
+        self.dtype = torch.float
         self.freespace_resolution = freespace_voxel_resolution
 
         self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
