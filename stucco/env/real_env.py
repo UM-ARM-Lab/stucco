@@ -78,7 +78,7 @@ class DebugRvizDrawer(Visualizer):
         id = int(tokens[1]) if len(tokens) == 2 else 0
         return tokens[0], id
 
-    def draw_points(self, name, points, color=(0, 0, 0), height=None, scale=1):
+    def draw_points(self, name, points, color=(0, 0, 0), height=None, length=0.01, scale=1):
         ns, this_id = self._extract_ns_id_from_name(name)
         marker = self.make_marker(ns, marker_type=Marker.POINTS, scale=self.BASE_SCALE * scale, id=this_id)
         for i, point in enumerate(points):
@@ -125,6 +125,34 @@ class DebugRvizDrawer(Visualizer):
 
     def draw_2d_pose(self, name, pose, color=(0, 0, 0), length=0.15 / 2, height=None):
         pass
+
+    def draw_2d_lines(self, name, starts, diffs, color=(0, 0, 0), height=None, size=2, scale=1):
+        ns, this_id = self._extract_ns_id_from_name(name)
+        marker = self.make_marker(ns, marker_type=Marker.LINE_LIST, scale=self.BASE_SCALE * size, id=int(this_id))
+
+        for i in range(len(starts)):
+            z = starts[i][2] if height is None else height
+            p = Point()
+            p.x = starts[i][0]
+            p.y = starts[i][1]
+            p.z = z
+            marker.points.append(p)
+            p = Point()
+            p.x = starts[i][0] + diffs[i][0] * scale
+            p.y = starts[i][1] + diffs[i][1] * scale
+            p.z = starts[i][2] + diffs[i][2] * scale if len(diffs) > 2 else z
+            marker.points.append(p)
+
+            c = ColorRGBA()
+            this_color = color[i] if len(color) > 3 else color
+            c.a = 1
+            c.r = this_color[0]
+            c.g = this_color[1]
+            c.b = this_color[2]
+            marker.colors.append(c)
+            marker.colors.append(c)
+        self.marker_pub.publish(marker)
+        return marker
 
     def draw_2d_line(self, name, start, diff, color=(0, 0, 0), size=2., scale=0.4, arrow=True):
         ns, this_id = self._extract_ns_id_from_name(name)

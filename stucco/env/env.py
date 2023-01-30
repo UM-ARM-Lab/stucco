@@ -104,6 +104,10 @@ class Visualizer:
                    scale=2):
         pass
 
+    def draw_points(self, name, points, color=(0, 0, 0), **kwargs):
+        for i, point in enumerate(points):
+            self.draw_point(f"{name}.{i}", point, color[i] if len(color) > 3 else color, **kwargs)
+
     @abc.abstractmethod
     def draw_2d_pose(self, name, pose, color=(0, 0, 0), length=0.15 / 2, height=None):
         pass
@@ -111,6 +115,10 @@ class Visualizer:
     @abc.abstractmethod
     def draw_2d_line(self, name, start, diff, color=(0, 0, 0), size=2., scale=0.4):
         pass
+
+    def draw_2d_lines(self, name, starts, diffs, color=(0, 0, 0), **kwargs):
+        for i in range(len(starts)):
+            self.draw_2d_line(f"{name}.{i}", starts[i], diffs[i], color[i] if len(color) > 3 else color, **kwargs)
 
     @abc.abstractmethod
     def clear_visualizations(self, names=None):

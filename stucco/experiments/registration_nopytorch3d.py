@@ -105,9 +105,8 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
     rgb = color_map.to_rgba(sdf_val.reshape(-1).cpu())
     rgb = rgb[:, :-1]
 
-    for i in range(len(pts)):
-        vis.draw_point(f"sdf_pt.{i}", pts[i].cpu(), color=rgb[i], length=0.003)
-        vis.draw_2d_line(f"sdf_n.{i}", pts[i].cpu(), sdf_grad[i].cpu(), color=rgb[i], size=1., scale=0.01)
+    vis.draw_points("sdf_pt", pts.cpu(), color=rgb, length=0.003, scale=0.15)
+    vis.draw_2d_lines("sdf_n", pts.cpu(), sdf_grad.cpu(), color=rgb, scale=0.005, size=0.1)
     input("finished")
 
 
