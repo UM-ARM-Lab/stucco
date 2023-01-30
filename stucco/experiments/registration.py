@@ -8,6 +8,7 @@ import torch
 
 from stucco import cfg
 from stucco import icp
+from stucco.icp import methods
 from stucco.env.pybullet_env import make_sphere
 from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_dir_for_method
 from stucco.icp import costs as icp_costs, volumetric
@@ -34,29 +35,30 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
     # perform ICP and visualize the transformed points
     # compare not against current model points (which may be few), but against the maximum number of model points
     if reg_method == icp.ICPMethod.ICP:
-        T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register,
-                                         given_init_pose=best_tsf_guess.inverse(), batch=B)
+        T, distances = methods.icp_pytorch3d(model_points_world_frame, model_points_register,
+                                             given_init_pose=best_tsf_guess.inverse(), batch=B)
     elif reg_method == icp.ICPMethod.ICP_REVERSE:
-        T, distances = icp.icp_pytorch3d(model_points_register, model_points_world_frame,
-                                         given_init_pose=best_tsf_guess, batch=B)
+        T, distances = methods.icp_pytorch3d(model_points_register, model_points_world_frame,
+                                             given_init_pose=best_tsf_guess, batch=B)
         T = T.inverse()
     elif reg_method == icp.ICPMethod.ICP_SGD:
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess.inverse(), batch=B, learn_translation=True,
-                                             use_matching_loss=True)
+        T, distances = methods.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                                 given_init_pose=best_tsf_guess.inverse(), batch=B,
+                                                 learn_translation=True,
+                                                 use_matching_loss=True)
     elif reg_method == icp.ICPMethod.ICP_SGD_REVERSE:
-        T, distances = icp.icp_pytorch3d_sgd(model_points_register, model_points_world_frame,
-                                             given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
-                                             use_matching_loss=True)
+        T, distances = methods.icp_pytorch3d_sgd(model_points_register, model_points_world_frame,
+                                                 given_init_pose=best_tsf_guess, batch=B, learn_translation=True,
+                                                 use_matching_loss=True)
         T = T.inverse()
     # use only volumetric loss
     elif reg_method == icp.ICPMethod.ICP_SGD_VOLUMETRIC_NO_ALIGNMENT:
-        T, distances = icp.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
-                                             given_init_pose=best_tsf_guess.inverse(), batch=B,
-                                             pose_cost=volumetric_cost,
-                                             max_iterations=20, lr=0.01,
-                                             learn_translation=True,
-                                             use_matching_loss=False)
+        T, distances = methods.icp_pytorch3d_sgd(model_points_world_frame, model_points_register,
+                                                 given_init_pose=best_tsf_guess.inverse(), batch=B,
+                                                 pose_cost=volumetric_cost,
+                                                 max_iterations=20, lr=0.01,
+                                                 learn_translation=True,
+                                                 use_matching_loss=False)
     elif reg_method in [icp.ICPMethod.VOLUMETRIC, icp.ICPMethod.VOLUMETRIC_NO_FREESPACE,
                         icp.ICPMethod.VOLUMETRIC_ICP_INIT, icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT,
                         icp.ICPMethod.VOLUMETRIC_LIMITED_REINIT_FULL,
@@ -70,8 +72,8 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
             # try always using the prior
             # best_tsf_guess = exploration.random_upright_transforms(B, model_points_register.dtype,
             #                                                        model_points_register.device)
-            T, distances = icp.icp_pytorch3d(model_points_register, model_points_world_frame,
-                                             given_init_pose=best_tsf_guess, batch=B)
+            T, distances = methods.icp_pytorch3d(model_points_register, model_points_world_frame,
+                                                 given_init_pose=best_tsf_guess, batch=B)
             best_tsf_guess = T
 
         optimization = volumetric.Optimization.SGD
@@ -84,9 +86,9 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
         elif reg_method == icp.ICPMethod.VOLUMETRIC_SVGD:
             optimization = volumetric.Optimization.SVGD
         # so given_init_pose expects world frame to object frame
-        T, distances = icp.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
-                                          given_init_pose=best_tsf_guess.inverse(), save_loss_plot=False,
-                                          batch=B)
+        T, distances = methods.icp_volumetric(volumetric_cost, model_points_world_frame, optimization=optimization,
+                                              given_init_pose=best_tsf_guess.inverse(), save_loss_plot=False,
+                                              batch=B)
     else:
         raise RuntimeError(f"Unsupported ICP method {reg_method}")
     # T, distances = icp.icp_mpc(model_points_world_frame, model_points_register,
@@ -155,15 +157,15 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
 
     start = timer()
     balls = balls.to(device=model_points_world_frame.device, dtype=model_points_world_frame.dtype)
-    T, distances = icp.icp_medial_constraints(obj_sdf, balls,
-                                              model_points_world_frame,
-                                              given_init_pose=best_tsf_guess,
-                                              batch=B,
-                                              # parameters when combined with ground truth initialization helps debug
-                                              # maxiter=100, sigma=0.0001,
-                                              verbose=False,
-                                              save_loss_plot=False,
-                                              vis=vis, obj_factory=obj_factory)
+    T, distances = methods.icp_medial_constraints(obj_sdf, balls,
+                                                  model_points_world_frame,
+                                                  given_init_pose=best_tsf_guess,
+                                                  batch=B,
+                                                  # parameters when combined with ground truth initialization helps debug
+                                                  # maxiter=100, sigma=0.0001,
+                                                  verbose=False,
+                                                  save_loss_plot=False,
+                                                  vis=vis, obj_factory=obj_factory)
     T = T.inverse()
     end = timer()
     elapsed += end - start
@@ -171,5 +173,3 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
     elapsed += 1
     logger.info(f"medial constraint RMSE: {distances.mean().item()}")
     return T, distances, elapsed
-
-

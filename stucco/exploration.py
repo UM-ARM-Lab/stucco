@@ -13,10 +13,10 @@ from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
 
 from stucco import cfg
-from stucco import icp
 from stucco.env.env import Visualizer
 from stucco import util
-from stucco.icp import random_upright_transforms
+from stucco.icp.initialization import random_upright_transforms
+from stucco.icp import methods
 from stucco.sdf import ObjectFrameSDF
 
 from stucco.sdf import ObjectFactory
@@ -262,8 +262,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 self.unused_cache_transforms = False
             else:
                 # do ICP
-                self.T, self.icp_rmse = icp.icp_pytorch3d_sgd(this_pts, self.model_points,
-                                                              given_init_pose=self.best_tsf_guess, batch=self.B)
+                self.T, self.icp_rmse = methods.icp_pytorch3d_sgd(this_pts, self.model_points,
+                                                                  given_init_pose=self.best_tsf_guess, batch=self.B)
                 # self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
                 #                                       given_init_pose=self.T.inverse(),
                 #                                       batch=self.B)
@@ -329,8 +329,8 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
             if i % 500 == 0:
                 logger.debug(f"evaluated ICPEV {i}/{total_i}")
             pt = new_points_world_frame[i]
-            T, icp_rmse = icp.icp_pytorch3d(torch.cat((icp_points, pt.view(1, -1))), self.model_points,
-                                            given_init_pose=self.best_tsf_guess, batch=self.B)
+            T, icp_rmse = methods.icp_pytorch3d(torch.cat((icp_points, pt.view(1, -1))), self.model_points,
+                                                given_init_pose=self.best_tsf_guess, batch=self.B)
             T = T.inverse()
             translations = T[:, :2, 2]
             m = translations.mean(dim=0)
@@ -548,8 +548,8 @@ class GPVarianceExploration(ShapeExplorationPolicy):
             logger.debug('conditioning exploration on ICP results')
             # perform ICP and visualize the transformed points
             this_pts = torch.stack(xs).reshape(-1, 3)
-            T, distances, _ = icp.icp_3(this_pts, self.model_points,
-                                        given_init_pose=self.best_tsf_guess, batch=30)
+            T, distances, _ = methods.icp_3(this_pts, self.model_points,
+                                            given_init_pose=self.best_tsf_guess, batch=30)
             link_to_current_tf = tf.Transform3d(matrix=T.inverse())
             all_points = link_to_current_tf.transform_points(self.model_points)
 

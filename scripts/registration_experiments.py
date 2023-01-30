@@ -7,8 +7,8 @@ from timeit import default_timer as timer
 import argparse
 import numpy as np
 
-import stucco.icp
-import stucco.registration_util
+from stucco.icp import initialization
+from stucco import registration_util
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
@@ -17,7 +17,8 @@ from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, sav
     build_model, plot_sdf, plot_poke_chamfer_err, plot_poke_plausible_diversity
 # marching cubes free surface extraction
 
-from stucco.icp import quality_diversity, registration_method_uses_only_contact_points, initialize_transform_estimates
+from stucco.icp import quality_diversity, registration_method_uses_only_contact_points
+from stucco.icp.initialization import initialize_transform_estimates
 from stucco import voxel
 from stucco.poking_controller import PokingController
 
@@ -125,7 +126,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
     points_free = []
     B = 30
 
-    best_tsf_guess = stucco.icp.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = initialization.random_upright_transforms(B, dtype, device)
 
     for num_points in num_points_list:
         model_points, model_normals, _ = sample_mesh_points(num_points=num_points, name=obj_name, seed=seed,
@@ -301,7 +302,7 @@ class PokeRunner:
     KEY_COLUMNS = ("method", "name", "seed", "poke", "level", "batch")
 
     def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method, B=30,
-                 read_stored=False, ground_truth_initialization=False, init_method=icp.InitMethod.RANDOM,
+                 read_stored=False, ground_truth_initialization=False, init_method=initialization.InitMethod.RANDOM,
                  register_num_points=500, start_at_num_pts=4, eval_num_points=200):
         self.env = env
         self.B = B
@@ -428,7 +429,7 @@ class PokeRunner:
                 self.best_segment_idx = k
 
     def reinitialize_best_tsf_guess(self):
-        self.best_tsf_guess = icp.reinitialize_transform_estimates(self.B, self.best_tsf_guess)
+        self.best_tsf_guess = initialization.reinitialize_transform_estimates(self.B, self.best_tsf_guess)
         return self.best_tsf_guess
 
     def evaluate_registrations(self):
@@ -550,7 +551,7 @@ class PokeRunner:
             if action is None:
                 self.pokes += 1
                 self.hook_after_poke(name, seed)
-            stucco.registration_util.poke_index = self.pokes
+            registration_util.poke_index = self.pokes
 
             if action is not None:
                 if torch.is_tensor(action):

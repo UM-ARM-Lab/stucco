@@ -13,6 +13,7 @@ import pymeshlab
 import torch
 
 import stucco.icp
+import stucco.icp.initialization
 from arm_pytorch_utilities import tensor_utils, rand
 from matplotlib import pyplot as plt
 from pytorch_kinematics import transforms as tf
@@ -58,7 +59,7 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     errors = []
     B = 30
 
-    best_tsf_guess = None if upright_bias == 0 else stucco.icp.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = None if upright_bias == 0 else stucco.icp.initialization.random_upright_transforms(B, dtype, device)
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
     pose = p.getBasePositionAndOrientation(target_obj_id)

@@ -12,6 +12,7 @@ from datetime import datetime
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
 import stucco.icp
+import stucco.icp.initialization
 from window_recorder.recorder import WindowRecorder
 
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
@@ -195,7 +196,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
 
     B = 30
     device = model_points.device
-    best_tsf_guess = stucco.icp.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = stucco.icp.initialization.random_upright_transforms(B, dtype, device)
     guess_pose = None
     pose_error_per_step = {}
 
