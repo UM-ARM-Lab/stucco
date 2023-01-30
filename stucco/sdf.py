@@ -105,6 +105,8 @@ class ObjectFactory(abc.ABC):
         intersection_counts = self._raycasting_scene.count_intersections(rays).numpy()
         is_inside = intersection_counts % 2 == 1
         distance[is_inside] *= -1
+        # fix gradient direction to point away from surface outside
+        gradient[~is_inside] *= -1
 
         pts, distances, gradient = tensor_utils.ensure_tensor(device, dtype, pts, distance, gradient)
 
