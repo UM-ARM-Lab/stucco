@@ -48,7 +48,7 @@ default_freespace_range = np.array([[0.7, 0.8], [-0.1, 0.1], [0.39, 0.45]])
 
 
 class PokeRealNoRosEnv:
-    def __init__(self, environment_level=0, device="cpu", freespace_voxel_resolution=0.01, ):
+    def __init__(self, environment_level=0, device="cpu", freespace_voxel_resolution=0.01, clean_cache=False):
         p.connect(p.DIRECT)
 
         self.level = Levels(environment_level)
@@ -63,7 +63,7 @@ class PokeRealNoRosEnv:
         obj_frame_sdf = sdf.MeshSDF(self.obj_factory)
         sdf_resolution = 0.005
         self.target_sdf = sdf.CachedSDF(self.obj_factory.name, sdf_resolution, ranges, obj_frame_sdf,
-                                        device=device)
+                                        device=device, clean_cache=clean_cache)
 
     def reset(self):
         self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,

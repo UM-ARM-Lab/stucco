@@ -253,7 +253,7 @@ def main(args):
     if args.experiment == "extract-known-points":
         extract_known_points(task, vis=vis)
     elif args.experiment == "plot-sdf":
-        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda", clean_cache=True)
 
         def filter(pts):
             c1 = (pts[:, 0] > -0.15) & (pts[:, 0] < 0.15)
