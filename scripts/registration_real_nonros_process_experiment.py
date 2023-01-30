@@ -26,16 +26,16 @@ from stucco import util
 from stucco.icp import initialization
 
 from datetime import datetime
-import logging
 
 from stucco.sdf import draw_pose_distribution, sample_mesh_points
+import logging
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
-                    datefmt='%m-%d %H:%M:%S', handlers=[ch, fh])
+                    datefmt='%m-%d %H:%M:%S', handlers=[ch, fh], force=True)
 
 logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
@@ -65,7 +65,6 @@ class RunData:
         # for exporting out to file, maps poke # -> data
         self.elapsed = None
         self.to_export = {}
-        self.cache = None
         self.pokes_to_data = {}
 
     def reset_registration(self):
@@ -132,6 +131,7 @@ class PokeRunner:
         self.volumetric_cost: typing.Optional[icp_costs.VolumetricCost] = None
         # intermediary data for bookkeeping during a run
         self.r = RunData()
+        self.cache = None
 
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
@@ -277,22 +277,23 @@ class PokeRunner:
     def run(self, name="", seed=0, ctrl_noise_max=0.005, draw_text=None):
         quality_diversity.previous_solutions = None
         if os.path.exists(self.dbname):
-            self.r.cache = pd.read_pickle(self.dbname)
+            self.cache = pd.read_pickle(self.dbname)
         else:
-            self.r.cache = pd.DataFrame()
+            self.cache = pd.DataFrame()
 
         env = self.env
         self.create_volumetric_cost()
+        self.r.reset_run()
         # load file based on seed and task; load given points
         traj_file = f"{registration_nopytorch3d.saved_traj_dir_base(self.env.level, experiment_name=experiment_name)}_{seed}.txt"
         if not os.path.exists(traj_file):
             raise RuntimeError(f"Missing processed expected given points per poke file {traj_file}")
         self.r.pokes_to_data = {}
         with open(traj_file) as f:
-            lines = f.readlines()
+            lines = [[float(v) for v in line.split()] for line in f.readlines()]
             i = 0
             while i < len(lines):
-                poke, num_points = [int(v) for v in lines[i].split()]
+                poke, num_points = [int(v) for v in lines[i]]
 
                 all_pts = torch.tensor(lines[i + 1: i + 1 + num_points], device=self.device, dtype=self.dtype)
                 freespace = all_pts[:, -1] == 0
@@ -302,8 +303,6 @@ class PokeRunner:
                     'contact': all_pts[~freespace, :-1]
                 }
                 i += num_points + 1
-
-        self.r.reset_run()
 
         rand.seed(seed)
 
@@ -340,7 +339,7 @@ class PokeRunner:
         # has at least one contact segment
         if self.r.best_segment_idx is not None:
             self.evaluate_registrations()
-            self.r.cache = self.export_metrics(self.r.cache, name, seed)
+            self.cache = self.export_metrics(self.cache, name, seed)
 
     def hook_after_last_poke(self, seed):
         if not self.read_stored:
@@ -360,7 +359,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
     rot_chunk = 1
     pos_chunk = 1000
 
-    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=10000,
+    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=100,
                  max_plausible_set=1000,  # prevent running out of memory and very long evaluation times
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
@@ -407,14 +406,15 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
             if not os.path.exists(approx_pose_file):
                 raise RuntimeError(
                     f"No approximate pose found for task {self.env.level.name}, expecting pose (xyzw quaternion) in {approx_pose_file}")
-            with open(approx_pose_file, 'r') as f:
-                pose = [[float(v) for v in line.split()] for line in f.readlines()]
+            pose = serialization.import_pose(approx_pose_file)
 
             self.set_up_grid_search_around_pose(pose)
 
             # one pass to find the optimal pose and save that (also for use in estimating chamfer error)
             # use the most information from the last poke
-            self.r.contact_pts = self.r.pokes_to_data[-1]['contact']
+            last_poke = max(self.r.pokes_to_data.keys())
+            self.r.contact_pts = self.r.pokes_to_data[last_poke]['contact']
+            self.env.free_voxels[self.r.pokes_to_data[last_poke]['free']] = 1
             self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.r.contact_pts,
                                                              torch.zeros(self.r.contact_pts.shape[0], dtype=self.dtype,
                                                                          device=self.device))
@@ -424,24 +424,23 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
             for i in range(0, self.N_rot, self.rot_chunk):
                 for j in range(0, self.N_pos, self.pos_chunk):
                     H, costs = self.evaluate_transform_chunk(i, j)
-                    idx, min_cost_per_chunk = costs.min()
+                    min_cost_per_chunk = costs.min()
+                    idx = costs.argmin()
                     if min_cost_per_chunk < min_cost:
                         min_cost = min_cost_per_chunk
                         H_optimal = H[idx]
 
                 logger.debug(f"finding optimal chunked {i}/{self.N_rot} min cost: {min_cost}")
 
-            # gt_tf = tf.Transform3d(pos=pose[0],
-            #                        rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
-            #                        dtype=self.dtype, device=self.device)
-            # self.Hgt = gt_tf.get_matrix()
-            optimal_pose = (H_optimal[:3, 3], tf.xyzw_to_wxyz(tf.matrix_to_quaternion(H_optimal[:3, :3])))
+            self.env.reset()
+
+            optimal_pose = (H_optimal[:3, 3], tf.wxyz_to_xyzw(tf.matrix_to_quaternion(H_optimal[:3, :3])))
             logger.info(f"optimal H pos: {optimal_pose[0]} rot xyzw: {optimal_pose[1]}")
             optimal_pose_file = registration_nopytorch3d.optimal_pose_file(self.env.level, seed,
                                                                            experiment_name=experiment_name)
             serialization.export_pose(optimal_pose_file, optimal_pose)
 
-            self.Hgt = H_optimal
+            self.Hgt = H_optimal.unsqueeze(0)
             self.Hgtinv = self.Hgt.inverse()
 
             self.set_up_grid_search_around_pose(optimal_pose)
@@ -469,12 +468,13 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # uniformly sample rotations
         self.rot = tf.random_rotations(self.N_rot, device=self.device)
         # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-        N_upright = min(100, self.N_rot)
+        N_upright = min(100, self.N_rot - 1)
         axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
         axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
         self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
         # ensure the ground truth rotation is sampled
-        self.rot[N_upright] = self.Hgt[:, :3, :3]
+        q_given = tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1]))
+        self.rot[N_upright] = tf.quaternion_to_matrix(q_given)
 
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object

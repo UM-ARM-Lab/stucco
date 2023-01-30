@@ -61,9 +61,9 @@ class PokeRealNoRosEnv:
                                           [-0.2, 0.2],
                                           [0.33, 0.65]])
 
-        self.free_voxels = voxel.VoxelGrid(self.freespace_resolution, self.freespace_ranges, device=self.device)
-        # self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
-        #                                             device=self.device)
+        self.free_voxels = None
+        self.reset()
+
         self.obj_factory = obj_factory_map(level_to_obj_map[self.level])
         _, ranges = self.obj_factory.make_collision_obj(0)
         obj_frame_sdf = sdf.MeshSDF(self.obj_factory)
@@ -72,5 +72,6 @@ class PokeRealNoRosEnv:
                                         device=device, clean_cache=clean_cache)
 
     def reset(self):
-        self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
-                                                    device=self.device)
+        self.free_voxels = voxel.VoxelGrid(self.freespace_resolution, self.freespace_ranges, device=self.device)
+        # self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
+        #                                             device=self.device)
