@@ -16,6 +16,7 @@ import logging
 import scipy
 from stucco import serialization
 from stucco.experiments import registration_nopytorch3d
+from stucco.icp import initialization
 
 try:
     import rospy
@@ -39,6 +40,8 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 experiment_name = 'poke_real_processed'
+B = 30
+starting_poke = 2
 
 
 def cartesian_product(*arrays):
@@ -175,6 +178,14 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
                     os.remove(free_surface_file)
                 except OSError:
                     pass
+            if cur_poke == starting_poke:
+                best_tsf_guess = initialization.initialize_transform_estimates(B=B,
+                                                                               freespace_ranges=env.freespace_ranges,
+                                                                               init_method=initialization.InitMethod.RANDOM,
+                                                                               contact_points=pokes_to_data[cur_poke][
+                                                                                   'contact'])
+                transform_file = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_{seed}_trans.txt"
+                serialization.export_init_transform(transform_file, best_tsf_guess)
             serialization.export_free_surface(free_surface_file, env.free_voxels, cur_poke)
         cur_poke = new_poke
 
