@@ -109,3 +109,21 @@ def export_init_transform(transform_file: str, T: torch.tensor):
             serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T[b]]
             f.write("\n".join(serialized))
             f.write("\n")
+
+
+def export_pose(pose_file: str, pose):
+    os.makedirs(os.path.dirname(pose_file), exist_ok=True)
+    # pose[0] is position and pose[1] is xyzw quaternion
+    with open(pose_file, 'w') as f:
+        for pose_part in pose:
+            for val in pose_part:
+                f.write(f"{val} ")
+            f.write("\n")
+
+
+def import_pose(pose_file: str):
+    with open(pose_file, 'r') as f:
+        pos = [float(v) for v in f.readline().split()]
+        rot = [float(v) for v in f.readline().split()]
+        pose = (pos, rot)
+        return pose

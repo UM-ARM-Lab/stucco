@@ -66,6 +66,7 @@ class RunData:
         self.elapsed = None
         self.to_export = {}
         self.cache = None
+        self.pokes_to_data = {}
 
     def reset_registration(self):
         self.best_distance = None
@@ -86,6 +87,7 @@ class RunData:
         # for debug rendering of object meshes and keeping track of their object IDs
         self.pose_obj_map = {}
         self.to_export = {}
+        self.pokes_to_data = {}
 
 
 class PokeRunner:
@@ -285,7 +287,7 @@ class PokeRunner:
         traj_file = f"{registration_nopytorch3d.saved_traj_dir_base(self.env.level, experiment_name=experiment_name)}_{seed}.txt"
         if not os.path.exists(traj_file):
             raise RuntimeError(f"Missing processed expected given points per poke file {traj_file}")
-        pokes_to_data = {}
+        self.r.pokes_to_data = {}
         with open(traj_file) as f:
             lines = f.readlines()
             i = 0
@@ -295,7 +297,7 @@ class PokeRunner:
                 all_pts = torch.tensor(lines[i + 1: i + 1 + num_points], device=self.device, dtype=self.dtype)
                 freespace = all_pts[:, -1] == 0
 
-                pokes_to_data[poke] = {
+                self.r.pokes_to_data[poke] = {
                     'free': all_pts[freespace, :-1],
                     'contact': all_pts[~freespace, :-1]
                 }
@@ -306,7 +308,7 @@ class PokeRunner:
         rand.seed(seed)
 
         self.hook_before_first_poke(seed)
-        for poke, data in pokes_to_data.items():
+        for poke, data in self.r.pokes_to_data.items():
             self.r.pokes = poke
             registration_util.poke_index = self.r.pokes
 
@@ -323,16 +325,13 @@ class PokeRunner:
         optimal_pose_file = registration_nopytorch3d.optimal_pose_file(self.env.level, seed,
                                                                        experiment_name=experiment_name)
         if os.path.exists(optimal_pose_file):
-            with open(optimal_pose_file, 'r') as f:
-                pos = [float(v) for v in f.readline().split()]
-                rot = [float(v) for v in f.readline().split()]
-                pose = (pos, rot)
-                self.r.link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
-                    tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
-                self.model_points_world_frame_eval = self.r.link_to_current_tf_gt.transform_points(
-                    self.model_points_eval)
-                self.model_normals_world_frame_eval = self.r.link_to_current_tf_gt.transform_normals(
-                    self.model_normals_eval)
+            pose = serialization.import_pose(optimal_pose_file)
+            self.r.link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+                tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+            self.model_points_world_frame_eval = self.r.link_to_current_tf_gt.transform_points(
+                self.model_points_eval)
+            self.model_normals_world_frame_eval = self.r.link_to_current_tf_gt.transform_normals(
+                self.model_normals_eval)
         else:
             logger.info(f"No optimal pose found: {optimal_pose_file}")
 
@@ -357,6 +356,10 @@ class PlausibleSetRunner(PokeRunner):
 
 
 class GeneratePlausibleSetRunner(PlausibleSetRunner):
+    # evaluate the pts in chunks since we can't load all points in memory at the same time
+    rot_chunk = 1
+    pos_chunk = 1000
+
     def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=10000,
                  max_plausible_set=1000,  # prevent running out of memory and very long evaluation times
                  **kwargs):
@@ -398,59 +401,107 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         super(GeneratePlausibleSetRunner, self).hook_before_first_poke(seed)
         with rand.SavedRNG():
             rand.seed(0)
-            # TODO start with a guess of the pose (by manually setting an approximate pose
-            # TODO then do one pass to find the optimal pose and save that (also for use in estimating chamfer error)
+            # start with an approximate pose (set-approximate-pose experiment)
+            approx_pose_file = registration_nopytorch3d.approximate_pose_file(self.env.level,
+                                                                              experiment_name=experiment_name)
+            if not os.path.exists(approx_pose_file):
+                raise RuntimeError(
+                    f"No approximate pose found for task {self.env.level.name}, expecting pose (xyzw quaternion) in {approx_pose_file}")
+            with open(approx_pose_file, 'r') as f:
+                pose = [[float(v) for v in line.split()] for line in f.readlines()]
 
-            pose = self.env.target_pose
-            gt_tf = tf.Transform3d(pos=pose[0],
-                                   rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
-                                   dtype=self.dtype, device=self.device)
-            self.Hgt = gt_tf.get_matrix()
+            self.set_up_grid_search_around_pose(pose)
+
+            # one pass to find the optimal pose and save that (also for use in estimating chamfer error)
+            # use the most information from the last poke
+            self.r.contact_pts = self.r.pokes_to_data[-1]['contact']
+            self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.r.contact_pts,
+                                                             torch.zeros(self.r.contact_pts.shape[0], dtype=self.dtype,
+                                                                         device=self.device))
+
+            min_cost = 100000
+            H_optimal = None
+            for i in range(0, self.N_rot, self.rot_chunk):
+                for j in range(0, self.N_pos, self.pos_chunk):
+                    H, costs = self.evaluate_transform_chunk(i, j)
+                    idx, min_cost_per_chunk = costs.min()
+                    if min_cost_per_chunk < min_cost:
+                        min_cost = min_cost_per_chunk
+                        H_optimal = H[idx]
+
+                logger.debug(f"finding optimal chunked {i}/{self.N_rot} min cost: {min_cost}")
+
+            # gt_tf = tf.Transform3d(pos=pose[0],
+            #                        rot=tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])),
+            #                        dtype=self.dtype, device=self.device)
+            # self.Hgt = gt_tf.get_matrix()
+            optimal_pose = (H_optimal[:3, 3], tf.xyzw_to_wxyz(tf.matrix_to_quaternion(H_optimal[:3, :3])))
+            logger.info(f"optimal H pos: {optimal_pose[0]} rot xyzw: {optimal_pose[1]}")
+            optimal_pose_file = registration_nopytorch3d.optimal_pose_file(self.env.level, seed,
+                                                                           experiment_name=experiment_name)
+            serialization.export_pose(optimal_pose_file, optimal_pose)
+
+            self.Hgt = H_optimal
             self.Hgtinv = self.Hgt.inverse()
 
-            # assume that there can only be plausible completions close enough to the ground truth
-            target_pos = pose[0]
-            offset = self.gt_position_max_offset / self.position_steps
-            x1 = torch.linspace(target_pos[0] - self.gt_position_max_offset * 0.5,
-                                target_pos[0],
-                                steps=self.position_steps // 3, device=self.device)
-            x2 = torch.linspace(target_pos[0] + offset,
-                                target_pos[0] + self.gt_position_max_offset * 1.5,
-                                steps=self.position_steps // 3 * 2, device=self.device)
-            x = torch.cat((x1, x2))
-            y1 = torch.linspace(target_pos[1] - self.gt_position_max_offset, target_pos[1],
-                                steps=self.position_steps // 2, device=self.device)
-            y2 = torch.linspace(target_pos[1] + offset, target_pos[1] + self.gt_position_max_offset,
-                                steps=self.position_steps // 2, device=self.device)
-            y = torch.cat((y1, y2))
-            z = torch.linspace(target_pos[2], target_pos[2] + self.gt_position_max_offset * 0.5,
-                               steps=self.position_steps, device=self.device)
-            self.pos = torch.cartesian_prod(x, y, z)
-            self.N_pos = len(self.pos)
-            # uniformly sample rotations
-            self.rot = tf.random_rotations(self.N_rot, device=self.device)
-            # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-            N_upright = min(100, self.N_rot)
-            axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
-            axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
-            self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
-            # ensure the ground truth rotation is sampled
-            self.rot[N_upright] = self.Hgt[:, :3, :3]
+            self.set_up_grid_search_around_pose(optimal_pose)
+
+    def set_up_grid_search_around_pose(self, pose):
+        # assume that there can only be plausible completions close enough to the ground truth
+        target_pos = pose[0]
+        offset = self.gt_position_max_offset / self.position_steps
+        x1 = torch.linspace(target_pos[0] - self.gt_position_max_offset * 0.5,
+                            target_pos[0],
+                            steps=self.position_steps // 3, device=self.device)
+        x2 = torch.linspace(target_pos[0] + offset,
+                            target_pos[0] + self.gt_position_max_offset * 1.5,
+                            steps=self.position_steps // 3 * 2, device=self.device)
+        x = torch.cat((x1, x2))
+        y1 = torch.linspace(target_pos[1] - self.gt_position_max_offset, target_pos[1],
+                            steps=self.position_steps // 2, device=self.device)
+        y2 = torch.linspace(target_pos[1] + offset, target_pos[1] + self.gt_position_max_offset,
+                            steps=self.position_steps // 2, device=self.device)
+        y = torch.cat((y1, y2))
+        z = torch.linspace(target_pos[2], target_pos[2] + self.gt_position_max_offset * 0.5,
+                           steps=self.position_steps, device=self.device)
+        self.pos = torch.cartesian_prod(x, y, z)
+        self.N_pos = len(self.pos)
+        # uniformly sample rotations
+        self.rot = tf.random_rotations(self.N_rot, device=self.device)
+        # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
+        N_upright = min(100, self.N_rot)
+        axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
+        axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
+        self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
+        # ensure the ground truth rotation is sampled
+        self.rot[N_upright] = self.Hgt[:, :3, :3]
 
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object
-        # TODO fill up contact points
-        self.contact_pts = tensor_utils.ensure_tensor(self.device, self.dtype, torch.cat(contact_pts))
-        if len(self.contact_pts) < self.start_at_num_pts or self.pokes < self.start_at_num_pts:
+        if len(self.r.contact_pts) < self.start_at_num_pts or self.r.pokes < self.start_at_num_pts:
             return
 
-        self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.contact_pts,
-                                                         torch.zeros(self.contact_pts.shape[0], dtype=self.dtype,
+        self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.r.contact_pts,
+                                                         torch.zeros(self.r.contact_pts.shape[0], dtype=self.dtype,
                                                                      device=self.device))
         self.evaluate_registrations()
 
     def _evaluate_transforms(self, transforms):
         return self.volumetric_cost(transforms[:, :3, :3], transforms[:, :3, -1], None)
+
+    def evaluate_transform_chunk(self, i, j):
+        R = self.rot[i:i + self.rot_chunk]
+        T = self.pos[j:j + self.pos_chunk]
+        r_chunk_actual = len(R)
+        t_chunk_actual = len(T)
+        T = T.repeat(r_chunk_actual, 1)
+        R = R.repeat_interleave(t_chunk_actual, 0)
+        H = torch.eye(4, device=self.device).repeat(len(R), 1, 1)
+        H[:, :3, :3] = R
+        H[:, :3, -1] = T
+        Hinv = H.inverse()
+        costs = self._evaluate_transforms(Hinv)
+        return H, costs
 
     def evaluate_registrations(self):
         # evaluate all the transforms
@@ -462,7 +513,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # since new pokes can only prune previously plausible transforms
         if len(self.plausible_set) > 0:
             trans_chunk = 500
-            Hall = self.plausible_set_all[self.pokes - 1]
+            Hall = self.plausible_set_all[self.r.pokes - 1]
             for i in range(0, Hall.shape[0], trans_chunk):
                 H = Hall[i:i + trans_chunk]
                 Hinv = H.inverse()
@@ -473,25 +524,11 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                     Hp = H[plausible]
                     plausible_transforms.append(Hp)
         else:
-            # evaluate the pts in chunks since we can't load all points in memory at the same time
-            rot_chunk = 1
-            pos_chunk = 1000
-            for i in range(0, self.N_rot, rot_chunk):
+            for i in range(0, self.N_rot, self.rot_chunk):
                 logger.debug(f"chunked {i}/{self.N_rot} plausible: {sum(h.shape[0] for h in plausible_transforms)}")
                 min_cost_per_chunk = 100000
-                for j in range(0, self.N_pos, pos_chunk):
-                    R = self.rot[i:i + rot_chunk]
-                    T = self.pos[j:j + pos_chunk]
-                    r_chunk_actual = len(R)
-                    t_chunk_actual = len(T)
-                    T = T.repeat(r_chunk_actual, 1)
-                    R = R.repeat_interleave(t_chunk_actual, 0)
-                    H = torch.eye(4, device=self.device).repeat(len(R), 1, 1)
-                    H[:, :3, :3] = R
-                    H[:, :3, -1] = T
-                    Hinv = H.inverse()
-
-                    costs = self._evaluate_transforms(Hinv)
+                for j in range(0, self.N_pos, self.pos_chunk):
+                    H, costs = self.evaluate_transform_chunk(i, j)
                     plausible = costs < self.plausible_suboptimality + gt_cost
                     min_cost_per_chunk = min(min_cost_per_chunk, costs.min())
 
@@ -501,16 +538,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                 logger.debug(f"min cost for chunk: {min_cost_per_chunk}")
 
         all_plausible_transforms = torch.cat(plausible_transforms)
-        self.plausible_set_all[self.pokes] = all_plausible_transforms
+        self.plausible_set_all[self.r.pokes] = all_plausible_transforms
         if len(all_plausible_transforms) > self.max_plausibile_set:
             to_keep = torch.randperm(len(all_plausible_transforms))[:self.max_plausibile_set]
             all_plausible_transforms = all_plausible_transforms[to_keep]
-        self.plausible_set[self.pokes] = all_plausible_transforms
-        logger.info("poke %d with %d (%d) plausible completions gt cost: %f allowable cost: %f", self.pokes,
-                    all_plausible_transforms.shape[0], self.plausible_set_all[self.pokes].shape[0], gt_cost,
+        self.plausible_set[self.r.pokes] = all_plausible_transforms
+        logger.info("poke %d with %d (%d) plausible completions gt cost: %f allowable cost: %f", self.r.pokes,
+                    all_plausible_transforms.shape[0], self.plausible_set_all[self.r.pokes].shape[0], gt_cost,
                     gt_cost + self.plausible_suboptimality)
-        # plot plausible transforms
-        to_plot = torch.randperm(len(all_plausible_transforms))[:200]
 
     def hook_after_last_poke(self, seed):
         # export plausible set to file
@@ -653,11 +688,12 @@ def main(args):
 
     # -- Build object models (sample points from their surface)
     if args.experiment == "build":
+        env.obj_factory.precompute_sdf()
         for num_points in (2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 100, 200, 300, 400, 500):
             for seed in args.seed:
                 registration_nopytorch3d.build_model(env.obj_factory, None, args.task, seed=seed,
                                                      num_points=num_points,
-                                                     pause_at_end=False)
+                                                     pause_at_end=False, dbname=model_points_dbname)
     elif args.experiment == "generate-plausible-set":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
         runner = GeneratePlausibleSetRunner(env, registration_method,
@@ -683,11 +719,12 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Object registration from contact')
-    parser.add_argument('experiment',
+    parser.add_argument('--experiment',
                         choices=['build',
                                  'plot-poke-ce', 'plot-poke-pd',
                                  'generate-plausible-set', 'evaluate-plausible-diversity',
                                  ],
+                        default='generate-plausible-set',
                         help='which experiment to run')
     registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
     parser.add_argument('--registration',

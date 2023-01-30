@@ -232,7 +232,6 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
 def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer):
     pose = None
     # use breakpoints
-    approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
     while True:
         try:
             nums = [float(v) for v in input('xyz then ypr').split()]
@@ -247,13 +246,9 @@ def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizD
             break
         env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
 
-    os.makedirs(os.path.dirname(approx_pose_file), exist_ok=True)
+    approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
     # rotation saved as xyzw
-    with open(approx_pose_file, 'w') as f:
-        for pose_part in pose:
-            for val in pose_part:
-                f.write(f"{val} ")
-            f.write("\n")
+    serialization.export_pose(approx_pose_file, pose)
 
 
 def main(args):
