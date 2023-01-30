@@ -96,7 +96,7 @@ def export_registration(stored_file: str, to_export):
             assert B == d.shape[0]
             for b in range(B):
                 f.write(f"{pokes} {b} {d[b]} {data['elapsed']}\n")
-                serialization.export_transform(f, T[b])
+                export_transform(f, T[b])
 
 
 def export_init_transform(transform_file: str, T: torch.tensor):
