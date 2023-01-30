@@ -82,3 +82,30 @@ def export_free_surface(free_surface_file, free_voxels, pokes, vis=None):
         f.write(f"{pokes} {points_to_sample}\n")
         export_pc(f, points)
         export_pc(f, normals)
+
+
+def export_registration(stored_file: str, to_export):
+    """Exports current_to_link (world frame to base frame) transforms to file"""
+    os.makedirs(os.path.dirname(stored_file), exist_ok=True)
+    with open(stored_file, 'w') as f:
+        # sort to order by pokes
+        for pokes, data in sorted(to_export.items()):
+            T = data['T'].inverse()
+            d = data['rmse']
+            B = T.shape[0]
+            assert B == d.shape[0]
+            for b in range(B):
+                f.write(f"{pokes} {b} {d[b]} {data['elapsed']}\n")
+                serialization.export_transform(f, T[b])
+
+
+def export_init_transform(transform_file: str, T: torch.tensor):
+    os.makedirs(os.path.dirname(transform_file), exist_ok=True)
+    B = len(T)
+    with open(transform_file, 'w') as f:
+        f.write(f"{B}\n")
+        for b in range(len(T)):
+            f.write(f"{b}\n")
+            serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T[b]]
+            f.write("\n".join(serialized))
+            f.write("\n")

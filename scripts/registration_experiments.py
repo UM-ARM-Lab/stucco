@@ -335,33 +335,6 @@ def export_pc_to_register(point_cloud_file: str, pokes: int, env: poke.PokeEnv, 
         serialization.export_pcs(f, pc_free, pc_occ)
 
 
-def export_registration(stored_file: str, to_export):
-    """Exports current_to_link (world frame to base frame) transforms to file"""
-    os.makedirs(os.path.dirname(stored_file), exist_ok=True)
-    with open(stored_file, 'w') as f:
-        # sort to order by pokes
-        for pokes, data in sorted(to_export.items()):
-            T = data['T'].inverse()
-            d = data['rmse']
-            B = T.shape[0]
-            assert B == d.shape[0]
-            for b in range(B):
-                f.write(f"{pokes} {b} {d[b]} {data['elapsed']}\n")
-                serialization.export_transform(f, T[b])
-
-
-def export_init_transform(transform_file: str, T: torch.tensor):
-    os.makedirs(os.path.dirname(transform_file), exist_ok=True)
-    B = len(T)
-    with open(transform_file, 'w') as f:
-        f.write(f"{B}\n")
-        for b in range(len(T)):
-            f.write(f"{b}\n")
-            serialized = [f"{t[0]:.4f} {t[1]:.4f} {t[2]:.4f} {t[3]:.4f}" for t in T[b]]
-            f.write("\n".join(serialized))
-            f.write("\n")
-
-
 def debug_volumetric_loss(env: poke.PokeEnv, seed=0, show_free_voxels=False, pokes=4):
     # load from file
     env.reset()
@@ -724,7 +697,7 @@ class PokeRunner:
 
     def hook_after_last_poke(self, seed):
         if not self.read_stored:
-            export_registration(saved_traj_file(self.reg_method, self.env.level, seed), self.to_export)
+            serialization.export_registration(saved_traj_file(self.reg_method, self.env.level, seed), self.to_export)
 
 
 class ExportProblemRunner(PokeRunner):
@@ -747,7 +720,8 @@ class ExportProblemRunner(PokeRunner):
         transform_gt_file = f"{saved_traj_dir_base(self.env.level)}_{seed}_gt_trans.txt"
         # exporting data for offline baselines, remove the stale file
         serialization.export_pc_register_against(pc_register_against_file, self.env.target_sdf)
-        export_init_transform(transform_gt_file, self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
+        serialization.export_init_transform(transform_gt_file,
+                                            self.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1))
         try:
             os.remove(self.pc_to_register_file)
         except OSError:
@@ -763,7 +737,7 @@ class ExportProblemRunner(PokeRunner):
                 self.best_tsf_guess = initialize_transform_estimates(self.B, self.env.freespace_ranges,
                                                                      self.init_method, None,
                                                                      device=self.env.device, dtype=self.env.dtype)
-                export_init_transform(self.transform_file, self.best_tsf_guess)
+                serialization.export_init_transform(self.transform_file, self.best_tsf_guess)
             export_pc_to_register(self.pc_to_register_file, self.pokes, self.env, self.method)
             self.do_export_free_surface()
             logger.info(f"Export poke {self.pokes} data for {self.env.level.name} seed {seed}")
