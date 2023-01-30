@@ -413,7 +413,7 @@ def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, init_f
 
         # assume mesh is in object frame
         # pcd = mesh.sample_points_poisson_disk(number_of_points=num_points, init_factor=init_factor, seed=seed)
-        pcd = mesh.sample_points_uniformly(number_of_points=sample_num_points, seed=seed)
+        pcd = mesh.sample_points_uniformly(number_of_points=sample_num_points)
         points = np.asarray(pcd.points)
 
         # subsample
