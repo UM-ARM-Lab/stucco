@@ -18,6 +18,7 @@ import scipy
 from stucco import serialization
 from stucco.experiments import registration_nopytorch3d
 from stucco.icp import initialization
+from stucco.util import matrix_to_pos_rot
 
 try:
     import rospy
@@ -263,6 +264,16 @@ def plot_optimal_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDraw
     env.obj_factory.draw_mesh(vis, "optimal_pose", pose, (0., 0.5, 0.5, 0.5), object_id=0)
 
 
+def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed):
+    filename = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_plausible_set_{seed}.pkl"
+    plausible_set = torch.load(filename)
+    last_poke = max(plausible_set.keys())
+    plausible_transforms = plausible_set[last_poke]
+    for i, T in enumerate(plausible_transforms):
+        pose = matrix_to_pos_rot(T)
+        env.obj_factory.draw_mesh(vis, "plausible_pose", pose, (0.5, 0.5, 0, 0.5), object_id=i)
+
+
 def main(args):
     task = task_map[args.task]
 
@@ -291,6 +302,9 @@ def main(args):
     elif args.experiment == "plot-optimal-pose":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
         plot_optimal_pose(env, vis, args.seed)
+    elif args.experiment == "plot-plausible-set":
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+        plot_plausible_set(env, vis, args.seed)
 
 
 if __name__ == "__main__":
