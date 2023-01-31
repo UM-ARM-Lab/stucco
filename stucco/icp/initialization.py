@@ -38,8 +38,7 @@ def reinitialize_transform_estimates(B, best_tsf_guess, radian_sigma=0.3, transl
     # sample delta rotations in axis angle form
     T_init = torch.eye(4, dtype=dtype, device=device).repeat(B, 1, 1)
 
-    delta_R = torch.randn((B, 3), dtype=dtype, device=device) * radian_sigma
-    delta_R = tf.axis_angle_to_matrix(delta_R)
+    delta_R = random_rotation_perturbations(B, dtype, device, radian_sigma)
     T_init[:, :3, :3] = delta_R @ best_tsf_guess[:3, :3]
     T_init[:, :3, 3] = best_tsf_guess[:3, 3]
 
@@ -49,6 +48,12 @@ def reinitialize_transform_estimates(B, best_tsf_guess, radian_sigma=0.3, transl
     T_init[0] = best_tsf_guess
     best_tsf_guess = T_init
     return best_tsf_guess
+
+
+def random_rotation_perturbations(B, dtype, device, radian_sigma):
+    delta_R = torch.randn((B, 3), dtype=dtype, device=device) * radian_sigma
+    delta_R = tf.axis_angle_to_matrix(delta_R)
+    return delta_R
 
 
 def random_upright_transforms(B, dtype, device, translation=None):

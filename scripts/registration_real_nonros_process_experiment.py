@@ -33,7 +33,7 @@ import logging
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
-logging.basicConfig(level=logging.INFO,
+logging.basicConfig(level=logging.DEBUG,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh], force=True)
 
@@ -359,7 +359,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
     rot_chunk = 1
     pos_chunk = 1000
 
-    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=100,
+    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=5000,
                  max_plausible_set=1000,  # prevent running out of memory and very long evaluation times
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
@@ -408,7 +408,9 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                     f"No approximate pose found for task {self.env.level.name}, expecting pose (xyzw quaternion) in {approx_pose_file}")
             pose = serialization.import_pose(approx_pose_file)
 
-            self.set_up_grid_search_around_pose(pose)
+            # search closely around the approximate
+            N_rot = 2000
+            self.set_up_grid_search_around_pose(pose, N_rot=N_rot, max_pos_offset=0.08, perturb_rotation_amount=0.5)
 
             # one pass to find the optimal pose and save that (also for use in estimating chamfer error)
             # use the most information from the last poke
@@ -421,7 +423,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
             min_cost = 100000
             H_optimal = None
-            for i in range(0, self.N_rot, self.rot_chunk):
+            for i in range(0, N_rot, self.rot_chunk):
                 for j in range(0, self.N_pos, self.pos_chunk):
                     H, costs = self.evaluate_transform_chunk(i, j)
                     min_cost_per_chunk = costs.min()
@@ -430,7 +432,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                         min_cost = min_cost_per_chunk
                         H_optimal = H[idx]
 
-                logger.debug(f"finding optimal chunked {i}/{self.N_rot} min cost: {min_cost}")
+                logger.debug(f"finding optimal chunked {i}/{N_rot} min cost: {min_cost}")
 
             self.env.reset()
 
@@ -445,36 +447,47 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
             self.set_up_grid_search_around_pose(optimal_pose)
 
-    def set_up_grid_search_around_pose(self, pose):
+    def set_up_grid_search_around_pose(self, pose, N_rot=None, max_pos_offset=None, perturb_rotation_amount=None):
+        if N_rot is None:
+            N_rot = self.N_rot
+        if max_pos_offset is None:
+            max_pos_offset = self.gt_position_max_offset
         # assume that there can only be plausible completions close enough to the ground truth
         target_pos = pose[0]
-        offset = self.gt_position_max_offset / self.position_steps
-        x1 = torch.linspace(target_pos[0] - self.gt_position_max_offset * 0.5,
+        offset = max_pos_offset / self.position_steps
+        x1 = torch.linspace(target_pos[0] - max_pos_offset * 0.5,
                             target_pos[0],
                             steps=self.position_steps // 3, device=self.device)
         x2 = torch.linspace(target_pos[0] + offset,
-                            target_pos[0] + self.gt_position_max_offset * 1.5,
+                            target_pos[0] + max_pos_offset * 1.5,
                             steps=self.position_steps // 3 * 2, device=self.device)
         x = torch.cat((x1, x2))
-        y1 = torch.linspace(target_pos[1] - self.gt_position_max_offset, target_pos[1],
+        y1 = torch.linspace(target_pos[1] - max_pos_offset, target_pos[1],
                             steps=self.position_steps // 2, device=self.device)
-        y2 = torch.linspace(target_pos[1] + offset, target_pos[1] + self.gt_position_max_offset,
+        y2 = torch.linspace(target_pos[1] + offset, target_pos[1] + max_pos_offset,
                             steps=self.position_steps // 2, device=self.device)
         y = torch.cat((y1, y2))
-        z = torch.linspace(target_pos[2], target_pos[2] + self.gt_position_max_offset * 0.5,
+        z = torch.linspace(target_pos[2], target_pos[2] + max_pos_offset * 0.5,
                            steps=self.position_steps, device=self.device)
         self.pos = torch.cartesian_prod(x, y, z)
         self.N_pos = len(self.pos)
-        # uniformly sample rotations
-        self.rot = tf.random_rotations(self.N_rot, device=self.device)
+        q_given = tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1]))
+        R_given = tf.quaternion_to_matrix(q_given)
+        if perturb_rotation_amount is None:
+            # uniformly sample rotations
+            self.rot = tf.random_rotations(N_rot, device=self.device)
+        else:
+            # sample rotation and translation around the previous best solution to reinitialize
+            delta_R = initialization.random_rotation_perturbations(N_rot, dtype=self.dtype, device=self.device,
+                                                                   radian_sigma=perturb_rotation_amount)
+            self.rot = delta_R @ R_given
         # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-        N_upright = min(100, self.N_rot - 1)
+        N_upright = min(100, N_rot - 1)
         axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
         axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
         self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
         # ensure the ground truth rotation is sampled
-        q_given = tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1]))
-        self.rot[N_upright] = tf.quaternion_to_matrix(q_given)
+        self.rot[N_upright] = R_given
 
     def hook_after_poke(self, name, seed):
         # assume all contact points belong to the object
@@ -558,8 +571,6 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 class EvaluatePlausibleSetRunner(PlausibleSetRunner):
     def __init__(self, *args, plot_meshes=True, sleep_between_plots=0.1, **kwargs):
         super(EvaluatePlausibleSetRunner, self).__init__(*args, **kwargs)
-        self.plot_meshes = False
-        self.sleep_between_plots = sleep_between_plots
         # always read stored with the plausible set evaluation
         self.read_stored = True
         self.plausible_set = {}
@@ -574,12 +585,12 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         self.cache = self.cache.drop_duplicates(subset=self.KEY_COLUMNS, keep='last')
 
     def hook_after_poke(self, name, seed):
-        if self.pokes in self.plausible_set:
+        if self.r.pokes in self.plausible_set:
             self.register_transforms_with_points(seed)
             # has at least one contact segment
-            if self.best_segment_idx is None:
+            if self.r.best_segment_idx is None:
                 logger.warning("No sufficient contact segment on poke %d despite having data for the plausible set",
-                               self.pokes)
+                               self.r.pokes)
                 return
             self.evaluate_registrations()
             self.cache = self.export_metrics(self.cache, name, seed)
@@ -600,16 +611,13 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
 
     def evaluate_registrations(self):
         """Responsible for populating to_export"""
-        logger.debug(f"err each obj {np.round(self.dist_per_est_obj, 4)}")
+        logger.debug(f"err each obj {np.round(self.r.dist_per_est_obj, 4)}")
 
         # sampled transforms and all plausible transforms
-        T = self.transforms_per_object[self.best_segment_idx]
-        Tp = self.plausible_set[self.pokes]
-        rmse = self.rmse_per_object[self.best_segment_idx]
+        T = self.r.transforms_per_object[self.r.best_segment_idx]
+        Tp = self.plausible_set[self.r.pokes]
+        rmse = self.r.rmse_per_object[self.r.best_segment_idx]
 
-        # NOTE that T is already inverted, so no need for T.inverse() * T
-        # however, Tinv is useful for plotting purposes
-        Tinv = T.inverse()
         # effectively can apply one transform then take the inverse using the other one; if they are the same, then
         # we should end up in the base frame if that T == Tp
         # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
@@ -627,11 +635,10 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         for quantile in [1.0, 0.75, 0.5]:
             thresh = torch.quantile(rmse, quantile)
             used = rmse <= thresh
-            to_plot = quantile == 1.0
             quantile_errors_per_batch = errors_per_batch[used]
             bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible = self._do_evaluate_plausible_diversity_on_best_quantile(
                 quantile_errors_per_batch)
-            logger.info(f"pokes {self.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
+            logger.info(f"pokes {self.r.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
                         f"coverage {bp_coverage.item():.0f} against {P} plausible transforms")
             self.plausibility[quantile] = bp_plausibility
             self.coverage[quantile] = bp_coverage
@@ -641,7 +648,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         batch = np.arange(self.B)
         data = {"method": self.reg_method.name, "level": self.env.level.name,
                 "name": name,
-                "seed": seed, "poke": self.pokes,
+                "seed": seed, "poke": self.r.pokes,
                 "batch": batch,
                 }
         for quantile in self.plausibility.keys():
