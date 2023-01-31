@@ -706,6 +706,12 @@ def main(args):
                                                              num_points=num_points, dbname=model_points_dbname,
                                                              pause_at_end=False, cache=cache)
         torch.save(cache, model_points_cache)
+    elif args.experiment == "register":
+        env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
+        runner = PokeRunner(env, registration_method)
+        for seed in args.seed:
+            runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
+
     elif args.experiment == "generate-plausible-set":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
         runner = GeneratePlausibleSetRunner(env, registration_method,
@@ -732,7 +738,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Object registration from contact')
     parser.add_argument('--experiment',
-                        choices=['build',
+                        choices=['build', 'register',
                                  'plot-poke-ce', 'plot-poke-pd',
                                  'generate-plausible-set', 'evaluate-plausible-diversity',
                                  ],
