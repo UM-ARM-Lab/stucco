@@ -367,14 +367,15 @@ class DebugRvizDrawer(Visualizer):
         marker.mesh_resource = cfg.ensure_rviz_resource_path(model)
 
         # apply offset in visual frame
-        pos, rot = pose
         h1 = torch.eye(4, dtype=torch.float)
+        pos, rot = pose
+        pos, rot, vis_frame_rot = tensor_utils.ensure_tensor(h1.device, h1.dtype, pos, rot, vis_frame_rot)
         h1[:3, 3] = torch.tensor(pos, dtype=h1.dtype)
-        h1[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(tensor_utils.ensure_tensor(h1.device, h1.dtype, rot)))
+        h1[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(rot))
 
         h2 = torch.eye(4, dtype=h1.dtype)
         h2[:3, 3] = torch.tensor(vis_frame_pos, dtype=h1.dtype)
-        h2[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(tensor_utils.ensure_tensor(h1.device, h1.dtype, vis_frame_rot)))
+        h2[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(vis_frame_rot))
 
         h = h1 @ h2
         pos = h[:3, 3]

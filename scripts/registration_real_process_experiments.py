@@ -8,7 +8,7 @@ import pytorch_kinematics as tf
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
-from stucco import cfg
+from stucco import cfg, icp
 from stucco.env.env import draw_AABB
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
@@ -229,7 +229,6 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
     end_current_trajectory(None)
 
 
-# TODO plot plausible set
 def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer):
     pose = None
     # use breakpoints
@@ -269,15 +268,29 @@ def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDra
     plausible_set = torch.load(filename)
     last_poke = max(plausible_set.keys())
     plausible_transforms = plausible_set[last_poke]
+    logger.info(f"plotting plausible set for {env.level.name} seed {seed} poke {last_poke}")
     ns = "plausible_pose"
     vis.clear_visualization_after(ns, 0)
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
-        env.obj_factory.draw_mesh(vis, ns, pose, (0.5, 0.5, 0, 0.5), object_id=i)
+        env.obj_factory.draw_mesh(vis, ns, pose, (0., 1.0, 0, 0.4), object_id=i)
+
+
+def plot_estimate_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed, reg_method, poke=-1):
+    estimate_set, _, _ = registration_nopytorch3d.read_offline_output(reg_method, env.level, seed, poke,
+                                                                      experiment_name)
+    estimate_set = estimate_set.inverse()
+    logger.info(f"plotting estimate set for {reg_method.name} on {env.level.name} seed {seed} poke {poke}")
+    ns = "estimate_set"
+    vis.clear_visualization_after(ns, 0)
+    for i, T in enumerate(estimate_set):
+        pose = matrix_to_pos_rot(T)
+        env.obj_factory.draw_mesh(vis, ns, pose, (0., .0, 0.8, 0.1), object_id=i)
 
 
 def main(args):
     task = task_map[args.task]
+    registration_method = registration_map[args.registration]
 
     if args.no_gui:
         vis = None
@@ -307,20 +320,29 @@ def main(args):
     elif args.experiment == "plot-plausible-set":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
         plot_plausible_set(env, vis, args.seed)
+    elif args.experiment == "plot-estimate-set":
+        env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
+        plot_estimate_set(env, vis, args.seed, registration_method, args.poke)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process pokes from a real robot')
     parser.add_argument('--experiment',
                         choices=['extract-known-points', 'plot-sdf', 'set-approximate-pose', 'plot-optimal-pose',
-                                 'plot-plausible-set'],
+                                 'plot-plausible-set', 'plot-estimate-set'],
                         default='extract-known-points',
                         help='which experiment to run')
+    registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+    parser.add_argument('--registration',
+                        choices=registration_map.keys(),
+                        default='volumetric',
+                        help='which registration method to run')
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
     task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
     parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
     parser.add_argument('--no_gui', action='store_true', help='force no GUI')
     parser.add_argument('--seed', type=int, default=0, help='random seed to process')
+    parser.add_argument('--poke', type=int, default=2, help='poke for some experiments that need it specified')
 
     args = parser.parse_args()
     main(args)
