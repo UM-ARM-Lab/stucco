@@ -203,6 +203,8 @@ def main(args):
 
     # move to the actual left side
     # env.vis.clear_visualizations(["0", "0a", "1", "1a", "c", "reaction", "tmptbest", "residualmag"])
+    if args.home:
+        return
 
     run_poke(env, args.seed)
     env.vis.clear_visualizations()
@@ -217,4 +219,5 @@ if __name__ == "__main__":
     parser.add_argument('--name', default="", help='additional name for the experiment (concatenated with method)')
     task_map = {level.name.lower(): level for level in poke_real_nonros.Levels}
     parser.add_argument('--task', default="mustard", choices=task_map.keys(), help='what task to run')
+    parser.add_argument('--home', action='store_true', help="take robot to home position instead of running a poke")
     main(parser.parse_args())
