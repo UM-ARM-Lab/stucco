@@ -173,7 +173,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     # combine hue and styles in the legend
     handles, labels = res.get_legend_handles_labels()
     next_title_index = labels.index('name')
-    style_dict = {label: (handle.get_linestyle(), handle.get_marker(), handle._dashSeq)
+    style_dict = {label: (handle.get_linestyle(), handle.get_marker(), None)
                   for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
 
     for handle, label in zip(handles[1:next_title_index], labels[1:next_title_index]):
