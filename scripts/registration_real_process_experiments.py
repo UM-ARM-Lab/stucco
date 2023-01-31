@@ -269,9 +269,11 @@ def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDra
     plausible_set = torch.load(filename)
     last_poke = max(plausible_set.keys())
     plausible_transforms = plausible_set[last_poke]
+    ns = "plausible_pose"
+    vis.clear_visualization_after(ns, 0)
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
-        env.obj_factory.draw_mesh(vis, "plausible_pose", pose, (0.5, 0.5, 0, 0.5), object_id=i)
+        env.obj_factory.draw_mesh(vis, ns, pose, (0.5, 0.5, 0, 0.5), object_id=i)
 
 
 def main(args):

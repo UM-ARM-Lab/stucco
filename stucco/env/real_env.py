@@ -17,6 +17,7 @@ from stucco import cfg
 from stucco.env.env import Visualizer
 import logging
 from pytorch_kinematics.transforms import quaternion_to_matrix, matrix_to_quaternion, xyzw_to_wxyz, wxyz_to_xyzw
+from arm_pytorch_utilities import tensor_utils
 
 from stucco.env.pybullet_env import DebugDrawer
 
@@ -369,11 +370,11 @@ class DebugRvizDrawer(Visualizer):
         pos, rot = pose
         h1 = torch.eye(4, dtype=torch.float)
         h1[:3, 3] = torch.tensor(pos, dtype=h1.dtype)
-        h1[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(torch.tensor(rot, dtype=h1.dtype)))
+        h1[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(tensor_utils.ensure_tensor(h1.device, h1.dtype, rot)))
 
         h2 = torch.eye(4, dtype=h1.dtype)
         h2[:3, 3] = torch.tensor(vis_frame_pos, dtype=h1.dtype)
-        h2[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(torch.tensor(vis_frame_rot, dtype=h1.dtype)))
+        h2[:3, :3] = quaternion_to_matrix(xyzw_to_wxyz(tensor_utils.ensure_tensor(h1.device, h1.dtype, vis_frame_rot)))
 
         h = h1 @ h2
         pos = h[:3, 3]
