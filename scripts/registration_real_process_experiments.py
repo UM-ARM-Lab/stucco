@@ -6,6 +6,8 @@ import argparse
 import pybullet as p
 import pytorch_kinematics as tf
 from mmint_camera_utils.camera_utils.camera_utils import project_depth_image
+from mmint_camera_utils.ros_utils.utils import pose_to_matrix
+from mmint_camera_utils.camera_utils.point_cloud_utils import tr_pointcloud
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
@@ -147,11 +149,16 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
 
 def free_points_from_camera(depth, K):
     # project depth image that's been "diluted" to be brought closer to the camera into points
+    if len(depth.shape) > 2:
+        depth = depth[..., 0]
+    # for backward compatibility, in case it's given in mm
+    if np.any(depth > 1000):
+        depth = depth.astype(np.float32) / 1000
     pts_to_set = []
     for level in np.linspace(0.95, 0.4, 20):
         d = depth * level
         pts = project_depth_image(d, K, usvs=None)
-        pts_to_set.append(pts)
+        pts_to_set.append(pts.reshape(-1, 3))
     pts_to_set = np.concatenate(pts_to_set)
     return pts_to_set
 
@@ -200,7 +207,7 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
                         lambda voxel_sdf: (voxel_sdf < surface_thresh) & (voxel_sdf > -surface_thresh))
                     vis.draw_points(f"surface.0", pc_surface, color=(1, 1, 1), scale=0.1)
 
-        cur_seed = seed
+        cur_seed = new_seed
         env = poke_real_nonros.PokeRealNoRosEnv(task, device=device)
         contact_pts = []
         pokes_to_data = {}
@@ -249,9 +256,13 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
         env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
-        # scene = dataset.get_scene_info(i, 1)
-        # pts_to_set = free_points_from_camera(scene['depth'], scene['K'])
-        # env.free_voxels[torch.from_numpy(pts_to_set)] = 1
+        scene = dataset.get_scene_info(i, 1)
+        camera_free_pts_cf = free_points_from_camera(scene['depth'], scene['K'])
+        # transform points from camera frame to world frame
+        w_X_cf = pose_to_matrix(scene['camera_tf'])
+        camera_free_pts = tr_pointcloud(camera_free_pts_cf, w_X_cf[:3, :3], w_X_cf[:3, 3])  # in world frame
+
+        env.free_voxels[torch.from_numpy(camera_free_pts)] = 1
 
         contact = contact_points_from_gripper(bubbles, sample)
         contact_pts += contact
@@ -265,7 +276,13 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         if vis is not None:
             vis.draw_points(f"known.0", pts_free, color=(0, 1, 1), scale=0.1)
             vis.draw_points(f"free.0", f_pts, color=(1, 0, 1), scale=0.2)
+            # vis.draw_points(f"camera_free.0", camera_free_pts, color=(1, 0.5, 1), scale=0.2)
             vis.draw_points(f"contact.0", c_pts, color=(1, 0, 0), scale=0.5)
+            # for the teaser image, isolate the contribution from the camera
+            free_voxels = voxel.VoxelGrid(env.freespace_resolution, env.freespace_ranges)
+            free_voxels[torch.from_numpy(camera_free_pts)] = 1
+            cf_pts, _ = free_voxels.get_known_pos_and_values()
+            vis.draw_points(f"camera_free.0", cf_pts, color=(1, 0.5, 1), scale=0.2)
 
     # last poke of the last sample
     end_current_poke(None)

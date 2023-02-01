@@ -164,6 +164,7 @@ class SingleSceneCamerasBaseEnv(MedBaseEnv):
                                                     scene_name=self.scene_name, save_path=self.save_path,
                                                     verbose=False, buffered=self.buffered,
                                                     wrap_data=self.wrap_data,
+                                                    save_depth_img_as_numpy=True,
                                                     record_pointcloud=self.record_scene_pcs)
         return scene_camera_parser
 
@@ -177,6 +178,7 @@ class SingleSceneCamerasBaseEnv(MedBaseEnv):
         obs = self._get_scene_observation_from_camera_parser(self.scene_camera_parser)
         for k, v in obs.items():
             scene_observation['scene_{}'.format(k)] = v
+        scene_observation['scene_depth_img'].data_params['save_as_numpy'] = True
         if self.wrap_data:
             scene_observation = DictSelfSavedWrapper(scene_observation)
         return scene_observation
@@ -345,7 +347,7 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
         self.return_to_rest(self.robot.arm_group)
 
         self._calibrate_bubbles(open_before_calib=False)
-        self.robot.grasp(0)
+        self.robot.gripper.move(0)
 
         self.last_ee_pos = self._observe_ee(return_z=True)
         self.REST_POS[2] = self.last_ee_pos[-1]
@@ -505,8 +507,11 @@ class PokeBubbleDataset(BubbleDatasetBase):
     def get_scene_info(self, sample_code, camera_idx=1):
         """More expensive bubble information to retrieve when it has relevant common info"""
         task, init_fc, final_fc, ref_fc = self._get_common_info(sample_code)
+        camera_tfs = self._get_tfs(final_fc, task, frame_id=f'camera_{camera_idx}_depth_optical_frame',
+                                   ref_id='med_base')
         sample = {
             'depth': self._load_scene_depth_img(final_fc, task, camera_idx),
-            'K': self._load_scene_camera_info_depth(task, camera_idx, final_fc)['K']
+            'K': self._load_scene_camera_info_depth(task, camera_idx, final_fc)['K'],
+            'camera_tf': camera_tfs[0]
         }
         return sample
