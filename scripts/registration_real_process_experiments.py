@@ -20,6 +20,7 @@ from stucco import serialization
 from stucco.experiments import registration_nopytorch3d
 from stucco.icp import initialization
 from stucco.util import matrix_to_pos_rot
+from stucco import voxel
 
 try:
     import rospy
@@ -120,6 +121,25 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
         # imprint_local_max = -imprint_local_min
         # mask = (imprint_local_max == imprint_filtered) & (imprint_filtered > imprint_threshold)
         # contact = pts[mask]
+
+        # cluster contact into voxels
+        pts_threshold = 50
+        if len(contact) > pts_threshold:
+            # random subsample
+            contact = np.random.permutation(contact)[:pts_threshold]
+
+            # cluster via voxelization
+            # ranges = np.stack((contact.min(axis=0), contact.max(axis=0)))
+            # contact_voxel = voxel.VoxelGrid(0.003, ranges.T)
+            # contact_voxel[torch.tensor(contact)] = 1
+            # contact, _ = contact_voxel.get_known_pos_and_values()
+            # contact = contact.cpu().numpy()
+
+            # k-means cluster
+            # from sklearn.cluster import KMeans
+            # kmeans = KMeans(n_clusters=8, n_init='auto').fit(contact)
+            # contact = kmeans.cluster_centers_
+
         contact_pts.append(contact)
 
     return contact_pts
@@ -229,14 +249,15 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
         env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
-        scene = dataset.get_scene_info(i, 1)
-        pts_to_set = free_points_from_camera(scene['depth'], scene['K'])
-        env.free_voxels[torch.from_numpy(pts_to_set)] = 1
+        # scene = dataset.get_scene_info(i, 1)
+        # pts_to_set = free_points_from_camera(scene['depth'], scene['K'])
+        # env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
         contact = contact_points_from_gripper(bubbles, sample)
         contact_pts += contact
 
         c_pts = np.concatenate(contact_pts)
+
         f_pts, _ = env.free_voxels.get_known_pos_and_values()
         logger.info(f"Poke {poke} with {len(c_pts)} contact points {len(f_pts)} free points")
         pokes_to_data[poke] = {'free': f_pts, 'contact': c_pts}
