@@ -397,6 +397,8 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                                                                        obj_factory=self.env.obj_factory)
 
     def hook_before_first_poke(self, seed):
+        self.plausible_set = {}
+        self.plausible_set_all = {}
         super(GeneratePlausibleSetRunner, self).hook_before_first_poke(seed)
         with rand.SavedRNG():
             rand.seed(0)
