@@ -46,7 +46,10 @@ class MedialConstraintCost(RegistrationCost):
         self._pts_world_orig = model_surface_points_world_frame
         self._pts_world = None
         self._pts_obj = None
-        self._ball_c_world_orig = self.medial_balls[:, MedialBall.X: MedialBall.Z + 1]
+        if len(self.medial_balls) > 0:
+            self._ball_c_world_orig = self.medial_balls[:, MedialBall.X: MedialBall.Z + 1]
+        else:
+            self._ball_c_world_orig = None
         self._ball_c_world = None
         self._ball_c_obj = None
 
@@ -66,7 +69,8 @@ class MedialConstraintCost(RegistrationCost):
         if self.B is None or self.B != R.shape[0]:
             self.B = R.shape[0]
             self._pts_world = self._pts_world_orig.repeat(self.B, 1, 1)
-            self._ball_c_world = self._ball_c_world_orig.repeat(self.B, 1, 1)
+            if self._ball_c_world is not None:
+                self._ball_c_world = self._ball_c_world_orig.repeat(self.B, 1, 1)
 
         # sdf is evaluated in object frame; we're given points in world frame
         # transform the points via the given similarity transformation parameters, then evaluate their occupancy
@@ -75,7 +79,7 @@ class MedialConstraintCost(RegistrationCost):
 
         loss = torch.zeros(self.B, device=self._pts_world_orig.device, dtype=self._pts_world_orig.dtype)
 
-        if self.scale_medial_ball_penetration != 0:
+        if self.scale_medial_ball_penetration != 0 and self._ball_c_world is not None:
             d, _ = self.sdf(self._ball_c_obj)
             self._penetration = self.medial_balls[:, MedialBall.R] - d
             # non-violating so have 0 cost
@@ -98,7 +102,8 @@ class MedialConstraintCost(RegistrationCost):
         tt = (-Rt @ T.reshape(-1, 3, 1)).squeeze(-1)
 
         self._pts_obj = apply_similarity_transform(self._pts_world, Rt, tt, s)
-        self._ball_c_obj = apply_similarity_transform(self._ball_c_world, Rt, tt, s)
+        if self._ball_c_world is not None:
+            self._ball_c_obj = apply_similarity_transform(self._ball_c_world, Rt, tt, s)
 
     def visualize(self, R, T, s):
         if not self.debug or self.vis is None:
