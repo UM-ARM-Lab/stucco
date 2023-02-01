@@ -375,7 +375,7 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
 
     def _stop_push(self):
         imprint_threshold = 0.004
-        imprint_num_threshold = 5
+        imprint_num_threshold = 6
         for parser in [self.camera_parser_right, self.camera_parser_left]:
             imprint = self._get_imprint(parser)
             violating = imprint > imprint_threshold
@@ -500,4 +500,13 @@ class PokeBubbleDataset(BubbleDatasetBase):
             sample[camera][f"pts_world"] = pts_world
             # can use despite it being points
             sample[camera][f"pts_world_filtered"] = process_bubble_img(pts_world)
+        return sample
+
+    def get_scene_info(self, sample_code, camera_idx=1):
+        """More expensive bubble information to retrieve when it has relevant common info"""
+        task, init_fc, final_fc, ref_fc = self._get_common_info(sample_code)
+        sample = {
+            'depth': self._load_scene_depth_img(final_fc, task, camera_idx),
+            'K': self._load_scene_camera_info_depth(task, camera_idx, final_fc)['K']
+        }
         return sample

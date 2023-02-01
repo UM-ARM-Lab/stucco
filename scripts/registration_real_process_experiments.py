@@ -5,6 +5,7 @@ import argparse
 
 import pybullet as p
 import pytorch_kinematics as tf
+from mmint_camera_utils.camera_utils.camera_utils import project_depth_image
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
@@ -124,6 +125,17 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
     return contact_pts
 
 
+def free_points_from_camera(depth, K):
+    # project depth image that's been "diluted" to be brought closer to the camera into points
+    pts_to_set = []
+    for level in np.linspace(0.95, 0.4, 20):
+        d = depth * level
+        pts = project_depth_image(d, K, usvs=None)
+        pts_to_set.append(pts)
+    pts_to_set = np.concatenate(pts_to_set)
+    return pts_to_set
+
+
 def export_pc_to_register(point_cloud_file: str, pokes_to_data):
     os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
     with open(point_cloud_file, 'w') as f:
@@ -215,6 +227,10 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         bubbles = dataset.get_bubble_info(i)
         # complete the gripper from the points since there are gaps in between
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
+        env.free_voxels[torch.from_numpy(pts_to_set)] = 1
+
+        scene = dataset.get_scene_info(i, 1)
+        pts_to_set = free_points_from_camera(scene['depth'], scene['K'])
         env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
         contact = contact_points_from_gripper(bubbles, sample)
