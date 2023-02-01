@@ -8,6 +8,7 @@ import pytorch_kinematics as tf
 from mmint_camera_utils.camera_utils.camera_utils import project_depth_image
 from mmint_camera_utils.ros_utils.utils import pose_to_matrix
 from mmint_camera_utils.camera_utils.point_cloud_utils import tr_pointcloud
+from arm_pytorch_utilities import rand
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
@@ -186,9 +187,10 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
     cur_seed = None
     cur_poke = None
     contact_pts = []
+    ee_pos = []
 
     def end_current_trajectory(new_seed):
-        nonlocal cur_seed, env, contact_pts, pokes_to_data
+        nonlocal cur_seed, env, contact_pts, pokes_to_data, ee_pos
         logger.info(f"{task.name} finished seed {cur_seed} processing {new_seed}")
         # ending an "empty" first trajectory
         if cur_seed is None:
@@ -197,6 +199,11 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
             point_cloud_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}.txt"
             export_pc_to_register(point_cloud_file, pokes_to_data)
 
+            if vis is not None:
+                ee_pos = np.concatenate(ee_pos)
+                ee_pos = ee_pos[:, :3]
+                diffs = ee_pos[1:] - ee_pos[:-1]
+                vis.draw_2d_lines("trajectory", ee_pos[:-1], diffs, color=(0, 0, 1), size=0.2)
             pc_register_against_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}.txt"
             if not os.path.exists(pc_register_against_file) or clean_cache:
                 surface_thresh = 0.002
@@ -211,6 +218,7 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         env = poke_real_nonros.PokeRealNoRosEnv(task, device=device)
         contact_pts = []
         pokes_to_data = {}
+        ee_pos = []
 
     def end_current_poke(new_poke):
         nonlocal cur_poke
@@ -251,6 +259,7 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         if cur_seed is None or cur_seed != seed:
             end_current_trajectory(seed)
 
+        ee_pos.append(sample['info']['p'])
         bubbles = dataset.get_bubble_info(i)
         # complete the gripper from the points since there are gaps in between
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
@@ -334,9 +343,13 @@ def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDra
     logger.info(f"plotting plausible set for {env.level.name} seed {seed} poke {last_poke}")
     ns = "plausible_pose"
     vis.clear_visualization_after(ns, 0)
+    # show some of them
+    rand.seed(3)
+    selected = np.random.permutation(range(len(plausible_transforms)))
+    plausible_transforms = plausible_transforms[selected[:10]]
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
-        env.obj_factory.draw_mesh(vis, ns, pose, (0., 1.0, 0, 0.4), object_id=i)
+        env.obj_factory.draw_mesh(vis, ns, pose, (0., 0.8, 0.8, 0.2), object_id=i)
 
 
 def plot_estimate_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed, reg_method, poke=-1):
