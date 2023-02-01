@@ -62,7 +62,7 @@ class StubContactSet(ContactSet):
 def predetermined_poke_range():
     # y,z order of poking
     return {
-        poke_real_nonros.Levels.DRILL: ((0.05,), (0.0, 0.05, 0.12)),
+        poke_real_nonros.Levels.DRILL: ((0.05, -0.08), (0.0, 0.05, 0.12)),
         # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
@@ -76,7 +76,7 @@ class RealPokeGetter(EnvGetter):
     @classmethod
     def env(cls, level=poke_real_nonros.Levels.MUSTARD, **kwargs):
         level = poke_real_nonros.Levels(level)
-        env = poke_real.RealPokeEnv(environment_level=level)
+        env = poke_real.RealPokeEnv(environment_level=level, **kwargs)
         return env
 
     @staticmethod
@@ -137,8 +137,8 @@ class PokingControllerWrapper(ControllerBase):
 
         self.ctrl.x_history.append(obs)
 
-        if len(self.ctrl.x_history) > 1:
-            self.ctrl.update(obs, info)
+        # if len(self.ctrl.x_history) > 1:
+        #     self.ctrl.update(obs, info)
 
         if self.ctrl.done():
             self.ctrl.mode = self.ctrl.Mode.DONE

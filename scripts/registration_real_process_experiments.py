@@ -174,12 +174,12 @@ def export_pc_to_register(point_cloud_file: str, pokes_to_data):
             serialization.export_pcs(f, data['free'], data['contact'])
 
 
-def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
+def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDrawer] = None,
                          clean_cache=False):
     p.connect(p.DIRECT)
     device = 'cpu'
     data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)
-    dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False)
+    dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False, load_cache=False)
 
     # values for each trajectory
     pokes_to_data = {}
@@ -247,10 +247,12 @@ def extract_known_points(task, vis: typing.Optional[DebugRvizDrawer] = None,
         cur_poke = new_poke
 
     for i, sample in enumerate(dataset):
-        if poke_real_nonros.Levels[sample['task']] != task:
-            continue
         seed = sample['seed']
         poke = sample['poke']
+        if poke_real_nonros.Levels[sample['task']] != task:
+            continue
+        if seed != to_process_seed:
+            continue
 
         # start of new poke
         if cur_poke is None or cur_poke != poke:
@@ -374,7 +376,7 @@ def main(args):
         vis = DebugRvizDrawer(world_frame='world')
 
     if args.experiment == "extract-known-points":
-        extract_known_points(task, vis=vis)
+        extract_known_points(task, args.seed, vis=vis)
     elif args.experiment == "plot-sdf":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda", clean_cache=True)
 
