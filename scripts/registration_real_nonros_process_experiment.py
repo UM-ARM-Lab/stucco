@@ -33,7 +33,7 @@ import logging
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh], force=True)
 
@@ -526,7 +526,11 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         # since new pokes can only prune previously plausible transforms
         if len(self.plausible_set) > 0:
             trans_chunk = 500
-            Hall = self.plausible_set_all[self.r.pokes - 1]
+            # if we're trimming, then r.pokes would exist, otherwise need to look at previous
+            if self.r.pokes in self.plausible_set_all:
+                Hall = self.plausible_set_all[self.r.pokes]
+            else:
+                Hall = self.plausible_set_all[self.r.pokes - 1]
             for i in range(0, Hall.shape[0], trans_chunk):
                 H = Hall[i:i + trans_chunk]
                 Hinv = H.inverse()
@@ -566,6 +570,26 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         logger.info("saving plausible set to %s", filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         torch.save(self.plausible_set, filename)
+
+
+class TrimPlausibleSetRunner(GeneratePlausibleSetRunner):
+    """Use when a plausible set has already been generated but you lowered the suboptimality threshold
+    instead of generating the whole set, evaluate only the ones in the previous plausible set"""
+
+    def hook_before_first_poke(self, seed):
+        # explicitly skip GeneratePlausibleSet's generation
+        # PokeRunner.hook_before_first_poke(self, seed)
+        super(GeneratePlausibleSetRunner, self).hook_before_first_poke(seed)
+        optimal_pose_file = registration_nopytorch3d.optimal_pose_file(self.env.level, seed,
+                                                                       experiment_name=experiment_name)
+        optimal_pose = serialization.import_pose(optimal_pose_file)
+        self.Hgt = self.r.link_to_current_tf_gt.get_matrix()
+        self.Hgtinv = self.Hgt.inverse()
+        self.set_up_grid_search_around_pose(optimal_pose)
+
+        filename = self.plausible_set_filename(seed)
+        self.plausible_set = torch.load(filename)
+        self.plausible_set_all = {poke: tsfs for poke, tsfs in self.plausible_set.items()}
 
 
 class EvaluatePlausibleSetRunner(PlausibleSetRunner):
@@ -719,6 +743,13 @@ def main(args):
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed} plausible set")
 
+    elif args.experiment == "trim-plausible-set":
+        env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
+        runner = TrimPlausibleSetRunner(env, registration_method,
+                                        ground_truth_initialization=False, read_stored=args.read_stored)
+        for seed in args.seed:
+            runner.run(name=args.name, seed=seed, draw_text=f"seed {seed} plausible set")
+
     elif args.experiment == "evaluate-plausible-diversity":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
         runner = EvaluatePlausibleSetRunner(env, registration_method, read_stored=True)
@@ -740,7 +771,8 @@ if __name__ == "__main__":
     parser.add_argument('--experiment',
                         choices=['build', 'register',
                                  'plot-poke-ce', 'plot-poke-pd',
-                                 'generate-plausible-set', 'evaluate-plausible-diversity',
+                                 'generate-plausible-set', 'trim-plausible-set',
+                                 'evaluate-plausible-diversity',
                                  ],
                         default='generate-plausible-set',
                         help='which experiment to run')
