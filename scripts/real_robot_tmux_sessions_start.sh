@@ -58,7 +58,7 @@ tmux new-window -t $cameras:$window -n 'cartpole_rod_pose_estimation'
 tmux send-keys -t $cameras:$window 'roslaunch bubble_control cartpole_tf_setup.launch'
 window=4
 tmux new-window -t $cameras:$window -n 'publish_camera_tfs'
-tmux send-keys -t $cameras:$window 'rosrun mmint_camera_utils load_save_camera_tfs.py --load --filename tweezers_camera_sides --rate 1000'
+tmux send-keys -t $cameras:$window 'rosrun mmint_camera_utils load_save_camera_tfs.py --load --filename cabinet_poking --rate 100'
 tmux swap-window -s 4 -t 0
 
 # - Pycharm
