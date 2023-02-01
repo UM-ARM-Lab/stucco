@@ -85,16 +85,22 @@ def contact_points_from_gripper(bubbles, sample, imprint_threshold=0.004):
         imprint = data['imprint_final']
         imprint = imprint[..., 0]
         # first smooth the imprint
-        imprint_filtered = scipy.ndimage.median_filter(imprint, size=5, footprint=None, output=None, mode='reflect',
-                                                       cval=0.0, origin=0)
+        imprint_filtered = scipy.ndimage.uniform_filter(imprint, size=10, output=None, mode='reflect',
+                                                        cval=0.0, origin=0)
+        logger.info(f"{camera} max filtered imprint {imprint_filtered.max()}")
+        # get top percentile
+        above_quantile = np.quantile(imprint_filtered, 0.9)
+        mask = (imprint_filtered > above_quantile) & (imprint_filtered > imprint_threshold)
+        contact = pts[mask]
+
         # find local minima using the gradient
-        img_grad = np.gradient(imprint_filtered)
-        g = np.stack(img_grad, axis=-1)
-        gmag = np.linalg.norm(g, axis=-1)
-        u, v = np.where(gmag == 0)
-        test_imprints = imprint_filtered[u, v]
-        mask = test_imprints > imprint_threshold
-        contact = pts[u[mask], v[mask]]
+        # img_grad = np.gradient(imprint_filtered)
+        # g = np.stack(img_grad, axis=-1)
+        # gmag = np.linalg.norm(g, axis=-1)
+        # u, v = np.where(gmag < np.quantile(gmag, 0.01))
+        # test_imprints = imprint_filtered[u, v]
+        # mask = test_imprints > imprint_threshold
+        # contact = pts[u[mask], v[mask]]
 
         # num_test_points = 200
         # test_u = np.random.randint(0, imprint_filtered.shape[0], num_test_points)
@@ -235,7 +241,10 @@ def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizD
     approx_pose_file = registration_nopytorch3d.approximate_pose_file(env.level, experiment_name=experiment_name)
     if os.path.exists(approx_pose_file):
         pose = serialization.import_pose(approx_pose_file)
-        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
+        rot = tf.xyzw_to_wxyz(torch.tensor(pose[1]))
+        euler = tf.matrix_to_euler_angles(tf.quaternion_to_matrix(rot), "ZYX")
+        logger.info(f"{pose[0]} {euler}")
+        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (1, 1, 1, 0.5), object_id=0)
 
     while True:
         try:
@@ -249,7 +258,7 @@ def set_approximate_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizD
             logger.info(pose)
         except:
             break
-        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (0, 0, 0, 0.5), object_id=0)
+        env.obj_factory.draw_mesh(vis, "hand_placed_obj", pose, (1, 1, 1, 0.5), object_id=0)
 
     # rotation saved as xyzw
     serialization.export_pose(approx_pose_file, pose)
