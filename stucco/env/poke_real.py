@@ -4,13 +4,18 @@ import rospy
 import ros_numpy
 from threading import Lock
 
+from scipy.ndimage import uniform_filter
 import numpy as np
 # for converting strings to dictionary
 from numpy import array
 from torch import tensor
+
+from arc_utilities.listener import Listener
+from mmint_camera_utils.camera_utils.camera_parsers import RealSenseCameraParser
+from mmint_camera_utils.recording_utils.data_recording_wrappers import DictSelfSavedWrapper
 from mmint_camera_utils.ros_utils.utils import pose_to_matrix
 
-from bubble_utils.bubble_envs import BubbleBaseEnv
+from bubble_utils.bubble_envs import BubbleBaseEnv, MedBaseEnv
 from pytorch_kinematics import transforms as tf
 
 from geometry_msgs.msg import Pose
@@ -19,6 +24,7 @@ import logging
 import torch
 
 from arm_pytorch_utilities import tensor_utils
+from sensor_msgs.msg import Image
 from stucco import cfg
 from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector
@@ -31,6 +37,7 @@ from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
 from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points, project_depth_image
 from bubble_utils.bubble_datasets.base_datasets.bubble_dataset_base import BubbleDatasetBase
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
+from mmint_camera_utils.recording_utils.recording_utils import process_image
 
 import gym.spaces
 
@@ -118,7 +125,7 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
             if pt_candidate is not None:
                 pts.append(pt_candidate)
 
-        if pts[0] is None:
+        if pts is None or len(pts) == 0 or pts[0] is None:
             pts = None
         else:
             pts = torch.stack(pts)
@@ -134,7 +141,60 @@ class ContactDetectorPokeRealArmBubble(ContactDetector):
         return pts, dx
 
 
-class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
+class SingleSceneCamerasBaseEnv(MedBaseEnv):
+    """
+    This environment adds 1 scene camera with ID 1
+    """
+
+    def __init__(self, *args, record_scene_pcs=True, **kwargs):
+        self.record_scene_pcs = record_scene_pcs
+        self.scene_camera_indx = 1
+
+        super().__init__(*args, **kwargs)
+
+        self.scene_camera_parser = self._get_scene_camera_parser(camera_indx=self.scene_camera_indx)
+        self.scene_camera_name = self.scene_camera_parser.camera_name
+
+    @classmethod
+    def get_name(cls):
+        return 'single_scene_cameras'
+
+    def _get_scene_camera_parser(self, camera_indx):
+        scene_camera_parser = RealSenseCameraParser(camera_indx=camera_indx,
+                                                    scene_name=self.scene_name, save_path=self.save_path,
+                                                    verbose=False, buffered=self.buffered,
+                                                    wrap_data=self.wrap_data,
+                                                    record_pointcloud=self.record_scene_pcs)
+        return scene_camera_parser
+
+    def _get_tf_frames(self):
+        scene_camera_frames = self.scene_camera_parser.get_camera_frames()
+        tf_frames = super()._get_tf_frames() + scene_camera_frames
+        return tf_frames
+
+    def _get_scene_observation(self):
+        scene_observation = {}
+        obs = self._get_scene_observation_from_camera_parser(self.scene_camera_parser)
+        for k, v in obs.items():
+            scene_observation['scene_{}'.format(k)] = v
+        if self.wrap_data:
+            scene_observation = DictSelfSavedWrapper(scene_observation)
+        return scene_observation
+
+    def _get_scene(self, ref_frame='med_base'):
+        scene = self.scene_camera_parser.get_point_cloud(ref_frame=ref_frame, return_ref_frame=False)
+        return scene
+
+    def _get_scene_observation_from_camera_parser(self, camera_parser):
+        obs = {}
+        obs['camera_info_color'] = camera_parser.get_camera_info_color()
+        obs['camera_info_depth'] = camera_parser.get_camera_info_depth()
+        obs['color_img'] = camera_parser.get_image_color()
+        obs['depth_img'] = camera_parser.get_image_depth()
+        return obs
+
+
+class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
     nu = 3
     nx = 3
     MAX_FORCE = 30
@@ -172,6 +232,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
     def _get_observation(self):
         obs = {}
         obs.update(self._get_bubble_observation())
+        obs.update(self._get_scene_observation())
         obs['tfs'] = self._get_tfs()
         obs['xyz'] = self._observe_ee(return_z=True)
         obs['seed'] = self.seed
@@ -237,10 +298,20 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         BubbleBaseEnv.__init__(self, scene_name=level.name, save_path=save_path, record_bubble_pcs=True,
                                bubble_left=use_cameras, bubble_right=use_cameras, wrap_data=True)
         RealArmEnv.__init__(self, *args, environment_level=level, vel=vel, **kwargs)
+        SingleSceneCamerasBaseEnv.__init__(self, scene_name=level.name, save_path=save_path, wrap_data=True,
+                                           record_scene_pcs=False)
         # force an orientation; if None, uses the rest orientation
         self.orientation = None
         # prevent saving gigantic arrays to csv
         self.downsample_info = downsample_info
+        # listen for imprints (easier than working with the data directly...)
+        imprint_names = [
+            '/{}/imprint_filtered'.format(self.camera_parser_left.camera_name),
+            '/{}/imprint_filtered'.format(self.camera_parser_right.camera_name)
+        ]
+        self.imprint_listeners = [
+            Listener(topic_name=imprint, topic_type=Image, wait_for_data=False) for imprint in imprint_names
+        ]
 
     def _get_med(self):
         med = BubbleMed(display_goals=False,
@@ -273,7 +344,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         # reset to rest position
         self.return_to_rest(self.robot.arm_group)
 
-        self._calibrate_bubbles()
+        self._calibrate_bubbles(open_before_calib=False)
         self.robot.grasp(0)
 
         self.last_ee_pos = self._observe_ee(return_z=True)
@@ -302,6 +373,26 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
         dz = action[2] * self.MAX_PUSH_DIST
         return dx, dy, dz
 
+    def _stop_push(self):
+        imprint_threshold = 0.004
+        imprint_num_threshold = 5
+        for parser in [self.camera_parser_right, self.camera_parser_left]:
+            imprint = self._get_imprint(parser)
+            violating = imprint > imprint_threshold
+            if violating.sum() >= imprint_num_threshold:
+                return True
+        return False
+
+    def _get_imprint(self, camera_parser):
+        # camera_parser = self.camera_parser_right
+        depth_img = camera_parser.get_image_depth()
+        def_img = process_bubble_img(depth_img)
+        side = camera_parser.camera_name.split('_')[-1]
+        ref_img = process_bubble_img(self.ref_obs[f'bubble_depth_img_{side}'])
+        imprint = ref_img - def_img
+        imprint = filter_depth_map(imprint, 20)
+        return imprint
+
     def _do_action(self, action):
         self._clear_state_before_step()
         action = action['dxyz']
@@ -320,7 +411,7 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
 
             self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
                                                       target_z=self.last_ee_pos[2] + dz,
-                                                      stop_on_force_threshold=15,
+                                                      stop_on_force_threshold=7, stop_callback=self._stop_push,
                                                       blocking=True, step_size=0.025, target_orientation=orientation)
         full_info = self.aggregate_info()
         info = {}
@@ -331,6 +422,12 @@ class RealPokeEnv(BubbleBaseEnv, RealArmEnv):
                 info[key] = value[::self.downsample_info]
 
         return info
+
+
+def filter_depth_map(depth_map, size=10):
+    depth_map = depth_map.squeeze(-1)
+    filtered_depth_map = uniform_filter(depth_map, size=size, mode='reflect')
+    return filtered_depth_map
 
 
 class RealPokeDataSource(EnvDataSource):
