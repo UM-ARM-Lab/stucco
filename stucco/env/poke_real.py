@@ -445,6 +445,10 @@ class RealPokeDataSource(EnvDataSource):
 
 
 class PokeBubbleDataset(BubbleDatasetBase):
+    def __init__(self, *args, **kwargs):
+        self.min_trajectory_index_for_reference = {}
+        super().__init__(*args, **kwargs)
+
     def get_name(self):
         return 'poke_bubble_dataset'
 
@@ -467,6 +471,11 @@ class PokeBubbleDataset(BubbleDatasetBase):
         task, init_fc, final_fc, ref_fc = self._get_common_info(sample_code)
         info = eval(dl_line['Info'])
         seed = int(dl_line['seed_init'])
+        poke = dl_line['TrajectoryIndex']
+        # keeps incrementing so we need to keep track of the minimum trajectory index and take the offset
+        min_ti = self.min_trajectory_index_for_reference.get(ref_fc, 1000000)
+        self.min_trajectory_index_for_reference[ref_fc] = min(poke, min_ti)
+        poke = poke - self.min_trajectory_index_for_reference[ref_fc] + 1
 
         # get z axis of wrist in world frame since we'll need to extend the point clouds along it to generate free space
         pose = self._get_tfs(final_fc, task, frame_id=f'med_kuka_link_ee', ref_id='med_base')[0]
@@ -477,7 +486,7 @@ class PokeBubbleDataset(BubbleDatasetBase):
             'task': task,
             'info': info,
             'seed': seed,
-            'poke': dl_line['TrajectoryIndex'],
+            'poke': poke,
             'wrist_z': z_axis,
         }
         return sample
