@@ -48,10 +48,10 @@ if __name__ == "__main__":
         args.task = task_map.keys()
     for experiment in args.experiment:
         exe = f"{cfg.ROOT_DIR}/scripts/registration_real_process_experiments.py" if experiment in ros_exps else \
-            f"{cfg.ROOT_DIR}/scripts/registration_real_nonros_process_experiments.py"
+            f"{cfg.ROOT_DIR}/scripts/registration_real_nonros_process_experiment.py"
         for registration in args.registration:
             for task in args.task:
-                to_run = ["python", exe, experiment,
+                to_run = ["python", exe, "--experiment", experiment,
                           "--registration", registration, "--task", task, "--seed"] + [str(s) for s in
                                                                                        args.seed] + args.rest
                 if args.no_gui:
