@@ -49,7 +49,7 @@ tmux rename-window -t $cameras:$window 'launch_cameras'
 tmux send-keys -t $cameras:$window 'roslaunch mmint_camera_utils launch_cameras.launch'
 window=1
 tmux new-window -t $cameras:$window -n 'calibrate_cameras'
-tmux send-keys -t $cameras:$window 'roslaunch mmint_camera_utils kuka_general_calibration.launch calibration_key:=drawing_front'
+tmux send-keys -t $cameras:$window 'roslaunch mmint_camera_utils kuka_general_calibration.launch calibration_key:=cabinet_poking_cc'
 window=2
 tmux new-window -t $cameras:$window -n 'tag_detections'
 tmux send-keys -t $cameras:$window 'rosrun mmint_camera_utils camera_tag_detection.py --continuous --tag_ids 10 --rate 20 --time_on_buffer 1000'
