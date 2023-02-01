@@ -33,7 +33,7 @@ import logging
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
-logging.basicConfig(level=logging.INFO,
+logging.basicConfig(level=logging.DEBUG,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh], force=True)
 
@@ -569,7 +569,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         filename = self.plausible_set_filename(seed)
         logger.info("saving plausible set to %s", filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        torch.save(self.plausible_set, filename)
+        torch.save((self.plausible_set, self.plausible_set_all), filename)
 
 
 class TrimPlausibleSetRunner(GeneratePlausibleSetRunner):
@@ -588,8 +588,13 @@ class TrimPlausibleSetRunner(GeneratePlausibleSetRunner):
         self.set_up_grid_search_around_pose(optimal_pose)
 
         filename = self.plausible_set_filename(seed)
-        self.plausible_set = torch.load(filename)
-        self.plausible_set_all = {poke: tsfs for poke, tsfs in self.plausible_set.items()}
+        saved = torch.load(filename)
+        # backward compatibility for when only plausible set was saved
+        if isinstance(saved, tuple):
+            self.plausible_set, self.plausible_set_all = saved
+        else:
+            self.plausible_set = saved
+            self.plausible_set_all = {poke: tsfs for poke, tsfs in self.plausible_set.items()}
 
 
 class EvaluatePlausibleSetRunner(PlausibleSetRunner):
@@ -605,7 +610,13 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         super(EvaluatePlausibleSetRunner, self).hook_before_first_poke(seed)
         # they are different trajectories due to control noise in the real world
         filename = self.plausible_set_filename(seed)
-        self.plausible_set = torch.load(filename)
+        saved = torch.load(filename)
+        # backward compatibility for when only plausible set was saved
+        if isinstance(saved, tuple):
+            self.plausible_set, _ = saved
+        else:
+            self.plausible_set = saved
+
         self.cache = self.cache.drop_duplicates(subset=self.KEY_COLUMNS, keep='last')
 
     def hook_after_poke(self, name, seed):
