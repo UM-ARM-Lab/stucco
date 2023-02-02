@@ -340,15 +340,18 @@ def plot_optimal_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDraw
 def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed):
     filename = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_plausible_set_{seed}.pkl"
     plausible_set = torch.load(filename)
+    if isinstance(plausible_set, tuple):
+        plausible_set, _ = plausible_set
     last_poke = max(plausible_set.keys())
     plausible_transforms = plausible_set[last_poke]
-    logger.info(f"plotting plausible set for {env.level.name} seed {seed} poke {last_poke}")
+    logger.info(
+        f"plotting plausible set for {env.level.name} seed {seed} poke {last_poke} ({len(plausible_transforms)})")
     ns = "plausible_pose"
     vis.clear_visualization_after(ns, 0)
     # show some of them
     rand.seed(3)
     selected = np.random.permutation(range(len(plausible_transforms)))
-    plausible_transforms = plausible_transforms[selected[:10]]
+    plausible_transforms = plausible_transforms[selected[:30]]
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
         env.obj_factory.draw_mesh(vis, ns, pose, (0., 0.8, 0.8, 0.2), object_id=i)
