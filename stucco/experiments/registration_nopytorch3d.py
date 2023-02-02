@@ -228,6 +228,7 @@ def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantil
         df = df[df.batch == 0]
         df = df[df['plausibility_q1.0'].notnull()]
         df = df[df.name == args.name]
+        df = df[df.seed.isin(args.seed)]
         return df
 
     for y in ['plausibility', 'coverage', 'plausible_diversity']:
