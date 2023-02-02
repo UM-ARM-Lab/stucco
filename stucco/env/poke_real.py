@@ -398,6 +398,7 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
     def _do_action(self, action):
         self._clear_state_before_step()
         action = action['dxyz']
+        success = True
         if action is not None:
             action = np.clip(action, *self.get_control_bounds())
             # normalize action such that the input can be within a fixed range
@@ -413,8 +414,14 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
 
             self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
                                                       target_z=self.last_ee_pos[2] + dz,
-                                                      stop_on_force_threshold=10, stop_callback=self._stop_push,
-                                                      blocking=True, step_size=0.025, target_orientation=orientation)
+                                                      stop_on_force_threshold=10,
+                                                      stop_callback=self._stop_push,
+                                                      blocking=True, step_size=0.025,
+                                                      target_orientation=orientation)
+            s = self.robot.cartesian.status
+            if s.reached_joint_limit or s.reached_force_threshold or s.callback_stopped:
+                success = False
+
         full_info = self.aggregate_info()
         info = {}
         for key, value in full_info.items():
@@ -422,6 +429,7 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
                 info[key] = value
             else:
                 info[key] = value[::self.downsample_info]
+        info['success'] = success
 
         return info
 
