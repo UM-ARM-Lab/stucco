@@ -35,7 +35,7 @@ def obj_factory_map(obj_name):
                                 vis_frame_pos=[-0.005, -0.005, 0.015])
     if obj_name == "drill":
         return YCBObjectFactory("drill", "YcbPowerDrill", scale=1,
-                                plausible_suboptimality=0.0006,
+                                plausible_suboptimality=0.001,
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
                                 vis_frame_pos=[-0.002, -0.011, -.06])
     # TODO make sure the clamp is properly scaled with respect to the URDF
