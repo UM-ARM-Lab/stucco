@@ -63,6 +63,7 @@ def predetermined_poke_range():
     # y,z order of poking
     return {
         poke_real_nonros.Levels.DRILL: ((0.05, -0.08), (0.0, 0.05, 0.12)),
+        poke_real_nonros.Levels.DRILL_OPPOSITE: ((0.07, -0.11), (-0.03, 0.05, 0.13)),
         # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
@@ -180,7 +181,7 @@ def run_poke(env: poke_real.RealPokeEnv, seed=0, control_wait=0.):
     y_order = list(y + env.REST_POS[1] for y in y_order)
     z_order = list(z + env.REST_POS[2] for z in z_order)
     ctrl = PokingControllerWrapper(env, env.contact_detector, StubContactSet(), y_order=y_order, z_order=z_order,
-                                   x_rest=env.REST_POS[0], push_forward_count=3)
+                                   x_rest=env.REST_POS[0], push_forward_count=5)
 
     env.recalibrate_static_wrench()
     data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)

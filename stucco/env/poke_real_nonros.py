@@ -13,6 +13,7 @@ class Levels(enum.IntEnum):
     # no clutter environments
     MUSTARD = 0
     DRILL = 4
+    DRILL_OPPOSITE = 5
     # clamp
     CLAMP = 18
 
@@ -21,6 +22,7 @@ task_map = {str(c).split('.')[1]: c for c in Levels}
 level_to_obj_map = {
     Levels.MUSTARD: "mustard",
     Levels.DRILL: "drill",
+    Levels.DRILL_OPPOSITE: "drill",
     Levels.CLAMP: "clamp",
 }
 
@@ -44,11 +46,11 @@ def obj_factory_map(obj_name):
                                 vis_frame_pos=[-0.02, -0.005, -0.0407])
 
 
-default_freespace_range = np.array([[0.7, 0.8], [-0.1, 0.1], [0.39, 0.45]])
 
 
 class PokeRealNoRosEnv:
-    def __init__(self, environment_level=0, device="cpu", freespace_voxel_resolution=0.01, clean_cache=False):
+    def __init__(self, environment_level=0, device="cpu", freespace_voxel_resolution=0.01, sdf_resolution=0.005,
+                 clean_cache=False):
         p.connect(p.DIRECT)
 
         self.level = Levels(environment_level)
@@ -59,7 +61,7 @@ class PokeRealNoRosEnv:
         # known cabinet workspace, can discard queries outside it
         self.freespace_ranges = np.array([[0.7, 1.1],
                                           [-0.2, 0.2],
-                                          [0.33, 0.65]])
+                                          [0.31, 0.6]])
 
         self.free_voxels = None
         self.reset()
@@ -78,9 +80,9 @@ class PokeRealNoRosEnv:
                                                                self.freespace_ranges,
                                                                dtype=self.dtype, device=self.device)
         buffer = 0
-        interior_pts = (all_pts[:, 0] > bc[0][buffer]) & (all_pts[:, 0] < bc[0][-buffer-1]) & \
-                       (all_pts[:, 1] > bc[1][buffer]) & (all_pts[:, 1] < bc[1][-buffer-1]) & \
-                       (all_pts[:, 2] > bc[2][buffer]) & (all_pts[:, 2] < bc[2][-buffer-1])
+        interior_pts = (all_pts[:, 0] > bc[0][buffer]) & (all_pts[:, 0] < bc[0][-buffer - 1]) & \
+                       (all_pts[:, 1] > bc[1][buffer]) & (all_pts[:, 1] < bc[1][-buffer - 1]) & \
+                       (all_pts[:, 2] > bc[2][buffer]) & (all_pts[:, 2] < bc[2][-buffer - 1])
         boundary_pts = all_pts[~interior_pts]
         self.free_voxels[boundary_pts] = 1
 

@@ -413,7 +413,7 @@ class RealPokeEnv(BubbleBaseEnv, SingleSceneCamerasBaseEnv, RealArmEnv):
 
             self.robot.move_delta_cartesian_impedance(self.ACTIVE_MOVING_ARM, dx=dx, dy=dy,
                                                       target_z=self.last_ee_pos[2] + dz,
-                                                      stop_on_force_threshold=7, stop_callback=self._stop_push,
+                                                      stop_on_force_threshold=10, stop_callback=self._stop_push,
                                                       blocking=True, step_size=0.025, target_orientation=orientation)
         full_info = self.aggregate_info()
         info = {}
