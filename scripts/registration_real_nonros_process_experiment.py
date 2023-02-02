@@ -393,7 +393,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
         self.volumetric_cost = icp_costs.DiscreteNondifferentiableCost(self.env.free_voxels, empty_sdf,
                                                                        self.env.target_sdf,
-                                                                       cmax=1000, vis=None,
+                                                                       cmax=100000, vis=None,
                                                                        obj_factory=self.env.obj_factory)
 
     def hook_before_first_poke(self, seed):

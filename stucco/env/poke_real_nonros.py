@@ -33,7 +33,7 @@ def obj_factory_map(obj_name):
                                 vis_frame_pos=[-0.005, -0.005, 0.015])
     if obj_name == "drill":
         return YCBObjectFactory("drill", "YcbPowerDrill", scale=1,
-                                plausible_suboptimality=0.001,
+                                plausible_suboptimality=0.0006,
                                 vis_frame_rot=p.getQuaternionFromEuler([0, 0, -0.6]),
                                 vis_frame_pos=[-0.002, -0.011, -.06])
     # TODO make sure the clamp is properly scaled with respect to the URDF
@@ -73,5 +73,16 @@ class PokeRealNoRosEnv:
 
     def reset(self):
         self.free_voxels = voxel.VoxelGrid(self.freespace_resolution, self.freespace_ranges, device=self.device)
+        # fill boundaries of the box
+        bc, all_pts = voxel.get_coordinates_and_points_in_grid(self.freespace_resolution,
+                                                               self.freespace_ranges,
+                                                               dtype=self.dtype, device=self.device)
+        buffer = 0
+        interior_pts = (all_pts[:, 0] > bc[0][buffer]) & (all_pts[:, 0] < bc[0][-buffer-1]) & \
+                       (all_pts[:, 1] > bc[1][buffer]) & (all_pts[:, 1] < bc[1][-buffer-1]) & \
+                       (all_pts[:, 2] > bc[2][buffer]) & (all_pts[:, 2] < bc[2][-buffer-1])
+        boundary_pts = all_pts[~interior_pts]
+        self.free_voxels[boundary_pts] = 1
+
         # self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
         #                                             device=self.device)
