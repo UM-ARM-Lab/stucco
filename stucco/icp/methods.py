@@ -578,7 +578,7 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         bins = 40
         logger.info("QD position std %f bins %s", pos_total_std, bins)
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
-                iterations=100, num_emitters=1, bins=bins,
+                iterations=500, num_emitters=1, bins=bins,
                 ranges=ranges, **method_specific_kwargs, **kwargs)
 
         if debug:
