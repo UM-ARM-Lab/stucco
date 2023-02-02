@@ -64,6 +64,7 @@ def predetermined_poke_range():
     return {
         poke_real_nonros.Levels.DRILL: ((0.05, -0.08), (0.0, 0.05, 0.12)),
         poke_real_nonros.Levels.DRILL_OPPOSITE: ((0.07, -0.11), (-0.03, 0.05, 0.13)),
+        poke_real_nonros.Levels.MUSTARD: ((0.0, 0.05), (-0.02, 0.04, 0.13)),
         # poke_real.Levels.DRILL: ((0, 0.1, 0.2), (-0.05, 0.0, 0.05)),
         # poke_real.Levels.CLAMP: ((0, 0.18, -0.2), (0.05, 0.08, 0.15, 0.25)),
     }
@@ -148,7 +149,7 @@ class PokingControllerWrapper(ControllerBase):
             # push along +x
             u[0] = 1.
             self.ctrl.push_i += 1
-            if self.ctrl.push_i >= self.ctrl.push_forward_count or np.linalg.norm(
+            if not info['success'] or self.ctrl.push_i >= self.ctrl.push_forward_count or np.linalg.norm(
                     info['reaction']) > self.force_threshold:
                 # directly go to next target rather than return backward
                 assert isinstance(self.env, RealPokeEnv)
