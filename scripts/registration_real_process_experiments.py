@@ -337,6 +337,12 @@ def plot_optimal_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDraw
     env.obj_factory.draw_mesh(vis, "optimal_pose", pose, (0., 0.5, 0.5, 0.5), object_id=0)
 
 
+def randomly_downsample(seq, seed, num=10):
+    rand.seed(seed)
+    selected = np.random.permutation(range(len(seq)))
+    seq = seq[selected[:num]]
+    return seq
+
 def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed):
     filename = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_plausible_set_{seed}.pkl"
     plausible_set = torch.load(filename)
@@ -349,9 +355,7 @@ def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDra
     ns = "plausible_pose"
     vis.clear_visualization_after(ns, 0)
     # show some of them
-    rand.seed(3)
-    selected = np.random.permutation(range(len(plausible_transforms)))
-    plausible_transforms = plausible_transforms[selected[:30]]
+    plausible_transforms = randomly_downsample(plausible_transforms, 3)
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
         env.obj_factory.draw_mesh(vis, ns, pose, (0., 0.8, 0.8, 0.2), object_id=i)
@@ -364,6 +368,7 @@ def plot_estimate_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDraw
     logger.info(f"plotting estimate set for {reg_method.name} on {env.level.name} seed {seed} poke {poke}")
     ns = "estimate_set"
     vis.clear_visualization_after(ns, 0)
+    estimate_set = randomly_downsample(estimate_set, 10, num=5)
     for i, T in enumerate(estimate_set):
         pose = matrix_to_pos_rot(T)
         env.obj_factory.draw_mesh(vis, ns, pose, (0., .0, 0.8, 0.1), object_id=i)
