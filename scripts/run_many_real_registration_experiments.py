@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='Run many real registration poking 
 ros_exps = ['extract-known-points', 'plot-sdf', 'set-approximate-pose', 'plot-optimal-pose',
             'plot-plausible-set', 'plot-estimate-set']
 nonros_exps = ['build', 'register', 'plot-poke-ce', 'plot-poke-pd', 'generate-plausible-set',
-               'evaluate-plausible-diversity']
+               'trim-plausible-set', 'evaluate-plausible-diversity']
 parser.add_argument('--experiment', choices=ros_exps + nonros_exps, default=['register'], nargs='+',
                     help='which experiment to run')
 registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
