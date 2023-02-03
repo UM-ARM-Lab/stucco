@@ -114,13 +114,15 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
     input("finished")
 
 
-def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='chamfer_err',
+def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='points', y='chamfer_err',
+                     hue="method",
+                     style="name",
                      key_columns=("method", "name", "seed", "points", "batch"),
                      keep_lowest_y_quantile=0.5,
                      keep_lowest_y_wrt=None,
                      fmt='box',
                      save_path=None, show=True,
-                     legend=True,
+                     legend=True, x_starts_at_0=False,
                      leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     df = pd.read_pickle(fullname)
@@ -145,12 +147,15 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     df.loc[df["method"].str.contains("CVO"), "name"] = "freespace baseline"
     df.loc[df["method"].str.contains("MEDIAL_CONSTRAINT"), "name"] = "freespace baseline"
 
-    method_to_name = df.set_index("method")["name"].to_dict()
+    method_to_name = df.set_index(hue)[style].to_dict()
     # order the methods should be shown
     full_method_order = [
         "VOLUMETRIC_CMAMEGA",
         "VOLUMETRIC_CMAME",
         "VOLUMETRIC_SVGD",
+        # sometimes labelled as this
+        "CMAMEGA",
+        "CMAME",
         # vanilla method
         "VOLUMETRIC",
         # variants of our method
@@ -166,42 +171,49 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         "MEDIAL_CONSTRAINT",
         "CVO",
     ]
-    method_to_hue = {
-        "VOLUMETRIC": "#6CB0D6",
-        # variants of our method
-        "VOLUMETRIC_ICP_INIT": "blue",
-        "VOLUMETRIC_NO_FREESPACE": "blue",
-        "VOLUMETRIC_LIMITED_REINIT": "blue",
-        "VOLUMETRIC_LIMITED_REINIT_FULL": "blue",
-        # variants with non-SGD optimization
-        "VOLUMETRIC_CMAES": "blue",
-        "VOLUMETRIC_CMAME": "#089099",
-        "VOLUMETRIC_SVGD": "green",
-        "VOLUMETRIC_CMAMEGA": "#045275",
-        # baselines
-        "ICP": "#dc3977",
-        "ICP_REVERSE": "black",
-        "CVO": "black",
-        "MEDIAL_CONSTRAINT": "#7c1d6f",
-    }
+    # method_to_hue = {
+    #     "VOLUMETRIC": "#6CB0D6",
+    #     # variants of our method
+    #     "VOLUMETRIC_ICP_INIT": "blue",
+    #     "VOLUMETRIC_NO_FREESPACE": "blue",
+    #     "VOLUMETRIC_LIMITED_REINIT": "blue",
+    #     "VOLUMETRIC_LIMITED_REINIT_FULL": "blue",
+    #     # variants with non-SGD optimization
+    #     "VOLUMETRIC_CMAES": "blue",
+    #     "VOLUMETRIC_CMAME": "#089099",
+    #     "VOLUMETRIC_SVGD": "green",
+    #     "VOLUMETRIC_CMAMEGA": "#045275",
+    #     # baselines
+    #     "ICP": "#dc3977",
+    #     "ICP_REVERSE": "black",
+    #     "CVO": "black",
+    #     "MEDIAL_CONSTRAINT": "#7c1d6f",
+    # }
     # order the categories should be shown
     methods_order = [m for m in full_method_order if m in method_to_name]
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     category_order = [m for m in full_category_order if m in method_to_name.values()]
-    colors = [method_to_hue[method] for method in methods_order]
+    # colors = [method_to_hue[method] for method in methods_order]
     fig = plt.figure()
     if fmt == 'scatter':
-        res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
+        res = sns.scatterplot(data=df, x=x, y=y, hue=hue, style=style, alpha=0.5)
     elif fmt == 'line':
-        res = sns.lineplot(data=df, x=x, y=y, hue='method',
-                           style='name',  # palette=colors,
-                           estimator=np.median if plot_median else np.mean,
-                           hue_order=methods_order,
-                           style_order=category_order,
-                           errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95)
-                           )
+        if len(category_order) > 1:
+            res = sns.lineplot(data=df, x=x, y=y, hue=hue,
+                               style=style,  # palette=colors,
+                               estimator=np.median if plot_median else np.mean,
+                               hue_order=methods_order,
+                               style_order=category_order,
+                               errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95)
+                               )
+        else:
+            res = sns.lineplot(data=df, x=x, y=y, hue=hue,
+                               estimator=np.median if plot_median else np.mean,
+                               hue_order=methods_order,
+                               errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95)
+                               )
     elif fmt == 'box':
-        res = sns.boxplot(data=df, x=x, y=y, hue='method',
+        res = sns.boxplot(data=df, x=x, y=y, hue=hue,
                           hue_order=methods_order,
                           )
     else:
@@ -210,11 +222,16 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
         res.set(yscale='log')
     else:
         res.set(ylim=(0, None))
+    if logx:
+        res.set(xscale='log')
+    else:
+        if x_starts_at_0:
+            res.set(xlim=(0, None))
 
-    if fmt == 'line':
+    if fmt == 'line' and len(category_order) > 1:
         # combine hue and styles in the legend
         handles, labels = res.get_legend_handles_labels()
-        next_title_index = labels.index('name')
+        next_title_index = labels.index(style)
         style_dict = {label: (handle.get_linestyle(), handle.get_marker(), None)
                       for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
 
@@ -233,7 +250,7 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
     if y == "plausible_diversity_q1.0":
         res.set_ylabel("Plausible Diversity (mm$^2$)")
     if x == "poke":
-        res.set_xlabel("Poke number")
+        res.set_xlabel("Probe number")
 
     if legend:
         # change to our method name
@@ -300,3 +317,16 @@ def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantil
                          save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.png"),
                          show=not args.no_gui,
                          plot_median=True, x='poke', y=f'{y}_q{quantile}', **kwargs)
+
+
+def plot_qd_exploration(args, level, key_columns, res_file, x="iterations", y="qd_score", **kwargs):
+    # what method was used to initialize the archive
+    def filter(df):
+        df = df[df.method.str.lower() == args.registration]
+        df = df[df.seed.isin(args.seed)]
+        df = df[df.poke == args.poke]
+        return df
+
+    plot_icp_results(filter=filter, icp_res_file=res_file, key_columns=key_columns, logy=y != "qd_score", logx=False,
+                     keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="line", x_starts_at_0=True,
+                     save_path=os.path.join(cfg.DATA_DIR, f"img/{y}_{level.name.lower()}_{args.poke}.png"), **kwargs)
