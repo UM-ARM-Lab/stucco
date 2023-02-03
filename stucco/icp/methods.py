@@ -569,8 +569,8 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         else:
             QD = quality_diversity.CMAMEGA
         # extract translation measure
-        centroid = centroid[:QD.MEASURE_DIM]
-        pos_std = pos_std[:QD.MEASURE_DIM]
+        centroid = centroid
+        pos_std = pos_std
         ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
         # bins_per_std = 40
         # bins = pos_std / pos_total_std * bins_per_std

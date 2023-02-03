@@ -56,6 +56,7 @@ class QDOptimization:
 
         while not self.is_done():
             cost = self.step()
+
             losses.append(cost)
 
         R, T, rmse = self.process_final_results(None, losses)
@@ -173,11 +174,10 @@ class CMAME(QDOptimization):
             centroid = centroid[:2]
             centroid += self.m * np.array(self.poke_offset_direction)
             self.ranges = np.array((centroid - self.m, centroid + self.m)).T
-        assert len(self.ranges) == self.MEASURE_DIM
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
-        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges,
+        self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges[:self.MEASURE_DIM],
                                    seed=np.random.randint(0, 10000), qd_score_offset=self.qd_score_offset)
         emitters = [
             EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B,
@@ -255,22 +255,25 @@ class CMAME(QDOptimization):
 
 
 class CMAMEGA(CMAME):
-    def __init__(self, *args, lr=0.01, **kwargs):
+    def __init__(self, *args, lr=0.05, **kwargs):
         self.lr = lr
         super(CMAMEGA, self).__init__(*args, **kwargs)
 
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
         self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, seed=np.random.randint(0, 10000),
-                                   ranges=self.ranges, qd_score_offset=self.qd_score_offset)
+                                   ranges=self.ranges[:self.MEASURE_DIM], qd_score_offset=self.qd_score_offset)
         emitters = []
         # emitters += [
         #     EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
         #     range(self.num_emitters)
         # ]
+        # rb = 3
+        # rot_bounds = np.array([[-rb, rb] for _ in range(6)])
+        # bounds = np.concatenate((self.ranges, rot_bounds))
         emitters += [
             GradientArborescenceEmitter(self.archive, x0=x[i], sigma0=self.sigma, lr=self.lr, grad_opt="adam",
-                                        selection_rule="mu", bounds=None, batch_size=self.B - 1,
+                                        selection_rule="filter", bounds=None, batch_size=self.B - 1,
                                         seed=np.random.randint(0, 10000)) for i in
             range(self.num_emitters)
         ]
@@ -291,7 +294,7 @@ class CMAMEGA(CMAME):
         x.requires_grad = True
         cost = self._f(x)
         cost.sum().backward()
-        objective_grad = -x.grad.cpu().numpy()
+        objective_grad = -(x.grad.cpu().numpy())
         objective = -cost.detach().cpu().numpy()
         objective_grad = objective_grad.reshape(x.shape[0], 1, -1)
         measure_grad = self._measure_grad(x)
