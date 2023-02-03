@@ -788,6 +788,7 @@ class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
             # bins = np.round(bins).astype(int)
             bins = 40
             logger.info("QD position std %f bins %s", pos_total_std, bins)
+            quality_diversity.previous_solutions = None
             op = QD(self.volumetric_cost, A.repeat(self.B, 1, 1), init_transform=given_init_pose,
                     iterations=500, num_emitters=1, bins=bins,
                     ranges=ranges)
