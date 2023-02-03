@@ -1114,7 +1114,8 @@ def main(args):
         plot_poke_chamfer_err(args, level, obj_factory, PokeRunner.KEY_COLUMNS)
 
     elif args.experiment == "plot-poke-pd":
-        plot_poke_plausible_diversity(args, level, obj_factory, PokeRunner.KEY_COLUMNS, quantile=1.0)
+        plot_poke_plausible_diversity(args, level, obj_factory, PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='line',
+                                      legend=False)
 
     elif args.experiment == "debug":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")

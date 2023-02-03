@@ -775,8 +775,8 @@ def main(args):
 
     elif args.experiment == "plot-poke-pd":
         registration_nopytorch3d.plot_poke_plausible_diversity(args, level, obj_factory,
-                                                               PokeRunner.KEY_COLUMNS, quantile=1.0,
-                                                               db_prefix=db_prefix)
+                                                               PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='box',
+                                                               db_prefix=db_prefix, legend=False)
 
 
 if __name__ == "__main__":

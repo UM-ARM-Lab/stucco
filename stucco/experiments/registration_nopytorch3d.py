@@ -6,6 +6,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 from stucco import cfg, sdf, voxel
 from stucco.sdf import sample_mesh_points
@@ -117,8 +118,9 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
                      key_columns=("method", "name", "seed", "points", "batch"),
                      keep_lowest_y_quantile=0.5,
                      keep_lowest_y_wrt=None,
-                     scatter=False,
+                     fmt='box',
                      save_path=None, show=True,
+                     legend=True,
                      leave_out_percentile=50, icp_res_file='icp_comparison.pkl'):
     fullname = os.path.join(cfg.DATA_DIR, icp_res_file)
     df = pd.read_pickle(fullname)
@@ -145,50 +147,110 @@ def plot_icp_results(filter=None, logy=True, plot_median=True, x='points', y='ch
 
     method_to_name = df.set_index("method")["name"].to_dict()
     # order the methods should be shown
-    full_method_order = ["VOLUMETRIC",
-                         # variants of our method
-                         "VOLUMETRIC_ICP_INIT", "VOLUMETRIC_NO_FREESPACE",
-                         "VOLUMETRIC_LIMITED_REINIT", "VOLUMETRIC_LIMITED_REINIT_FULL",
-                         # variants with non-SGD optimization
-                         "VOLUMETRIC_CMAES", "VOLUMETRIC_CMAME", "VOLUMETRIC_SVGD", "VOLUMETRIC_CMAMEGA",
-                         # baselines
-                         "ICP", "ICP_REVERSE", "CVO", "MEDIAL_CONSTRAINT"]
+    full_method_order = [
+        "VOLUMETRIC_CMAMEGA",
+        "VOLUMETRIC_CMAME",
+        "VOLUMETRIC_SVGD",
+        # vanilla method
+        "VOLUMETRIC",
+        # variants of our method
+        "VOLUMETRIC_ICP_INIT",
+        "VOLUMETRIC_NO_FREESPACE",
+        "VOLUMETRIC_LIMITED_REINIT",
+        "VOLUMETRIC_LIMITED_REINIT_FULL",
+        # variants with non-SGD optimization
+        "VOLUMETRIC_CMAES",
+        # baselines
+        "ICP",
+        # "ICP_REVERSE",
+        "MEDIAL_CONSTRAINT",
+        "CVO",
+    ]
+    method_to_hue = {
+        "VOLUMETRIC": "#6CB0D6",
+        # variants of our method
+        "VOLUMETRIC_ICP_INIT": "blue",
+        "VOLUMETRIC_NO_FREESPACE": "blue",
+        "VOLUMETRIC_LIMITED_REINIT": "blue",
+        "VOLUMETRIC_LIMITED_REINIT_FULL": "blue",
+        # variants with non-SGD optimization
+        "VOLUMETRIC_CMAES": "blue",
+        "VOLUMETRIC_CMAME": "#089099",
+        "VOLUMETRIC_SVGD": "green",
+        "VOLUMETRIC_CMAMEGA": "#045275",
+        # baselines
+        "ICP": "#dc3977",
+        "ICP_REVERSE": "black",
+        "CVO": "black",
+        "MEDIAL_CONSTRAINT": "#7c1d6f",
+    }
     # order the categories should be shown
     methods_order = [m for m in full_method_order if m in method_to_name]
     full_category_order = ["ours", "non-freespace baseline", "freespace baseline"]
     category_order = [m for m in full_category_order if m in method_to_name.values()]
+    colors = [method_to_hue[method] for method in methods_order]
     fig = plt.figure()
-    if scatter:
+    if fmt == 'scatter':
         res = sns.scatterplot(data=df, x=x, y=y, hue='method', style='name', alpha=0.5)
-    else:
-        res = sns.lineplot(data=df, x=x, y=y, hue='method', style='name',
+    elif fmt == 'line':
+        res = sns.lineplot(data=df, x=x, y=y, hue='method',
+                           style='name',  # palette=colors,
                            estimator=np.median if plot_median else np.mean,
-                           hue_order=methods_order, style_order=category_order,
-                           errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95))
+                           hue_order=methods_order,
+                           style_order=category_order,
+                           errorbar=("pi", 100 - leave_out_percentile) if plot_median else ("ci", 95)
+                           )
+    elif fmt == 'box':
+        res = sns.boxplot(data=df, x=x, y=y, hue='method',
+                          hue_order=methods_order,
+                          )
+    else:
+        raise RuntimeError(f"Unrecognized plot format {fmt}")
     if logy:
         res.set(yscale='log')
     else:
         res.set(ylim=(0, None))
 
-    # combine hue and styles in the legend
-    handles, labels = res.get_legend_handles_labels()
-    next_title_index = labels.index('name')
-    style_dict = {label: (handle.get_linestyle(), handle.get_marker(), None)
-                  for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
+    if fmt == 'line':
+        # combine hue and styles in the legend
+        handles, labels = res.get_legend_handles_labels()
+        next_title_index = labels.index('name')
+        style_dict = {label: (handle.get_linestyle(), handle.get_marker(), None)
+                      for handle, label in zip(handles[next_title_index:], labels[next_title_index:])}
 
-    for handle, label in zip(handles[1:next_title_index], labels[1:next_title_index]):
-        handle.set_linestyle(style_dict[method_to_name[label]][0])
-        handle.set_marker(style_dict[method_to_name[label]][1])
-        dashes = style_dict[method_to_name[label]][2]
-        if dashes is not None:
-            handle.set_dashes(dashes)
+        for handle, label in zip(handles[1:next_title_index], labels[1:next_title_index]):
+            handle.set_linestyle(style_dict[method_to_name[label]][0])
+            handle.set_marker(style_dict[method_to_name[label]][1])
+            dashes = style_dict[method_to_name[label]][2]
+            if dashes is not None:
+                handle.set_dashes(dashes)
+        # create a legend only using the items
+        res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
 
-    # create a legend only using the items
-    res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
+    # pokes are integer
+    res.xaxis.set_major_locator(MaxNLocator(integer=True))
+    # prettify ylabels for certain values
+    if y == "plausible_diversity_q1.0":
+        res.set_ylabel("Plausible Diversity (mm$^2$)")
+    if x == "poke":
+        res.set_xlabel("Poke number")
+
+    if legend:
+        # change to our method name
+        for text in res.get_legend().get_texts():
+            # text.set_text(text.get_text().replace("VOLUMETRIC", "CHSEL"))
+            t = text.get_text()
+            t = t.replace("VOLUMETRIC", r"$\tilde{C}(\mathcal{X},\mathbf{T})$")
+            if "_" in t and "MEDIAL" not in t:
+                t = t.replace("_", " with ")
+            text.set_text(t)
+    else:
+        res.get_legend().remove()
+
     # plt.tight_layout()
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path)
+        plt.savefig(f"{save_path[:-4]}_{fmt}{save_path[-4:]}")
         plt.close(fig)
     if show:
         plt.show()
@@ -216,7 +278,7 @@ def plot_poke_chamfer_err(args, level, obj_factory, key_columns, db_prefix="poki
                      plot_median=False, x='poke', y='chamfer_err')
 
 
-def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantile=1.0, db_prefix="poking"):
+def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantile=1.0, db_prefix="poking", **kwargs):
     """Choose quantile from {0.50, 0.75, 1.0} which indicate when the plausible diversity is computed from a
     subset of the estimated transform set that includes only transforms above a certain quantile of loss"""
 
@@ -237,4 +299,4 @@ def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantil
                          logy=True, keep_lowest_y_quantile=1.0,
                          save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.png"),
                          show=not args.no_gui,
-                         plot_median=True, x='poke', y=f'{y}_q{quantile}')
+                         plot_median=True, x='poke', y=f'{y}_q{quantile}', **kwargs)
