@@ -328,5 +328,5 @@ def plot_qd_exploration(args, level, key_columns, res_file, x="iterations", y="q
         return df
 
     plot_icp_results(filter=filter, icp_res_file=res_file, key_columns=key_columns, logy=y != "qd_score", logx=False,
-                     keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="line", x_starts_at_0=True,
-                     save_path=os.path.join(cfg.DATA_DIR, f"img/{y}_{level.name.lower()}_{args.poke}.png"), **kwargs)
+                     keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="scatter", x_starts_at_0=True,
+                     save_path=os.path.join(cfg.DATA_DIR, f"img/{x}_{y}_{level.name.lower()}_{args.poke}.png"), **kwargs)
