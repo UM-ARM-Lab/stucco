@@ -12,6 +12,7 @@ from stucco.env.poke import YCBObjectFactory
 class Levels(enum.IntEnum):
     # no clutter environments
     MUSTARD = 0
+    MUSTARD_SIDEWAYS = 1
     DRILL = 4
     DRILL_OPPOSITE = 5
     # clamp
@@ -21,6 +22,7 @@ class Levels(enum.IntEnum):
 task_map = {str(c).split('.')[1]: c for c in Levels}
 level_to_obj_map = {
     Levels.MUSTARD: "mustard",
+    Levels.MUSTARD_SIDEWAYS: "mustard",
     Levels.DRILL: "drill",
     Levels.DRILL_OPPOSITE: "drill",
     Levels.CLAMP: "clamp",
@@ -44,8 +46,6 @@ def obj_factory_map(obj_name):
                                 plausible_suboptimality=0.0007,
                                 vis_frame_rot=p.getQuaternionFromEuler([0.1, 0, 0]),
                                 vis_frame_pos=[-0.02, -0.005, -0.0407])
-
-
 
 
 class PokeRealNoRosEnv:
@@ -85,6 +85,3 @@ class PokeRealNoRosEnv:
                        (all_pts[:, 2] > bc[2][buffer]) & (all_pts[:, 2] < bc[2][-buffer - 1])
         boundary_pts = all_pts[~interior_pts]
         self.free_voxels[boundary_pts] = 1
-
-        # self.free_voxels = voxel.ExpandingVoxelGrid(self.freespace_resolution, default_freespace_range,
-        #                                             device=self.device)
