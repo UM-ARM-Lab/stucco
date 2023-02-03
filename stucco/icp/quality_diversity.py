@@ -146,6 +146,7 @@ class CMAME(QDOptimization):
                  # or form ranges from centroid of contact points and an estimated object length scale and poke offset direction
                  object_length_scale=0.1,
                  poke_offset_direction=(0.5, 0),  # default is forward along x; |offset| < 1 to represent uncertainty
+                 qd_score_offset=-100,  # useful for tracking the archive QD score as monotonically increasing
                  **kwargs):
         if "sigma" not in kwargs:
             kwargs["sigma"] = 1.0
@@ -158,6 +159,7 @@ class CMAME(QDOptimization):
         self.ranges = ranges
         self.m = object_length_scale
         self.poke_offset_direction = poke_offset_direction
+        self.qd_score_offset = qd_score_offset
 
         self.archive = None
         self.i = 0
@@ -176,7 +178,7 @@ class CMAME(QDOptimization):
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
         self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, ranges=self.ranges,
-                                   seed=np.random.randint(0, 10000))
+                                   seed=np.random.randint(0, 10000), qd_score_offset=self.qd_score_offset)
         emitters = [
             EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B,
                                      seed=np.random.randint(0, 10000)) for i in
@@ -260,7 +262,7 @@ class CMAMEGA(CMAME):
     def create_scheduler(self, x, *args, **kwargs):
         self._create_ranges()
         self.archive = GridArchive(solution_dim=x.shape[1], dims=self.bins, seed=np.random.randint(0, 10000),
-                                   ranges=self.ranges)
+                                   ranges=self.ranges, qd_score_offset=self.qd_score_offset)
         emitters = []
         # emitters += [
         #     EvolutionStrategyEmitter(self.archive, x0=x[i], sigma0=self.sigma, batch_size=self.B) for i in
