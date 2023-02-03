@@ -24,16 +24,18 @@ from stucco.experiments import registration_nopytorch3d
 from stucco import serialization
 from stucco import util
 from stucco.icp import initialization
+from pytorch3d.ops.points_alignment import SimilarityTransform
 
 from datetime import datetime
 
+from stucco.icp.methods import init_random_transform_with_given_init
 from stucco.sdf import draw_pose_distribution, sample_mesh_points
 import logging
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S', handlers=[ch, fh], force=True)
 
@@ -719,6 +721,99 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         return dd
 
 
+class QdExplorationSpeedRunner(PokeRunner):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # always read stored with the plausible set evaluation
+        self.read_stored = True
+        self.runs = pd.DataFrame()
+        self.runsfile = os.path.join(cfg.DATA_DIR, "QD_exploration.pkl")
+
+    def hook_before_first_poke(self, seed):
+        super().hook_before_first_poke(seed)
+        # they are different trajectories due to control noise in the real world
+        if os.path.exists(self.runsfile):
+            self.cache = pd.read_pickle(self.dbname)
+
+    def hook_after_poke(self, name, seed):
+        self.register_transforms_with_points(seed)
+        # has at least one contact segment
+        if self.r.best_segment_idx is None:
+            return
+        self.evaluate_registrations()
+        T = self.r.transforms_per_object[self.r.best_segment_idx]
+
+        # TODO initialize CMAME and CMAMEGA with T, then step each manually and monitor the normed QD cost
+        # TT = T.inverse()[:, :3, 3]
+        TT = T[:, :3, 3]
+        rmse = self.r.rmse_per_object[self.r.best_segment_idx]
+        filt = rmse < torch.quantile(rmse, 0.8)
+        pos = TT[filt]
+        pos_std = pos.std(dim=-2).cpu().numpy()
+        centroid = pos.mean(dim=-2).cpu().numpy()
+
+        diff = pos - pos.mean(dim=-2)
+        s = diff.square().sum()
+        pos_total_std = (s / len(pos)).sqrt().cpu().numpy()
+
+        range_pos_sigma = 3
+
+        A = self.r.contact_pts
+        given_init_pose = self.r.best_tsf_guess.inverse()
+        given_init_pose = init_random_transform_with_given_init(A.shape[1], self.B, A.dtype, A.device,
+                                                                given_init_pose=given_init_pose)
+        given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
+                                              given_init_pose[:, :3, 3],
+                                              torch.ones(self.B, device=A.device, dtype=A.dtype))
+
+        for QD in [quality_diversity.CMAME, quality_diversity.CMAMEGA]:
+            # extract translation measure
+            centroid = centroid[:QD.MEASURE_DIM]
+            pos_std = pos_std[:QD.MEASURE_DIM]
+            ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
+            # bins_per_std = 40
+            # bins = pos_std / pos_total_std * bins_per_std
+            # bins = np.round(bins).astype(int)
+            bins = 40
+            logger.info("QD position std %f bins %s", pos_total_std, bins)
+            op = QD(self.volumetric_cost, A.repeat(self.B, 1, 1), init_transform=given_init_pose,
+                    iterations=500, num_emitters=1, bins=bins,
+                    ranges=ranges)
+
+            x = op.get_numpy_x(T[:, :3, :3], TT)
+            op.add_solutions(x)
+            start = timer()
+            elapsed = []
+            iterations = list(range(1000))
+            for i in iterations:
+                cost = op.step()
+                elapsed.append(timer() - start)
+
+            d = {"date": datetime.today(), "method": self.reg_method.name, "level": self.env.level.name,
+                 "name": name,
+                 "seed": seed, "poke": self.r.pokes,
+                 "iterations": iterations,
+                 "elapsed": elapsed,
+                 "qd_method": QD.__name__,
+                 "qd_score": op.qd_scores,
+                 "qd_offset": op.qd_score_offset,
+                 "bins": op.bins[0],
+                 }
+            df = pd.DataFrame(d)
+
+            self.runs = pd.concat([self.runs, df])
+
+        self.runs = self.runs.drop_duplicates(subset=("method", "level", "name", "seed", "poke",
+                                                      "iterations", "qd_method", "bins"), keep='last')
+        self.runs.to_pickle(self.runsfile)
+
+    def hook_after_last_poke(self, seed):
+        pass
+
+    def export_metrics(self, cache, name, seed):
+        pass
+
+
 def main(args):
     level = task_map[args.task]
     registration_method = registration_map[args.registration]
@@ -769,6 +864,12 @@ def main(args):
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
+    elif args.experiment == "compare-qd-exploration":
+        env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
+        runner = QdExplorationSpeedRunner(env, registration_method, read_stored=True)
+        for seed in args.seed:
+            runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
+            
     elif args.experiment == "plot-poke-ce":
         registration_nopytorch3d.plot_poke_chamfer_err(args, level, obj_factory,
                                                        PokeRunner.KEY_COLUMNS, db_prefix=db_prefix)
@@ -776,7 +877,7 @@ def main(args):
     elif args.experiment == "plot-poke-pd":
         registration_nopytorch3d.plot_poke_plausible_diversity(args, level, obj_factory,
                                                                PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='box',
-                                                               db_prefix=db_prefix, legend=False)
+                                                               db_prefix=db_prefix, legend=True)
 
 
 if __name__ == "__main__":
@@ -786,6 +887,8 @@ if __name__ == "__main__":
                                  'plot-poke-ce', 'plot-poke-pd',
                                  'generate-plausible-set', 'trim-plausible-set',
                                  'evaluate-plausible-diversity',
+                                 'compare-qd-exploration',
+                                 'plot-qd-exploration',
                                  ],
                         default='generate-plausible-set',
                         help='which experiment to run')
@@ -809,6 +912,7 @@ if __name__ == "__main__":
                              ' rerunning where possible')
     parser.add_argument('--marginalize', action='store_true',
                         help='average results across configurations for each object for plotting')
+    parser.add_argument('--poke', type=int, default=2, help='poke for some experiments that need it specified')
 
     args = parser.parse_args()
 
