@@ -621,8 +621,6 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         else:
             self.plausible_set = saved
 
-        self.cache = self.cache.drop_duplicates(subset=self.KEY_COLUMNS, keep='last')
-
     def hook_after_poke(self, name, seed):
         if self.r.pokes in self.plausible_set:
             self.register_transforms_with_points(seed)
@@ -635,9 +633,10 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
             self.cache = self.export_metrics(self.cache, name, seed)
 
     def hook_after_last_poke(self, seed):
-        pass
+        self.cache = self.cache.drop_duplicates(subset=PokeRunner.KEY_COLUMNS, keep='last')
 
-    def _do_evaluate_plausible_diversity_on_best_quantile(self, errors_per_batch):
+    @staticmethod
+    def _do_evaluate_plausible_diversity_on_best_quantile(errors_per_batch):
         B, P = errors_per_batch.shape
 
         best_per_sampled = errors_per_batch.min(dim=1)
@@ -648,6 +647,20 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
 
         return bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible
 
+    def _compute_tf_pairwise_error_per_batch(self, T_est, T_p):
+        # effectively can apply one transform then take the inverse using the other one; if they are the same, then
+        # we should end up in the base frame if that T == Tp
+        # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
+        # Iapprox = torch.einsum("bij,pjk->bpik", T, Tp)
+        # the einsum does the multiplication below and is about twice as fast
+        Iapprox = T_est.view(-1, 1, 4, 4) @ T_p.view(1, -1, 4, 4)
+
+        B, P = Iapprox.shape[:2]
+        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
+                                                     self.env.obj_factory, 0)
+        errors_per_batch = errors_per_batch.view(B, P)
+        return errors_per_batch
+
     def evaluate_registrations(self):
         """Responsible for populating to_export"""
         logger.debug(f"err each obj {np.round(self.r.dist_per_est_obj, 4)}")
@@ -657,17 +670,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         Tp = self.plausible_set[self.r.pokes]
         rmse = self.r.rmse_per_object[self.r.best_segment_idx]
 
-        # effectively can apply one transform then take the inverse using the other one; if they are the same, then
-        # we should end up in the base frame if that T == Tp
-        # want pairwise matrix multiplication |T| x |Tp| x 4 x 4 T[0]@Tp[0], T[0]@Tp[1]
-        # Iapprox = torch.einsum("bij,pjk->bpik", T, Tp)
-        # the einsum does the multiplication below and is about twice as fast
-        Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
-
-        B, P = Iapprox.shape[:2]
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
-                                                     self.env.obj_factory, 0)
-        errors_per_batch = errors_per_batch.view(B, P)
+        errors_per_batch = self._compute_tf_pairwise_error_per_batch(T, Tp)
 
         self.plausibility = {}
         self.coverage = {}
@@ -678,7 +681,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
             bp_plausibility, bp_coverage, best_per_sampled, best_per_plausible = self._do_evaluate_plausible_diversity_on_best_quantile(
                 quantile_errors_per_batch)
             logger.info(f"pokes {self.r.pokes} quantile {quantile} BP plausibility {bp_plausibility.item():.0f} "
-                        f"coverage {bp_coverage.item():.0f} against {P} plausible transforms")
+                        f"coverage {bp_coverage.item():.0f} against {errors_per_batch.shape[1]} plausible transforms")
             self.plausibility[quantile] = bp_plausibility
             self.coverage[quantile] = bp_coverage
 
@@ -721,29 +724,34 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         return dd
 
 
-class QdExplorationSpeedRunner(PokeRunner):
-    def __init__(self, *args, **kwargs):
+class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
+    KEY_COLUMNS = ("method", "level", "name", "seed", "poke", "iterations", "qd_method", "bins")
+    runsfile = os.path.join(cfg.DATA_DIR, "QD_exploration.pkl")
+
+    def __init__(self, *args, evaluate_pd_every_iter=25, only_evaluate_poke=None, **kwargs):
         super().__init__(*args, **kwargs)
         # always read stored with the plausible set evaluation
         self.read_stored = True
         self.runs = pd.DataFrame()
-        self.runsfile = os.path.join(cfg.DATA_DIR, "QD_exploration.pkl")
+        self.evaluate_pd_every_iter = evaluate_pd_every_iter
+        self.only_evaluate_poke = only_evaluate_poke
 
     def hook_before_first_poke(self, seed):
         super().hook_before_first_poke(seed)
         # they are different trajectories due to control noise in the real world
         if os.path.exists(self.runsfile):
-            self.cache = pd.read_pickle(self.dbname)
+            self.runs = pd.read_pickle(self.runsfile)
 
     def hook_after_poke(self, name, seed):
         self.register_transforms_with_points(seed)
         # has at least one contact segment
         if self.r.best_segment_idx is None:
             return
-        self.evaluate_registrations()
+        if self.only_evaluate_poke is not None and self.only_evaluate_poke != self.r.pokes:
+            return
+        # self.evaluate_registrations()
         T = self.r.transforms_per_object[self.r.best_segment_idx]
 
-        # TODO initialize CMAME and CMAMEGA with T, then step each manually and monitor the normed QD cost
         # TT = T.inverse()[:, :3, 3]
         TT = T[:, :3, 3]
         rmse = self.r.rmse_per_object[self.r.best_segment_idx]
@@ -766,10 +774,14 @@ class QdExplorationSpeedRunner(PokeRunner):
                                               given_init_pose[:, :3, 3],
                                               torch.ones(self.B, device=A.device, dtype=A.dtype))
 
+        T_init = T
+        TT_init = TT
+        T_p = self.plausible_set[self.r.pokes]
+
         for QD in [quality_diversity.CMAME, quality_diversity.CMAMEGA]:
             # extract translation measure
-            centroid = centroid[:QD.MEASURE_DIM]
-            pos_std = pos_std[:QD.MEASURE_DIM]
+            centroid = centroid
+            pos_std = pos_std
             ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
             # bins_per_std = 40
             # bins = pos_std / pos_total_std * bins_per_std
@@ -780,14 +792,28 @@ class QdExplorationSpeedRunner(PokeRunner):
                     iterations=500, num_emitters=1, bins=bins,
                     ranges=ranges)
 
-            x = op.get_numpy_x(T[:, :3, :3], TT)
+            x = op.get_numpy_x(T_init[:, :3, :3], TT_init)
             op.add_solutions(x)
             start = timer()
             elapsed = []
+            plausible_diversity = []
+            elite_costs = []
             iterations = list(range(1000))
             for i in iterations:
-                cost = op.step()
+                op.step()
                 elapsed.append(timer() - start)
+
+                R, T, rmse = op.process_final_results(None, None)
+                if i % self.evaluate_pd_every_iter == 0:
+                    T_est = torch.eye(4, device=self.device, dtype=self.dtype).repeat(self.B, 1, 1)
+                    T_est[:, :3, :3] = R
+                    T_est[:, :3, 3] = T
+                    epb = self._compute_tf_pairwise_error_per_batch(T_est, T_p)
+                    plausibility, coverage, _, _ = self._do_evaluate_plausible_diversity_on_best_quantile(epb)
+                    plausible_diversity.append((plausibility + coverage).item())
+                else:
+                    plausible_diversity.append(None)
+                elite_costs.append(rmse.mean().item())
 
             d = {"date": datetime.today(), "method": self.reg_method.name, "level": self.env.level.name,
                  "name": name,
@@ -798,13 +824,14 @@ class QdExplorationSpeedRunner(PokeRunner):
                  "qd_score": op.qd_scores,
                  "qd_offset": op.qd_score_offset,
                  "bins": op.bins[0],
+                 "elite_costs": elite_costs,
+                 "plausible_diversity_q1.0": plausible_diversity
                  }
             df = pd.DataFrame(d)
 
             self.runs = pd.concat([self.runs, df])
 
-        self.runs = self.runs.drop_duplicates(subset=("method", "level", "name", "seed", "poke",
-                                                      "iterations", "qd_method", "bins"), keep='last')
+        self.runs = self.runs.drop_duplicates(subset=self.KEY_COLUMNS, keep='last')
         self.runs.to_pickle(self.runsfile)
 
     def hook_after_last_poke(self, seed):
@@ -866,10 +893,10 @@ def main(args):
 
     elif args.experiment == "compare-qd-exploration":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
-        runner = QdExplorationSpeedRunner(env, registration_method, read_stored=True)
+        runner = QdExplorationSpeedRunner(env, registration_method, read_stored=True, only_evaluate_poke=args.poke)
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
-            
+
     elif args.experiment == "plot-poke-ce":
         registration_nopytorch3d.plot_poke_chamfer_err(args, level, obj_factory,
                                                        PokeRunner.KEY_COLUMNS, db_prefix=db_prefix)
@@ -878,6 +905,11 @@ def main(args):
         registration_nopytorch3d.plot_poke_plausible_diversity(args, level, obj_factory,
                                                                PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='box',
                                                                db_prefix=db_prefix, legend=True)
+
+    elif args.experiment == "plot-qd-exploration":
+        for y in ["qd_score", "elite_costs", "plausible_diversity_q1.0"]:
+            registration_nopytorch3d.plot_qd_exploration(args, level, QdExplorationSpeedRunner.KEY_COLUMNS,
+                                                         QdExplorationSpeedRunner.runsfile, x='iterations', y=y)
 
 
 if __name__ == "__main__":
