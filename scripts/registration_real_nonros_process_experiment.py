@@ -728,13 +728,13 @@ class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
     KEY_COLUMNS = ("method", "level", "name", "seed", "poke", "iterations", "qd_method", "bins")
     runsfile = os.path.join(cfg.DATA_DIR, "QD_exploration.pkl")
 
-    def __init__(self, *args, evaluate_pd_every_iter=25, only_evaluate_poke=None, **kwargs):
+    def __init__(self, *args, evaluate_pd_every_iter=25, only_evaluate_pokes=None, **kwargs):
         super().__init__(*args, **kwargs)
         # always read stored with the plausible set evaluation
         self.read_stored = True
         self.runs = pd.DataFrame()
         self.evaluate_pd_every_iter = evaluate_pd_every_iter
-        self.only_evaluate_poke = only_evaluate_poke
+        self.only_evaluate_pokes = only_evaluate_pokes
 
     def hook_before_first_poke(self, seed):
         super().hook_before_first_poke(seed)
@@ -747,7 +747,7 @@ class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
         # has at least one contact segment
         if self.r.best_segment_idx is None:
             return
-        if self.only_evaluate_poke is not None and self.only_evaluate_poke != self.r.pokes:
+        if self.only_evaluate_pokes is not None and self.r.pokes not in self.only_evaluate_pokes:
             return
         # self.evaluate_registrations()
         T = self.r.transforms_per_object[self.r.best_segment_idx]
@@ -779,18 +779,16 @@ class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
         T_p = self.plausible_set[self.r.pokes]
 
         for QD in [quality_diversity.CMAME, quality_diversity.CMAMEGA]:
+            rand.seed(1)
             # extract translation measure
             centroid = centroid
             pos_std = pos_std
             ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
-            # bins_per_std = 40
-            # bins = pos_std / pos_total_std * bins_per_std
-            # bins = np.round(bins).astype(int)
             bins = 40
             logger.info("QD position std %f bins %s", pos_total_std, bins)
             quality_diversity.previous_solutions = None
             op = QD(self.volumetric_cost, A.repeat(self.B, 1, 1), init_transform=given_init_pose,
-                    iterations=500, num_emitters=1, bins=bins,
+                    iterations=500, num_emitters=1, bins=bins,  # sigma=0.1,
                     ranges=ranges)
 
             x = op.get_numpy_x(T_init[:, :3, :3], TT_init)
@@ -806,7 +804,9 @@ class QdExplorationSpeedRunner(EvaluatePlausibleSetRunner):
 
                 R, T, rmse = op.process_final_results(None, None)
                 if i % self.evaluate_pd_every_iter == 0:
-                    T_est = torch.eye(4, device=self.device, dtype=self.dtype).repeat(self.B, 1, 1)
+                    if R.shape[0] != self.B:
+                        logger.warning(f"QD {QD} produced different than expected batch ({self.B}): {R.shape[0]}")
+                    T_est = torch.eye(4, device=self.device, dtype=self.dtype).repeat(R.shape[0], 1, 1)
                     T_est[:, :3, :3] = R
                     T_est[:, :3, 3] = T
                     epb = self._compute_tf_pairwise_error_per_batch(T_est, T_p)
@@ -894,7 +894,7 @@ def main(args):
 
     elif args.experiment == "compare-qd-exploration":
         env = poke_real_nonros.PokeRealNoRosEnv(environment_level=level, device="cuda")
-        runner = QdExplorationSpeedRunner(env, registration_method, read_stored=True, only_evaluate_poke=args.poke)
+        runner = QdExplorationSpeedRunner(env, registration_method, read_stored=True, only_evaluate_pokes=args.poke)
         for seed in args.seed:
             runner.run(name=args.name, seed=seed, draw_text=f"seed {seed}")
 
@@ -905,7 +905,7 @@ def main(args):
     elif args.experiment == "plot-poke-pd":
         registration_nopytorch3d.plot_poke_plausible_diversity(args, level, obj_factory,
                                                                PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='box',
-                                                               db_prefix=db_prefix, legend=True)
+                                                               db_prefix=db_prefix, legend=False)
 
     elif args.experiment == "plot-qd-exploration":
         for y in ["qd_score", "elite_costs", "plausible_diversity_q1.0"]:
@@ -945,7 +945,8 @@ if __name__ == "__main__":
                              ' rerunning where possible')
     parser.add_argument('--marginalize', action='store_true',
                         help='average results across configurations for each object for plotting')
-    parser.add_argument('--poke', type=int, default=2, help='poke for some experiments that need it specified')
+    parser.add_argument('--poke', metavar='N', type=int, nargs='+',
+                        default=[2], help='poke for some experiments that need it specified')
 
     args = parser.parse_args()
 
