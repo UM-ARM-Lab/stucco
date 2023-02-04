@@ -244,13 +244,23 @@ def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='po
         # create a legend only using the items
         res.legend(handles[1:next_title_index], labels[1:next_title_index], title='method', framealpha=0.4)
 
+    if hue == "qd_method":
+        res.get_legend().set_title("QD method")
     # pokes are integer
     res.xaxis.set_major_locator(MaxNLocator(integer=True))
     # prettify ylabels for certain values
-    if y == "plausible_diversity_q1.0":
-        res.set_ylabel("Plausible Diversity (mm$^2$)")
-    if x == "poke":
-        res.set_xlabel("Probe number")
+    pretty_prints = {
+        "plausible_diversity_q1.0": "Plausible Diversity (mm$^2$)",
+        "plausibility_q1.0": "Plausibility (mm$^2$)",
+        "qd_score": "QD Score",
+        "elite_costs": "Lowest $|\hat{\mathcal{T}}_0|$ cell costs",
+        "poke": "Probe number",
+        "iterations": "$n_o$"
+    }
+    if y in pretty_prints:
+        res.set_ylabel(pretty_prints[y])
+    if x in pretty_prints:
+        res.set_xlabel(pretty_prints[x])
 
     if legend:
         # change to our method name
@@ -314,7 +324,7 @@ def plot_poke_plausible_diversity(args, level, obj_factory, key_columns, quantil
         plot_icp_results(filter=filter, icp_res_file=f"{db_prefix}_{obj_factory.name}.pkl",
                          key_columns=key_columns,
                          logy=True, keep_lowest_y_quantile=1.0,
-                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.png"),
+                         save_path=os.path.join(cfg.DATA_DIR, f"img/{level.name.lower()}__{y}.pdf"),
                          show=not args.no_gui,
                          plot_median=True, x='poke', y=f'{y}_q{quantile}', **kwargs)
 
@@ -328,5 +338,6 @@ def plot_qd_exploration(args, level, key_columns, res_file, x="iterations", y="q
         return df
 
     plot_icp_results(filter=filter, icp_res_file=res_file, key_columns=key_columns, logy=y != "qd_score", logx=False,
-                     keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="scatter", x_starts_at_0=True,
-                     save_path=os.path.join(cfg.DATA_DIR, f"img/{x}_{y}_{level.name.lower()}_{args.poke}.png"), **kwargs)
+                     keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="line", x_starts_at_0=True,
+                     save_path=os.path.join(cfg.DATA_DIR, f"img/{x}_{y}_{level.name.lower()}_{args.poke}.png"),
+                     **kwargs)
