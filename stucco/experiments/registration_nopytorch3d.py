@@ -114,6 +114,17 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
     input("finished")
 
 
+# prettify labels for certain values
+pretty_prints = {
+    "plausible_diversity_q1.0": "Plausible Diversity (mm$^2$)",
+    "plausibility_q1.0": "Plausibility (mm$^2$)",
+    "qd_score": "QD Score",
+    "elite_costs": "Lowest $|\hat{\mathcal{T}}_0|$ cell costs",
+    "poke": "Probe number",
+    "iterations": "$n_o$"
+}
+
+
 def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='points', y='chamfer_err',
                      hue="method",
                      style="name",
@@ -248,15 +259,7 @@ def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='po
         res.get_legend().set_title("QD method")
     # pokes are integer
     res.xaxis.set_major_locator(MaxNLocator(integer=True))
-    # prettify ylabels for certain values
-    pretty_prints = {
-        "plausible_diversity_q1.0": "Plausible Diversity (mm$^2$)",
-        "plausibility_q1.0": "Plausibility (mm$^2$)",
-        "qd_score": "QD Score",
-        "elite_costs": "Lowest $|\hat{\mathcal{T}}_0|$ cell costs",
-        "poke": "Probe number",
-        "iterations": "$n_o$"
-    }
+
     if y in pretty_prints:
         res.set_ylabel(pretty_prints[y])
     if x in pretty_prints:
@@ -334,10 +337,37 @@ def plot_qd_exploration(args, level, key_columns, res_file, x="iterations", y="q
     def filter(df):
         df = df[df.method.str.lower() == args.registration]
         df = df[df.seed.isin(args.seed)]
-        df = df[df.poke == args.poke]
+        df = df[df.poke.isin(args.poke)]
         return df
 
+    save_path = os.path.join(cfg.DATA_DIR, f"img/{x}_{y}_{level.name.lower()}_{args.poke}.pdf")
     plot_icp_results(filter=filter, icp_res_file=res_file, key_columns=key_columns, logy=y != "qd_score", logx=False,
                      keep_lowest_y_quantile=1.0, x=x, y=y, hue="qd_method", fmt="line", x_starts_at_0=True,
-                     save_path=os.path.join(cfg.DATA_DIR, f"img/{x}_{y}_{level.name.lower()}_{args.poke}.png"),
-                     **kwargs)
+                     save_path=save_path, **kwargs)
+
+    # additionally plot the ratio per seed
+    fullname = os.path.join(cfg.DATA_DIR, res_file)
+    df = filter(pd.read_pickle(fullname))
+    # for each seed, batch, and poke, get the ratio of CMAMEGA / CMAME value
+    d1 = df[df.qd_method == "CMAME"]
+    d2 = df[df.qd_method == "CMAMEGA"]
+    keys = ["method", "seed", "poke", "iterations"]
+    d3 = d2.merge(d1, on=keys, how='left')
+    # x is CMAMEGA values
+    d3[y] = d3[f"{y}_x"] / d3[f"{y}_y"]
+
+    fig = plt.figure()
+    res = sns.lineplot(data=d3, x=x, y=y, estimator=np.median, errorbar=("pi", 50), )
+    if y in pretty_prints:
+        res.set_ylabel(pretty_prints[y])
+    if x in pretty_prints:
+        res.set_xlabel(pretty_prints[x])
+    # draw the equality line
+    res.axhline(1.0, ls='--', c='grey', alpha=0.5)
+
+    res.set(xlim=(0, 975))
+    res.legend(["CMAMEGA / CMAME ratio"])
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(f"{save_path[:-4]}_ratio{save_path[-4:]}")
+    plt.close(fig)
