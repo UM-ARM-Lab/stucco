@@ -397,8 +397,9 @@ class PokeRunner:
                     T, distances, self.elapsed = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
-                elif self.reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
-                    T, distances, self.elapsed = do_medial_constraint_registration(this_pts, self.volumetric_cost.sdf,
+                elif self.reg_method in [icp.ICPMethod.MEDIAL_CONSTRAINT, icp.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
+                    T, distances, self.elapsed = do_medial_constraint_registration(self.reg_method, this_pts,
+                                                                                   self.volumetric_cost.sdf,
                                                                                    self.best_tsf_guess, self.B,
                                                                                    self.env.level,
                                                                                    seed, self.pokes,
@@ -1115,7 +1116,7 @@ def main(args):
 
     elif args.experiment == "plot-poke-pd":
         plot_poke_plausible_diversity(args, level, obj_factory, PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='line',
-                                      legend=False)
+                                      legend=True)
 
     elif args.experiment == "debug":
         env = PokeGetter.env(level=level, mode=p.GUI, device="cuda")

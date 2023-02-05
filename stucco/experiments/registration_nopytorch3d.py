@@ -181,6 +181,7 @@ def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='po
         # "ICP_REVERSE",
         "MEDIAL_CONSTRAINT",
         "CVO",
+        "MEDIAL_CONSTRAINT_CMAME",
     ]
     # method_to_hue = {
     #     "VOLUMETRIC": "#6CB0D6",

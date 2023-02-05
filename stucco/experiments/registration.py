@@ -103,7 +103,7 @@ def do_registration(model_points_world_frame, model_points_register, best_tsf_gu
 ball_ids = []
 
 
-def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectFrameSDF, best_tsf_guess, B,
+def do_medial_constraint_registration(reg_method, model_points_world_frame, obj_sdf: ObjectFrameSDF, best_tsf_guess, B,
                                       level, seed: int, pokes: int, vis=None, obj_factory=None,
                                       plot_balls=False, experiment_name="poke"):
     global ball_ids
@@ -165,11 +165,13 @@ def do_medial_constraint_registration(model_points_world_frame, obj_sdf: ObjectF
                                                   # maxiter=100, sigma=0.0001,
                                                   verbose=False,
                                                   save_loss_plot=False,
+                                                  cmame=reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT_CMAME,
                                                   vis=vis, obj_factory=obj_factory)
     T = T.inverse()
     end = timer()
     elapsed += end - start
     # approximate extra time for generating the mesh from the swept freespace
     elapsed += 1
+
     logger.info(f"medial constraint RMSE: {distances.mean().item()}")
     return T, distances, elapsed

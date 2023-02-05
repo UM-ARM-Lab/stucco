@@ -176,8 +176,9 @@ class PokeRunner:
                     self.r.pokes, experiment_name=experiment_name)
                 T = T.to(device=self.env.device, dtype=self.dtype)
                 distances = distances.to(device=self.env.device, dtype=self.dtype)
-            elif self.reg_method == icp.ICPMethod.MEDIAL_CONSTRAINT:
-                T, distances, self.r.elapsed = registration.do_medial_constraint_registration(self.r.contact_pts,
+            elif self.reg_method in [icp.ICPMethod.MEDIAL_CONSTRAINT, icp.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
+                T, distances, self.r.elapsed = registration.do_medial_constraint_registration(self.reg_method,
+                                                                                              self.r.contact_pts,
                                                                                               self.volumetric_cost.sdf,
                                                                                               self.r.best_tsf_guess,
                                                                                               self.B,

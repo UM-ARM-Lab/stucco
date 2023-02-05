@@ -526,6 +526,24 @@ def icp_pytorch3d_sgd(A, B, given_init_pose=None, batch=30, **kwargs):
 obj_id_map = {}
 
 
+def initialize_qd_archive(T, rmse, range_pos_sigma=3):
+    TT = T[:, :3, 3]
+    filt = rmse < torch.quantile(rmse, 0.8)
+    pos = TT[filt]
+    pos_std = pos.std(dim=-2).cpu().numpy()
+    centroid = pos.mean(dim=-2).cpu().numpy()
+
+    # diff = pos - pos.mean(dim=-2)
+    # s = diff.square().sum()
+    # pos_total_std = (s / len(pos)).sqrt().cpu().numpy()
+
+    # extract translation measure
+    centroid = centroid
+    pos_std = pos_std
+    ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
+    return ranges
+
+
 def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimization=volumetric.Optimization.SGD,
                    debug=False, range_pos_sigma=3, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
@@ -551,35 +569,21 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
         # create range based on SGD results (where are good fits)
         # filter outliers out based on RMSE
         T = _our_res_to_world_to_link_matrix(res_init)
-        # TT = T.inverse()[:, :3, 3]
-        TT = T[:, :3, 3]
-        rmse = res_init.rmse
-        filt = rmse < torch.quantile(rmse, 0.8)
-        pos = TT[filt]
-        pos_std = pos.std(dim=-2).cpu().numpy()
-        centroid = pos.mean(dim=-2).cpu().numpy()
-
-        diff = pos - pos.mean(dim=-2)
-        s = diff.square().sum()
-        pos_total_std = (s / len(pos)).sqrt().cpu().numpy()
+        archive_range = initialize_qd_archive(T, res_init.rmse, range_pos_sigma=range_pos_sigma)
+        # bins_per_std = 40
+        # bins = pos_std / pos_total_std * bins_per_std
+        # bins = np.round(bins).astype(int)
+        bins = 40
+        logger.info("QD position bins %s %s", bins, archive_range)
 
         method_specific_kwargs = {}
         if optimization == volumetric.Optimization.CMAME:
             QD = quality_diversity.CMAME
         else:
             QD = quality_diversity.CMAMEGA
-        # extract translation measure
-        centroid = centroid
-        pos_std = pos_std
-        ranges = np.array((centroid - pos_std * range_pos_sigma, centroid + pos_std * range_pos_sigma)).T
-        # bins_per_std = 40
-        # bins = pos_std / pos_total_std * bins_per_std
-        # bins = np.round(bins).astype(int)
-        bins = 40
-        logger.info("QD position std %f bins %s", pos_total_std, bins)
         op = QD(volumetric_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                 iterations=500, num_emitters=1, bins=bins,
-                ranges=ranges, **method_specific_kwargs, **kwargs)
+                ranges=archive_range, **method_specific_kwargs, **kwargs)
 
         if debug:
             # visualize archive
@@ -614,7 +618,7 @@ def icp_volumetric(volumetric_cost, A, given_init_pose=None, batch=30, optimizat
 
 
 def icp_medial_constraints(obj_sdf: ObjectFrameSDF, medial_balls, A, given_init_pose=None, batch=30, vis=None,
-                           obj_factory=None, **kwargs):
+                           obj_factory=None, cmame=False, **kwargs):
     given_init_pose = init_random_transform_with_given_init(A.shape[1], batch, A.dtype, A.device,
                                                             given_init_pose=given_init_pose)
     given_init_pose = SimilarityTransform(given_init_pose[:, :3, :3],
@@ -626,6 +630,21 @@ def icp_medial_constraints(obj_sdf: ObjectFrameSDF, medial_balls, A, given_init_
     op = quality_diversity.CMAES(medial_constraint_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
                                  **kwargs)
     res = op.run()
+
+    # do extra QD optimization
+    if cmame:
+        T = _our_res_to_world_to_link_matrix(res)
+        archive_range = initialize_qd_archive(T, res.rmse, range_pos_sigma=3)
+        bins = 40
+        logger.info("QD position bins %s %s", bins, archive_range)
+        op = quality_diversity.CMAME(medial_constraint_cost, A.repeat(batch, 1, 1), init_transform=given_init_pose,
+                                     iterations=500, num_emitters=1, bins=bins,
+                                     ranges=archive_range, **kwargs)
+
+        x = op.get_numpy_x(res.RTs.R, res.RTs.T)
+        op.add_solutions(x)
+        res = op.run()
+
     T = _our_res_to_world_to_link_matrix(res)
     distances = res.rmse
     return T, distances

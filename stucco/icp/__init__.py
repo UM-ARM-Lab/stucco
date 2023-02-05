@@ -23,7 +23,10 @@ class ICPMethod(enum.Enum):
     MEDIAL_CONSTRAINT = 8
     CVO = 12
 
-    NONE = 16
+    # additional experiments
+    MEDIAL_CONSTRAINT_CMAME = 16
+
+    NONE = 17
 
 
 def registration_method_uses_only_contact_points(reg_method: ICPMethod):
