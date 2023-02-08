@@ -63,7 +63,7 @@ def read_offline_output(reg_method, level, seed: int, pokes: int, experiment_nam
             # lower is better
             rmse = float(header[2])
             distances.append(rmse)
-            if len(header) > 3:
+            if len(header) > 3 and header[3] != "None":
                 elapsed = float(header[3])
             i += 5
 
@@ -274,6 +274,8 @@ def plot_icp_results(filter=None, logy=True, logx=False, plot_median=True, x='po
             t = t.replace("VOLUMETRIC", r"$\tilde{C}(\mathcal{X},\mathbf{T})$")
             if "_" in t and "MEDIAL" not in t:
                 t = t.replace("_", " with ")
+            if "CMAMEGA" in t:
+                t += " (CHSEL)"
             text.set_text(t)
     else:
         res.get_legend().remove()
@@ -357,7 +359,7 @@ def plot_qd_exploration(args, level, key_columns, res_file, x="iterations", y="q
     # x is CMAMEGA values
     d3[y] = d3[f"{y}_x"] / d3[f"{y}_y"]
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(5, 3))
     res = sns.lineplot(data=d3, x=x, y=y, estimator=np.median, errorbar=("pi", 50), )
     if y in pretty_prints:
         res.set_ylabel(pretty_prints[y])
