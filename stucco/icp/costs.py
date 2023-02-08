@@ -538,7 +538,7 @@ class DiscreteNondifferentiableCost(RegistrationCost):
     """Flat high cost for any known free space point violations"""
 
     def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
-                 vis=None, cmax=20.,
+                 vis=None, cmax=20., penetration_tolerance=0.01,
                  obj_factory=None):
         """
         :param free_voxels: representation of freespace
@@ -553,6 +553,7 @@ class DiscreteNondifferentiableCost(RegistrationCost):
         self.scale = scale
         self.scale_known_freespace = cmax
         self.scale_known_sdf = 1
+        self.penetration_tolerance = penetration_tolerance
 
         # SDF gives us a volumetric representation of the target object
         self.sdf = obj_sdf
@@ -577,7 +578,7 @@ class DiscreteNondifferentiableCost(RegistrationCost):
             model_frame_free_voxels = self._transform_world_frame_points_to_model_frame(R, T, s,
                                                                                         world_frame_free_voxels)
             # interior points should not be occupied, set some threshold for interior points
-            free_voxels_in_free_space = self.sdf.outside_surface(model_frame_free_voxels, -0.01)
+            free_voxels_in_free_space = self.sdf.outside_surface(model_frame_free_voxels, -self.penetration_tolerance)
             occupied = ~free_voxels_in_free_space
             # interior points will have sdf_value < 0
             known_free_space_loss = occupied
