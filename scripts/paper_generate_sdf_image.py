@@ -22,7 +22,7 @@ coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, query_range
 sdf_val, sdf_grad = s(pts)
 
 # color code them
-norm = matplotlib.colors.Normalize(vmin=sdf_val.min().cpu()-0.2, vmax=sdf_val.max().cpu())
+norm = matplotlib.colors.Normalize(vmin=sdf_val.min().cpu() - 0.2, vmax=sdf_val.max().cpu())
 color_map = matplotlib.cm.ScalarMappable(norm=norm)
 rgb = color_map.to_rgba(sdf_val.reshape(-1).cpu())
 rgb = rgb[:, :-1]
@@ -67,7 +67,7 @@ ax.scatter(xx, zz, color=c)
 dx = kpts.grad[:, 0] * plot_grad_scale
 dz = kpts.grad[:, 2] * plot_grad_scale
 ax.quiver(xx, zz, -dx, -dz, color=c, minlength=1, minshaft=1, scale=0.05)
-ax.text(xx[1] + ox, zz[1] + oz, r"$-\nabla \tilde{c}_f(\tilde{\mathbf{x}})$", color=c)
+ax.text(xx[1] + ox, zz[1] + oz, r"$-\nabla \hat{c}_f(\tilde{\mathbf{x}})$", color=c, fontsize=16)
 
 # choose some known surface points (should they be not just to the surface but to other SDF values?)
 # c = 'deepskyblue'
@@ -87,7 +87,7 @@ ax.scatter(xx.detach(), zz.detach(), color=c)
 dx = kpts.grad[:, 0] * plot_grad_scale
 dz = kpts.grad[:, 2] * plot_grad_scale
 ax.quiver(xx.detach(), zz.detach(), -dx, -dz, color=c, minlength=1, minshaft=1, scale=0.25)
-ax.text(xx[0] + ox, zz[0] + oz, r"$-\nabla \tilde{c}_k(\tilde{\mathbf{x}}, 0)$", color=c)
+ax.text(xx[0] + ox, zz[0] + oz, r"$-\nabla \hat{c}_k(\tilde{\mathbf{x}}, 0)$", color=c, fontsize=16)
 
 # occupied
 c = 'indigo'
@@ -100,11 +100,10 @@ cc = OccupiedLookupCost.apply(s, kpts.unsqueeze(0))
 cc.sum().backward()
 xx = kpts[:, 0].detach()
 zz = kpts[:, 2].detach()
-ox = -0.003
-oz = -0.025
+ox = -0.009
+oz = -0.032
 ax.scatter(xx.detach(), zz.detach(), color=c)
 dx = kpts.grad[:, 0] * plot_grad_scale
 dz = kpts.grad[:, 2] * plot_grad_scale
 ax.quiver(xx.detach(), zz.detach(), -dx, -dz, color=c, minlength=1, minshaft=1, scale=0.25)
-ax.text(xx[0] + ox, zz[0] + oz, r"$-\nabla \tilde{c}_o(\tilde{\mathbf{x}})$", color=c)
-
+ax.text(xx[0] + ox, zz[0] + oz, r"$-\nabla \hat{c}_o(\tilde{\mathbf{x}})$", color=c, fontsize=16)
