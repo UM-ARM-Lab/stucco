@@ -138,7 +138,8 @@ class PokeRunner:
     def create_volumetric_cost(self):
         # placeholder for now; have to be filled manually
         empty_sdf = voxel.VoxelSet(torch.empty(0), torch.empty(0))
-        self.volumetric_cost = icp_costs.VolumetricDirectSDFCost(self.env.free_voxels, empty_sdf, self.env.target_sdf,
+        self.volumetric_cost = icp_costs.VolumetricDirectSDFCost(self.env.free_voxels, empty_sdf,
+                                                                 self.env.target_sdf,
                                                                  scale=1,
                                                                  scale_known_freespace=20,
                                                                  obj_factory=self.env.obj_factory,
@@ -362,12 +363,14 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
     rot_chunk = 1
     pos_chunk = 1000
 
-    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=5000,
+    def __init__(self, *args, gt_position_max_offset=0.2, position_steps=15, N_rot=500,
                  max_plausible_set=1000,  # prevent running out of memory and very long evaluation times
+                 load_optimal_pose=True,
                  **kwargs):
         super(GeneratePlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_suboptimality = self.env.obj_factory.plausible_suboptimality
         self.max_plausibile_set = max_plausible_set
+        self.load_optimal_pose = load_optimal_pose
         # self.gt_position_max_offset = gt_position_max_offset
         # self.position_steps = position_steps
         self.N_rot = N_rot
@@ -413,46 +416,54 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                     f"No approximate pose found for task {self.env.level.name}, expecting pose (xyzw quaternion) in {approx_pose_file}")
             pose = serialization.import_pose(approx_pose_file)
 
-            # search closely around the approximate
-            N_rot = 2000
-            self.set_up_grid_search_around_pose(pose, N_rot=N_rot, max_pos_offset=0.08, perturb_rotation_amount=0.5)
-
-            # one pass to find the optimal pose and save that (also for use in estimating chamfer error)
-            # use the most information from the last poke
-            last_poke = max(self.r.pokes_to_data.keys())
-            self.r.contact_pts = self.r.pokes_to_data[last_poke]['contact']
-            self.env.free_voxels[self.r.pokes_to_data[last_poke]['free']] = 1
-            self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.r.contact_pts,
-                                                             torch.zeros(self.r.contact_pts.shape[0], dtype=self.dtype,
-                                                                         device=self.device))
-
-            min_cost = 100000
-            H_optimal = None
-            for i in range(0, N_rot, self.rot_chunk):
-                for j in range(0, self.N_pos, self.pos_chunk):
-                    H, costs = self.evaluate_transform_chunk(i, j)
-                    min_cost_per_chunk = costs.min()
-                    idx = costs.argmin()
-                    if min_cost_per_chunk < min_cost:
-                        min_cost = min_cost_per_chunk
-                        H_optimal = H[idx]
-
-                logger.debug(f"finding optimal chunked {i}/{N_rot} min cost: {min_cost}")
-
-            self.env.reset()
-
-            optimal_pose = (H_optimal[:3, 3], tf.wxyz_to_xyzw(tf.matrix_to_quaternion(H_optimal[:3, :3])))
-            logger.info(f"optimal H pos: {optimal_pose[0]} rot xyzw: {optimal_pose[1]}")
             optimal_pose_file = registration_nopytorch3d.optimal_pose_file(self.env.level, seed,
                                                                            experiment_name=experiment_name)
-            serialization.export_pose(optimal_pose_file, optimal_pose)
+            if os.path.exists(optimal_pose_file) and self.load_optimal_pose:
+                H_optimal = self.r.link_to_current_tf_gt.get_matrix()[0]
+                optimal_pose = (H_optimal[:3, 3], tf.wxyz_to_xyzw(tf.matrix_to_quaternion(H_optimal[:3, :3])))
+            else:
+
+                # search closely around the approximate
+                N_rot = 2000
+                self.set_up_grid_search_around_pose(pose, N_rot=N_rot, max_pos_offset=0.08,
+                                                    perturb_rotation_amount=0.02)
+
+                # one pass to find the optimal pose and save that (also for use in estimating chamfer error)
+                # use the most information from the last poke
+                last_poke = max(self.r.pokes_to_data.keys())
+                self.r.contact_pts = self.r.pokes_to_data[last_poke]['contact']
+                self.env.free_voxels[self.r.pokes_to_data[last_poke]['free']] = 1
+                self.volumetric_cost.sdf_voxels = voxel.VoxelSet(self.r.contact_pts,
+                                                                 torch.zeros(self.r.contact_pts.shape[0],
+                                                                             dtype=self.dtype,
+                                                                             device=self.device))
+
+                min_cost = 100000
+                H_optimal = None
+                for i in range(0, N_rot, self.rot_chunk):
+                    for j in range(0, self.N_pos, self.pos_chunk):
+                        H, costs = self.evaluate_transform_chunk(i, j)
+                        min_cost_per_chunk = costs.min()
+                        idx = costs.argmin()
+                        if min_cost_per_chunk < min_cost:
+                            min_cost = min_cost_per_chunk
+                            H_optimal = H[idx]
+
+                    logger.debug(f"finding optimal chunked {i}/{N_rot} min cost: {min_cost}")
+
+                self.env.reset()
+
+                optimal_pose = (H_optimal[:3, 3], tf.wxyz_to_xyzw(tf.matrix_to_quaternion(H_optimal[:3, :3])))
+                logger.info(f"optimal H pos: {optimal_pose[0]} rot xyzw: {optimal_pose[1]}")
+                serialization.export_pose(optimal_pose_file, optimal_pose)
 
             self.Hgt = H_optimal.unsqueeze(0)
             self.Hgtinv = self.Hgt.inverse()
 
-            self.set_up_grid_search_around_pose(optimal_pose)
+            self.set_up_grid_search_around_pose(optimal_pose, perturb_rotation_amount=1.2, N_perturbations=200)
 
-    def set_up_grid_search_around_pose(self, pose, N_rot=None, max_pos_offset=None, perturb_rotation_amount=None):
+    def set_up_grid_search_around_pose(self, pose, N_rot=None, max_pos_offset=None, perturb_rotation_amount=None,
+                                       N_perturbations=None, N_upright=100):
         if N_rot is None:
             N_rot = self.N_rot
         if max_pos_offset is None:
@@ -478,16 +489,21 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
         self.N_pos = len(self.pos)
         q_given = tf.xyzw_to_wxyz(tensor_utils.ensure_tensor(self.device, self.dtype, pose[1]))
         R_given = tf.quaternion_to_matrix(q_given)
+        self.rot = torch.eye(3, device=self.device, dtype=self.dtype).repeat(N_rot, 1, 1)
         if perturb_rotation_amount is None:
             # uniformly sample rotations
             self.rot = tf.random_rotations(N_rot, device=self.device)
         else:
             # sample rotation and translation around the previous best solution to reinitialize
-            delta_R = initialization.random_rotation_perturbations(N_rot, dtype=self.dtype, device=self.device,
+            if N_perturbations is None:
+                N_perturbations = N_rot
+            N_perturbations = min(N_perturbations, N_rot - 2)
+            delta_R = initialization.random_rotation_perturbations(N_perturbations, dtype=self.dtype,
+                                                                   device=self.device,
                                                                    radian_sigma=perturb_rotation_amount)
-            self.rot = delta_R @ R_given
+            self.rot[:N_perturbations] = delta_R @ R_given
         # we know most of the ground truth poses are actually upright, so let's add those in as hard coded
-        N_upright = min(100, N_rot - 1)
+        N_upright = min(N_upright, N_rot - 2)
         axis_angle = torch.zeros((N_upright, 3), dtype=self.dtype, device=self.device)
         axis_angle[:, -1] = torch.linspace(0, 2 * np.pi, N_upright)
         self.rot[:N_upright] = tf.axis_angle_to_matrix(axis_angle)
@@ -906,7 +922,7 @@ def main(args):
     elif args.experiment == "plot-poke-pd":
         registration_nopytorch3d.plot_poke_plausible_diversity(args, level, obj_factory,
                                                                PokeRunner.KEY_COLUMNS, quantile=1.0, fmt='box',
-                                                               db_prefix=db_prefix, legend=False)
+                                                               db_prefix=db_prefix, legend=True)
 
     elif args.experiment == "plot-qd-exploration":
         for y in ["qd_score", "elite_costs", "plausible_diversity_q1.0"]:
