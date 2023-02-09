@@ -205,7 +205,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Opti
         m = link_to_world.get_matrix()
         for b in range(B):
             pos, rot = util.matrix_to_pos_rot(m[b])
-            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.5),
+            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.1),
                                   object_id=vis.USE_DEFAULT_ID_FOR_NAME)
             vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"avgerr: {round(errors_per_batch[b].item())}")
 
