@@ -379,7 +379,7 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
                 time.sleep(sequential_delay)
 
         object_id = obj_id_map.get(b, None)
-        object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0, 0.8, 0.2, 0.2), object_id=object_id)
+        object_id = obj_factory.draw_mesh(dd, "icp_distribution", (pos, rot), (0.7, 0.7, 0.7, 0.1), object_id=object_id)
         obj_id_map[b] = object_id
 
 
