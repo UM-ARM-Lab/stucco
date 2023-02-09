@@ -366,8 +366,12 @@ class CachedSDF(ObjectFrameSDF):
 
 
 def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory: ObjectFactory, sequential_delay=None,
-                           show_only_latest=False):
+                           show_only_latest=False, max_shown=15):
     m = link_to_world_tf_matrix
+    if max_shown is not None:
+        idx = np.random.permutation(range(len(m)))
+        m = m[idx[:max_shown]]
+
     for b in range(len(m)):
         mm = m[b]
         pos, rot = util.matrix_to_pos_rot(mm)
