@@ -9,6 +9,7 @@ from mmint_camera_utils.camera_utils.camera_utils import project_depth_image
 from mmint_camera_utils.ros_utils.utils import pose_to_matrix
 from mmint_camera_utils.camera_utils.point_cloud_utils import tr_pointcloud
 from arm_pytorch_utilities import rand
+from window_recorder.recorder import WindowRecorder
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
@@ -179,7 +180,7 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
     p.connect(p.DIRECT)
     device = 'cpu'
     data_path = os.path.join(cfg.DATA_DIR, poke_real.DIR)
-    dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False, load_cache=False)
+    dataset = poke_real.PokeBubbleDataset(data_name=data_path, load_shear=False, load_cache=True)
 
     # values for each trajectory
     pokes_to_data = {}
@@ -188,6 +189,8 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
     cur_poke = None
     contact_pts = []
     ee_pos = []
+    pts_free = None
+    prev_pts_free = None
 
     def end_current_trajectory(new_seed):
         nonlocal cur_seed, env, contact_pts, pokes_to_data, ee_pos
@@ -221,7 +224,7 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
         ee_pos = []
 
     def end_current_poke(new_poke):
-        nonlocal cur_poke
+        nonlocal cur_poke, contact_pts
         free_surface_file = f"{registration_nopytorch3d.saved_traj_dir_base(task, experiment_name=experiment_name)}_{cur_seed}_free_surface.txt"
         # empty poke
         if cur_poke is None:
@@ -244,6 +247,14 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
                 if vis is not None:
                     draw_AABB(vis, env.freespace_ranges)
             serialization.export_free_surface(free_surface_file, env.free_voxels, cur_poke)
+
+        # known contact points from front of gripper for certain tasks and pokes
+        if task == poke_real_nonros.Levels.MUSTARD and cur_poke in (1, 2):
+            num = 5
+            tip = np.argpartition(-prev_pts_free[:, 0], num)[:5]
+            pt = prev_pts_free[tip].mean(axis=0).reshape(1, -1)
+            contact_pts += [pt]
+
         cur_poke = new_poke
 
     for i, sample in enumerate(dataset):
@@ -264,6 +275,7 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
         ee_pos.append(sample['info']['p'])
         bubbles = dataset.get_bubble_info(i)
         # complete the gripper from the points since there are gaps in between
+        prev_pts_free = pts_free
         pts_free, pts_to_set = free_points_from_gripper(bubbles, sample)
         env.free_voxels[torch.from_numpy(pts_to_set)] = 1
 
@@ -286,6 +298,17 @@ def extract_known_points(task, to_process_seed, vis: typing.Optional[DebugRvizDr
 
         if vis is not None:
             vis.draw_points(f"known.0", pts_free, color=(0, 1, 1), scale=0.1)
+
+            # only draw interior free points
+            bc, all_pts = voxel.get_coordinates_and_points_in_grid(env.freespace_resolution,
+                                                                   env.freespace_ranges,
+                                                                   dtype=env.dtype, device=env.device)
+            buffer = 0
+            interior_pts = (f_pts[:, 0] > bc[0][buffer]) & (f_pts[:, 0] < bc[0][-buffer - 1]) & \
+                           (f_pts[:, 1] > bc[1][buffer]) & (f_pts[:, 1] < bc[1][-buffer - 1]) & \
+                           (f_pts[:, 2] > bc[2][buffer]) & (f_pts[:, 2] < bc[2][-buffer - 1])
+            f_pts = f_pts[interior_pts]
+
             vis.draw_points(f"free.0", f_pts, color=(1, 0, 1), scale=0.2)
             # vis.draw_points(f"camera_free.0", camera_free_pts, color=(1, 0.5, 1), scale=0.2)
             vis.draw_points(f"contact.0", c_pts, color=(1, 0, 0), scale=0.5)
@@ -334,7 +357,7 @@ def plot_optimal_pose(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDraw
                                                                    experiment_name=experiment_name)
     pose = serialization.import_pose(optimal_pose_file)
     logger.info(pose)
-    env.obj_factory.draw_mesh(vis, "optimal_pose", pose, (0., 0.5, 0.5, 0.5), object_id=0)
+    env.obj_factory.draw_mesh(vis, "optimal_pose", pose, (0.5, 0.8, 0.9, 0.5), object_id=0)
 
 
 def randomly_downsample(seq, seed, num=10):
@@ -343,35 +366,85 @@ def randomly_downsample(seq, seed, num=10):
     seq = seq[selected[:num]]
     return seq
 
-def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed):
+
+def plot_plausible_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed, poke):
     filename = f"{registration_nopytorch3d.saved_traj_dir_base(env.level, experiment_name=experiment_name)}_plausible_set_{seed}.pkl"
     plausible_set = torch.load(filename)
     if isinstance(plausible_set, tuple):
         plausible_set, _ = plausible_set
-    last_poke = max(plausible_set.keys())
-    plausible_transforms = plausible_set[last_poke]
+    plausible_transforms = plausible_set[poke]
     logger.info(
-        f"plotting plausible set for {env.level.name} seed {seed} poke {last_poke} ({len(plausible_transforms)})")
+        f"plotting plausible set for {env.level.name} seed {seed} poke {poke} ({len(plausible_transforms)})")
     ns = "plausible_pose"
     vis.clear_visualization_after(ns, 0)
     # show some of them
-    plausible_transforms = randomly_downsample(plausible_transforms, 3)
+    plausible_transforms = randomly_downsample(plausible_transforms, 19, num=8)
     for i, T in enumerate(plausible_transforms):
         pose = matrix_to_pos_rot(T)
-        env.obj_factory.draw_mesh(vis, ns, pose, (0., 0.8, 0.8, 0.2), object_id=i)
+        env.obj_factory.draw_mesh(vis, ns, pose, (0., .0, 0.8, 0.1), object_id=i)
 
 
 def plot_estimate_set(env: poke_real_nonros.PokeRealNoRosEnv, vis: DebugRvizDrawer, seed, reg_method, poke=-1):
+    from view_controller_msgs.msg import CameraPlacement
+    from geometry_msgs.msg import Point, Vector3
+    from math import cos, pi, sin
+
     estimate_set, _, _ = registration_nopytorch3d.read_offline_output(reg_method, env.level, seed, poke,
                                                                       experiment_name)
     estimate_set = estimate_set.inverse()
     logger.info(f"plotting estimate set for {reg_method.name} on {env.level.name} seed {seed} poke {poke}")
     ns = "estimate_set"
     vis.clear_visualization_after(ns, 0)
-    estimate_set = randomly_downsample(estimate_set, 10, num=5)
+    estimate_set = randomly_downsample(estimate_set, 64, num=8)
     for i, T in enumerate(estimate_set):
         pose = matrix_to_pos_rot(T)
         env.obj_factory.draw_mesh(vis, ns, pose, (0., .0, 0.8, 0.1), object_id=i)
+
+    pub = rospy.Publisher("/rviz/camera_placement", CameraPlacement, queue_size=1)
+
+    rate_float = 10
+    rate = rospy.Rate(rate_float)
+
+    optimal_pose_file = registration_nopytorch3d.optimal_pose_file(env.level, seed=seed,
+                                                                   experiment_name=experiment_name)
+    pose = serialization.import_pose(optimal_pose_file)
+
+    t_offset = 0
+    t_start = rospy.get_time()
+
+    while not rospy.is_shutdown():
+        t = rospy.get_time()
+        cp = CameraPlacement()
+        r = 0.5
+        period = 12
+
+        # cp.target_frame = "wsg50_finger_left_tip"
+        # cp.target_frame = "obj_frame"
+        dt = t - t_start + t_offset
+
+        p = Point(r * cos(2 * pi * dt / period) + pose[0][0], r * sin(2 * pi * dt / period) + pose[0][1], 0.65)
+        # p = Point(5,5,0)
+        cp.eye.point = p
+        cp.eye.header.frame_id = "world"
+
+        # f = Point(0, 0, 2*cos(2*pi*t/5))
+        f = Point(0.9, 0, 0.34)
+        cp.focus.point = f
+        cp.focus.header.frame_id = "world"
+
+        up = Vector3(0, 0, 1)
+        # up = Vector3(0, sin(2*pi*t/10), cos(2*pi*t/10))
+        cp.up.vector = up
+        cp.up.header.frame_id = "world"
+
+        cp.time_from_start = rospy.Duration(1.0 / rate_float)
+        "Publishing a message!"
+        pub.publish(cp)
+        # print "Sleeping..."
+        rate.sleep()
+        # complete a cycle
+        if dt > period * 1.02:
+            break
 
 
 def main(args):
@@ -393,9 +466,14 @@ def main(args):
             c2 = (pts[:, 1] > 0.) & (pts[:, 1] < 0.2)
             c3 = (pts[:, 2] > -0.2) & (pts[:, 2] < 0.4)
             c = c1 & c2 & c3
-            return pts[c][::2]
+            return pts[c]
 
-        registration_nopytorch3d.plot_sdf(env.obj_factory, env.target_sdf, vis, filter_pts=filter)
+        with WindowRecorder( name_suffix="rviz",
+                            frame_rate=30.0,
+                            save_dir=cfg.VIDEO_DIR):
+            import time
+            time.sleep(6)
+            # registration_nopytorch3d.plot_sdf(env.obj_factory, env.target_sdf, vis, filter_pts=filter)
 
     elif args.experiment == "set-approximate-pose":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
@@ -405,10 +483,13 @@ def main(args):
         plot_optimal_pose(env, vis, args.seed)
     elif args.experiment == "plot-plausible-set":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
-        plot_plausible_set(env, vis, args.seed)
+        plot_plausible_set(env, vis, args.seed, args.poke)
     elif args.experiment == "plot-estimate-set":
         env = poke_real_nonros.PokeRealNoRosEnv(task, device="cuda")
-        plot_estimate_set(env, vis, args.seed, registration_method, args.poke)
+        with WindowRecorder(["video_zoom.rviz* - RViz"], name_suffix="rviz",
+                            frame_rate=30.0,
+                            save_dir=cfg.VIDEO_DIR):
+            plot_estimate_set(env, vis, args.seed, registration_method, args.poke)
 
 
 if __name__ == "__main__":
