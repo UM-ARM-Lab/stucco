@@ -112,13 +112,15 @@ class PybulletEnv(Env):
     LINK_FRAME_POS = [0, 0, 0]
     LINK_FRAME_ORIENTATION = [0, 0, 0, 1]
 
-    def __init__(self, mode=Mode.DIRECT, log_video=False, video_name="", default_debug_height=0, camera_dist=1.5):
+    def __init__(self, mode=Mode.DIRECT, log_video=False, video_name="", default_debug_height=0, camera_dist=1.5,
+                 background=(1, 1, 1)):
         self.log_video = log_video
         self.video_name = video_name
         self.mode = mode
         self.realtime = False
         self.sim_step_s = 1. / 240.
         self.randseed = None
+        self.background = background
 
         # quadratic cost
         self.Q = self.state_cost()
@@ -136,7 +138,11 @@ class PybulletEnv(Env):
         # if the mode we gave is in the dict then use it, otherwise use the given mode value as is
         mode = mode_dict.get(self.mode) or self.mode
 
-        self.physics_client = p.connect(mode)  # p.GUI for GUI or p.DIRECT for non-graphical version
+        options = ''
+        if self.background is not None:
+            brgb = self.background
+            options = f'--background_color_red={brgb[0]} --background_color_green={brgb[1]} --background_color_blue={brgb[2]}'
+        self.physics_client = p.connect(mode, options=options)  # p.GUI for GUI or p.DIRECT for non-graphical version
 
         # disable useless menus on the left and right
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
