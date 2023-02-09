@@ -104,13 +104,13 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
     sdf_val, sdf_grad = s(pts)
 
     # color code them
-    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min().cpu(), vmax=sdf_val.max().cpu())
+    error_norm = matplotlib.colors.Normalize(vmin=sdf_val.min().cpu() * 0.8, vmax=sdf_val.max().cpu() * 0.8)
     color_map = matplotlib.cm.ScalarMappable(norm=error_norm)
     rgb = color_map.to_rgba(sdf_val.reshape(-1).cpu())
     rgb = rgb[:, :-1]
 
-    vis.draw_points("sdf_pt", pts.cpu(), color=rgb, length=0.003, scale=0.15)
-    vis.draw_2d_lines("sdf_n", pts.cpu(), sdf_grad.cpu(), color=rgb, scale=0.005, size=0.1)
+    vis.draw_points("sdf_pt", pts.cpu(), color=rgb, length=0.003, scale=1, cubes=True)
+    # vis.draw_2d_lines("sdf_n", pts.cpu(), sdf_grad.cpu(), color=rgb, scale=0.005, size=0.1)
     input("finished")
 
 
