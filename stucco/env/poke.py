@@ -25,6 +25,9 @@ from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector, ContactSensor
 from stucco import sdf, voxel
 
+from view_animator import animate_view_in_background
+from view_animator.pybullet_animator import PybulletOrbitter
+
 import pytorch_kinematics.transforms as tf
 
 logger = logging.getLogger(__name__)
@@ -227,6 +230,7 @@ class PokeEnv(PybulletEnv):
                  freespace_voxel_resolution=0.025,
                  clean_cache=False,
                  immovable_target=True,
+                 rotating=True,
                  **kwargs):
         """
         :param environment_level: what obstacles should show up in the environment
@@ -246,6 +250,9 @@ class PokeEnv(PybulletEnv):
         :param reaction_force_strategy how to aggregate measured reaction forces over control step into 1 value
         :param kwargs:
         """
+        # rotating
+        self.rotating = rotating
+        self.orbitter = None
         self.level = Levels(environment_level)
         super().__init__(**kwargs, default_debug_height=0.1, camera_dist=camera_dist, video_name=self.level.name)
         self._dd.toggle_3d(True)
@@ -312,6 +319,14 @@ class PokeEnv(PybulletEnv):
         for _ in range(1000):
             p.stepSimulation()
         self.state = self._obs()
+
+    def pause(self):
+        if self.orbitter is not None:
+            self.orbitter.pause()
+
+    def unpause(self):
+        if self.orbitter is not None:
+            self.orbitter.unpause()
 
     def target_object_id(self) -> int:
         return self._target_object_id
@@ -839,6 +854,9 @@ class PokeEnv(PybulletEnv):
         p.changeDynamics(self._target_object_id, -1, mass=0 if immovable else mass)
         self.target_pose = p.getBasePositionAndOrientation(self._target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5), object_id=self.vis.USE_DEFAULT_ID_FOR_NAME)
+        if self.rotating and self.orbitter is None:
+            self.orbitter = PybulletOrbitter(offset_yaw=-80, dist=0.7, target=self.target_pose[0], period=6)
+            animate_view_in_background(self.orbitter)
 
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
         if self.level in [Levels.HAMMER, Levels.HAMMER_FALLEN]:
@@ -969,6 +987,8 @@ class PokeEnv(PybulletEnv):
         self.contact_detector.clear()
         # recreate SDFs so we don't have stale data
         self._create_sdfs()
+        if self.orbitter is not None:
+            self.orbitter.reset()
         return np.copy(self.state)
 
 

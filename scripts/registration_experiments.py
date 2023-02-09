@@ -305,7 +305,7 @@ class PokeRunner:
 
     def __init__(self, env: poke.PokeEnv, tracking_method_name: str, reg_method, B=30,
                  read_stored=False, ground_truth_initialization=False, init_method=initialization.InitMethod.RANDOM,
-                 register_num_points=500, start_at_num_pts=4, eval_num_points=200):
+                 register_num_points=500, start_at_num_pts=4, eval_num_points=200, hide_surroundings=False):
         self.env = env
         self.B = B
         self.dbname = os.path.join(cfg.DATA_DIR, f'poking_{env.obj_factory.name}.pkl')
@@ -315,6 +315,7 @@ class PokeRunner:
         self.read_stored = read_stored
         self.ground_truth_initialization = ground_truth_initialization
         self.init_method = init_method
+        self.hide_surroundings = hide_surroundings
 
         model_name = self.env.target_model_name
         # get a fixed number of model points to evaluate against (this will be independent on points used to register)
@@ -333,7 +334,7 @@ class PokeRunner:
         self.model_points_world_frame_eval = None
         self.model_normals_world_frame_eval = None
 
-        self.draw_pose_distribution_separately = True
+        self.draw_pose_distribution_separately = False
         self.method: typing.Optional[TrackingMethod] = None
         self.ctrl: typing.Optional[Controller] = None
         self.volumetric_cost: typing.Optional[icp_costs.VolumetricCost] = None
@@ -446,6 +447,7 @@ class PokeRunner:
         T = self.transforms_per_object[self.best_segment_idx]
 
         # when evaluating, move the best guess pose far away to improve clarity
+        self.env.pause()
         self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                            object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
         if self.draw_pose_distribution_separately:
@@ -459,6 +461,7 @@ class PokeRunner:
         # evaluate with chamfer distance
         errors_per_batch = evaluate_chamfer_distance(T, self.model_points_world_frame_eval,
                                                      *evaluate_chamfer_dist_extra_args)
+        self.env.unpause()
 
         link_to_current_tf = tf.Transform3d(matrix=T)
         interior_pts = link_to_current_tf.transform_points(self.volumetric_cost.model_interior_points_orig)
@@ -471,8 +474,8 @@ class PokeRunner:
 
         # draw mesh at where our best guess is
         guess_pose = util.matrix_to_pos_rot(best_T)
-        self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
-                           object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
+        # self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
+        #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
 
     def export_metrics(self, cache, name, seed):
         """Responsible for populating to_export and saving to database"""
@@ -512,12 +515,20 @@ class PokeRunner:
             self.cache = pd.DataFrame()
 
         env = self.env
-        if draw_text is None:
-            self.env.draw_user_text(f"{self.reg_method.name}{name} seed {seed}", xy=[-0.3, 1., -0.5])
-        else:
-            self.env.draw_user_text(draw_text, xy=[-0.3, 1., -0.5])
+        # if draw_text is None:
+        #     self.env.draw_user_text(f"{self.reg_method.name}{name} seed {seed}", xy=[-0.3, 1., -0.5])
+        # else:
+        #     self.env.draw_user_text(draw_text, xy=[-0.3, 1., -0.5])
 
         obs = self.env.reset()
+        if self.hide_surroundings:
+            p.removeBody(self.env.planeId)
+            for obj in self.env.objects:
+                if obj != self.env.target_object_id():
+                    p.removeBody(obj)
+            self.env.objects = []
+            self.env.immovable = []
+            self.env.movable = []
         self.create_volumetric_cost()
         self.method = create_tracking_method(self.env, self.tracking_method_name)
         y_order, z_order = predetermined_poke_range().get(env.level,
@@ -546,7 +557,7 @@ class PokeRunner:
         self.hook_before_first_poke(seed)
         while not self.ctrl.done():
             simTime += 1
-            env.draw_user_text("{}".format(self.pokes), xy=(0.5, 0.4, -0.5))
+            # env.draw_user_text("{}".format(self.pokes), xy=(0.5, 0.4, -0.5))
 
             action = self.ctrl.command(obs, info)
             self.method.visualize_contact_points(env)
@@ -796,8 +807,10 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
                     gt_cost + self.plausible_suboptimality)
         # plot plausible transforms
         to_plot = torch.randperm(len(all_plausible_transforms))[:200]
+        self.env.pause()
         draw_pose_distribution(all_plausible_transforms[to_plot], self.pose_obj_map, self.env.vis, self.env.obj_factory,
                                show_only_latest=True, sequential_delay=0.1)
+        self.env.unpause()
 
     def hook_after_last_poke(self, seed):
         # export plausible set to file
@@ -808,7 +821,7 @@ class GeneratePlausibleSetRunner(PlausibleSetRunner):
 
 
 class PlotPlausibleSetRunner(PlausibleSetRunner):
-    def __init__(self, *args, show_only_latest=True, sequential_delay=0.1, max_shown=200, **kwargs):
+    def __init__(self, *args, show_only_latest=False, sequential_delay=0.0, max_shown=16, **kwargs):
         super(PlotPlausibleSetRunner, self).__init__(*args, **kwargs)
         self.plausible_set = {}
         self.max_shown = max_shown
@@ -820,13 +833,17 @@ class PlotPlausibleSetRunner(PlausibleSetRunner):
         self.plausible_set = torch.load(filename)
 
     def hook_after_poke(self, name, seed):
+        self.env.pause()
         if self.pokes in self.plausible_set:
             ps = self.plausible_set[self.pokes]
             if not self.show_only_latest:
                 self.env.vis.clear_visualizations()
                 self.pose_obj_map = {}
-            draw_pose_distribution(ps[:self.max_shown], self.pose_obj_map, self.env.vis, self.env.obj_factory,
+            idx = np.random.permutation(range(len(ps)))
+            ps = ps[idx[:self.max_shown]]
+            draw_pose_distribution(ps, self.pose_obj_map, self.env.vis, self.env.obj_factory,
                                    show_only_latest=self.show_only_latest, sequential_delay=self.sequential_delay)
+        self.env.unpause()
 
     def hook_after_last_poke(self, seed):
         pass
