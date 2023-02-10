@@ -19,7 +19,6 @@ from stucco.env.movable_sdf import PlanarMovableSDF
 from base_experiments.env.env import InfoKeys, TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, \
     draw_AABB
 from base_experiments.env.panda import PandaJustGripperID
-from stucco.env.pybullet_sim import PybulletSim
 from base_experiments import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
@@ -995,12 +994,6 @@ class PokeEnv(PybulletEnv):
 
 def interpolate_pos(start, end, t):
     return t * end + (1 - t) * start
-
-
-class ExperimentRunner(PybulletSim):
-    def __init__(self, env: PokeEnv, ctrl, save_dir=DIR, **kwargs):
-        reaction_dim = 3
-        super(ExperimentRunner, self).__init__(env, ctrl, save_dir=save_dir, reaction_dim=reaction_dim, **kwargs)
 
 
 class PokeDataSource(EnvDataSource):

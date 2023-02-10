@@ -16,7 +16,7 @@ from stucco.env import poke_real_nonros
 from stucco import icp
 from base_experiments import cfg
 from base_experiments.env.env import draw_AABB
-from stucco.env.real_env import DebugRvizDrawer
+from base_experiments.env.real_env import DebugRvizDrawer
 import numpy as np
 import torch
 import logging

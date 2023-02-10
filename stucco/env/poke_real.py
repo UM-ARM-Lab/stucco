@@ -26,7 +26,7 @@ from sensor_msgs.msg import Image
 from base_experiments import cfg
 from base_experiments.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector
-from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
+from stucco_experiments.env.arm_real import BubbleCameraContactSensor, RealArmEnv
 from stucco.env.poke_real_nonros import Levels
 
 from victor_hardware_interface_msgs.msg import MotionStatus

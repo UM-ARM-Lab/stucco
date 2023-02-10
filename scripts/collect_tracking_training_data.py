@@ -9,10 +9,10 @@ import pybullet as p
 
 from arm_pytorch_utilities import controller, rand
 
-from stucco.env_getters.arm import ArmGetter
+from stucco_experiments.env_getters.arm import ArmGetter
 from stucco import tracking
-from stucco.env import arm
-from stucco.env.arm import task_map, Levels
+from stucco_experiments.env import arm
+from stucco_experiments.env.arm import task_map, Levels
 
 
 class SimpleCartesianDynamics:

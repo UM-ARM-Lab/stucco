@@ -25,7 +25,7 @@ from base_experiments import cfg
 from stucco.env.poke import obj_factory_map
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point
 from base_experiments.env.env import draw_AABB
-from stucco.env.real_env import CombinedVisualizer
+from base_experiments.env.real_env import CombinedVisualizer
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from stucco.sdf import sample_mesh_points

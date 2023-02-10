@@ -28,10 +28,10 @@ from arm_pytorch_utilities.optim import get_device
 
 from base_experiments import cfg
 from stucco import tracking
-from stucco.env import arm
+from stucco_experiments.env import arm
 from base_experiments.env import pybullet_env as env_base
 from base_experiments.env.env import InfoKeys
-from stucco.env_getters.arm import ArmGetter
+from stucco_experiments.env_getters.arm import ArmGetter
 
 from stucco.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
     OnlineAgglomorativeClustering
