@@ -13,7 +13,7 @@ from visualization_msgs.msg import Marker
 from window_recorder.recorder import WindowRecorder
 
 from arm_video_recorder.srv import TriggerVideoRecording, TriggerVideoRecordingRequest
-from stucco import cfg
+from stucco_experiments import cfg
 from base_experiments.env.env import Visualizer
 import logging
 from pytorch_kinematics.transforms import quaternion_to_matrix, matrix_to_quaternion, xyzw_to_wxyz, wxyz_to_xyzw

@@ -7,8 +7,6 @@ from threading import Lock
 from scipy.ndimage import uniform_filter
 import numpy as np
 # for converting strings to dictionary
-from numpy import array
-from torch import tensor
 
 from arc_utilities.listener import Listener
 from mmint_camera_utils.camera_utils.camera_parsers import RealSenseCameraParser
@@ -25,7 +23,7 @@ import torch
 
 from arm_pytorch_utilities import tensor_utils
 from sensor_msgs.msg import Image
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
@@ -37,7 +35,6 @@ from bubble_utils.bubble_parsers.bubble_parser import BubbleParser
 from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points, project_depth_image
 from bubble_utils.bubble_datasets.base_datasets.bubble_dataset_base import BubbleDatasetBase
 from bubble_utils.bubble_tools.bubble_img_tools import process_bubble_img
-from mmint_camera_utils.recording_utils.recording_utils import process_image
 
 import gym.spaces
 

@@ -20,7 +20,7 @@ from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, p
 from stucco import tracking
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.detection import ContactSensor
-from stucco import cfg
+from base_experiments import cfg
 from stucco.env.movable_sdf import PlanarMovableSDF
 from base_experiments.env.env import InfoKeys, TrajectoryLoader, Env, handle_data_format_for_state_diff, EnvDataSource
 

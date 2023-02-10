@@ -2,7 +2,7 @@ import argparse
 import subprocess
 
 from stucco.env import poke
-from stucco import cfg
+from base_experiments import cfg
 import logging
 import os
 from datetime import datetime

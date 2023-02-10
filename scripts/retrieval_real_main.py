@@ -21,15 +21,14 @@ from stucco.retrieval_controller import RetrievalPredeterminedController, sample
     PHDFilterTrackingMethod, PHDPredeterminedController
 from stucco.env.real_env import VideoLogger
 from stucco.env.arm import Levels
-from stucco.env_getters.getter import EnvGetter
+from base_experiments.env_getters.getter import EnvGetter
 import os
 from datetime import datetime
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco.env import arm_real
 from stucco import tracking, icp
 from arm_pytorch_utilities.math_utils import rotate_wrt_origin
-from victor_hardware_interface_msgs.msg import ControlMode
 
 try:
     import rospy

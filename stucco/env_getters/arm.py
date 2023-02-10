@@ -5,7 +5,7 @@ from arm_pytorch_utilities.optim import get_device
 from stucco import tracking
 from stucco.env import arm
 from stucco.env.arm import Levels
-from stucco.env_getters.getter import EnvGetter
+from base_experiments.env_getters.getter import EnvGetter
 
 
 class ArmGetter(EnvGetter):

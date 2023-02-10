@@ -33,7 +33,8 @@ from datetime import datetime
 from matplotlib import pyplot as plt
 from arm_pytorch_utilities import tensor_utils, rand
 
-from stucco import cfg, icp
+from stucco import icp
+from base_experiments import cfg
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.env import poke
 from stucco.env.poke import obj_factory_map, level_to_obj_map

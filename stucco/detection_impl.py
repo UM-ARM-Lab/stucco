@@ -6,7 +6,7 @@ import pybullet as p
 import torch
 from stucco.detection import ResidualPlanarContactSensor
 from pytorch_kinematics import transforms as tf
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.pybullet_env import ContactInfo, closest_point_on_surface
 import typing
 

@@ -9,7 +9,7 @@ import re
 from stucco.defines import NO_CONTACT_ID
 from stucco.evaluation import get_file_metainfo
 
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.env import InfoKeys
 
 ch = logging.StreamHandler()

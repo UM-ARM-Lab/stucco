@@ -14,7 +14,7 @@ from arm_pytorch_utilities import tensor_utils, rand, linalg
 from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
 
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.env import Visualizer
 from stucco.icp.initialization import random_upright_transforms
 from stucco.icp import methods

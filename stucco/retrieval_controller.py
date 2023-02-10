@@ -12,7 +12,7 @@ from pynput import keyboard
 from stucco import detection, tracking
 from stucco import exploration
 from stucco.defines import NO_CONTACT_ID
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
 
 from stucco.baselines.cluster import process_labels_with_noise

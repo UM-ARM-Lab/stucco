@@ -6,7 +6,7 @@ from timeit import default_timer as timer
 import pybullet as p
 import torch
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco import icp
 from stucco.icp import methods
 from base_experiments.env.pybullet_env import make_sphere

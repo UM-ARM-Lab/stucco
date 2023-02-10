@@ -13,7 +13,8 @@ from window_recorder.recorder import WindowRecorder
 
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
-from stucco import cfg, icp
+from stucco import icp
+from base_experiments import cfg
 from base_experiments.env.env import draw_AABB
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
@@ -468,7 +469,7 @@ def main(args):
             c = c1 & c2 & c3
             return pts[c]
 
-        with WindowRecorder( name_suffix="rviz",
+        with WindowRecorder(name_suffix="rviz",
                             frame_rate=30.0,
                             save_dir=cfg.VIDEO_DIR):
             import time

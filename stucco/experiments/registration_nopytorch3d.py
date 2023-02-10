@@ -8,7 +8,8 @@ import torch
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
-from stucco import cfg, sdf, voxel
+from stucco import sdf, voxel
+from base_experiments import cfg
 from stucco.sdf import sample_mesh_points
 
 

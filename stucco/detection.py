@@ -175,13 +175,19 @@ class ContactDetector:
         self.sensors: typing.List[ContactSensor] = []
 
     def register_contact_sensor(self, sensor: ContactSensor):
+        sensor.dtype = self.dtype
+        sensor.device = self.device
         self.sensors.append(sensor)
 
     def to(self, device=None, dtype=None):
         if device is not None:
             self.device = device
+            for sensor in self.sensors:
+                sensor.device = device
         if dtype is not None:
             self.dtype = dtype
+            for sensor in self.sensors:
+                sensor.dtype = dtype
 
     def observe_residual(self, ee_force_torque, pose=None):
         """Returns whether this residual implies we are currently in contact and track its location if given pose"""

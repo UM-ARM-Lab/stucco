@@ -7,7 +7,7 @@ from ribs.visualize import grid_archive_heatmap
 from pytorch3d.ops import utils as oputil
 from pytorch3d.ops.points_alignment import SimilarityTransform
 
-from stucco import cfg
+from base_experiments import cfg
 
 poke_index = 0
 sgd_index = 0

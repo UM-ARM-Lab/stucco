@@ -3,7 +3,7 @@ import os
 
 from torch import optim
 
-from stucco import cfg
+from base_experiments import cfg
 import matplotlib.pyplot as plt
 import numpy as np
 import torch

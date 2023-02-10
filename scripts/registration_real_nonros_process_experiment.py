@@ -7,15 +7,14 @@ import numpy as np
 from timeit import default_timer as timer
 
 import stucco.icp.initialization
-from arm_pytorch_utilities.controller import Controller
 from arm_pytorch_utilities import tensor_utils, rand
 
 import pytorch_kinematics as tf
 
-from stucco import cfg, registration_util
+from stucco import registration_util
+from base_experiments import cfg
 from stucco import icp
 from stucco import voxel
-from stucco import sdf
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.env import poke_real_nonros
 from stucco.icp import costs as icp_costs, quality_diversity
@@ -28,7 +27,7 @@ from pytorch3d.ops.points_alignment import SimilarityTransform
 from datetime import datetime
 
 from stucco.icp.methods import init_random_transform_with_given_init
-from stucco.sdf import draw_pose_distribution, sample_mesh_points
+from stucco.sdf import sample_mesh_points
 import logging
 
 ch = logging.StreamHandler()

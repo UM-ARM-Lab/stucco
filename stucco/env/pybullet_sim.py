@@ -5,7 +5,7 @@ import numpy as np
 from arm_pytorch_utilities import controller
 from arm_pytorch_utilities import simulation
 from matplotlib import pyplot as plt
-from stucco import cfg
+from base_experiments import cfg
 from base_experiments.env.pybullet_env import PybulletEnv, logger
 
 

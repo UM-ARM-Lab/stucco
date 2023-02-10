@@ -20,7 +20,8 @@ from pytorch_kinematics import transforms as tf
 from torchmcubes import marching_cubes
 
 import stucco.sdf
-from stucco import cfg, icp
+from stucco import icp
+from base_experiments import cfg
 from stucco.env.poke import obj_factory_map
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point
 from base_experiments.env.env import draw_AABB

@@ -19,7 +19,7 @@ from stucco.env.movable_sdf import PlanarMovableSDF
 from base_experiments.env.env import InfoKeys, TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from base_experiments.env.panda import PandaJustGripperID
 from stucco.env.pybullet_sim import PybulletSim
-from stucco import cfg
+from base_experiments import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector

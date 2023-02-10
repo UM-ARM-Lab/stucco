@@ -1,6 +1,6 @@
 from collections import namedtuple
 import os
-from stucco import cfg
+from base_experiments import cfg
 
 NO_CONTACT_ID = -1
 # keywords in place of method for storing special run information

@@ -21,7 +21,7 @@ from base_experiments.env.env import InfoKeys
 
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco import icp, tracking, exploration
 from stucco.env import arm
 from stucco.env.arm import Levels

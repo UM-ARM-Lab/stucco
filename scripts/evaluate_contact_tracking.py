@@ -26,7 +26,7 @@ from stucco.detection import ContactDetector
 
 from arm_pytorch_utilities.optim import get_device
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco import tracking
 from stucco.env import arm
 from base_experiments.env import pybullet_env as env_base

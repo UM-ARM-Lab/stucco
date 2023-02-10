@@ -1,5 +1,4 @@
 import pandas as pd
-from stucco import cfg
 
 orig_path = "/home/zhsh/robot_ws/src/stucco/data/poking_real_drill.pkl"
 override_path = "/home/zhsh/Downloads/poking_real_drill.pkl"

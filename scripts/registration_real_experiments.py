@@ -9,11 +9,11 @@ from stucco.poking_controller import PokingController
 from bubble_utils.bubble_data_collection.env_data_collection import ReferencedEnvDataCollector
 
 # from stucco.env.real_env import VideoLogger
-from stucco.env_getters.getter import EnvGetter
+from base_experiments.env_getters.getter import EnvGetter
 import os
 from datetime import datetime
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
 from stucco import tracking

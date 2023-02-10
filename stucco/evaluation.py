@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 from pytorch_kinematics import transforms as tf
 from sklearn import metrics
 
-from stucco import cfg
+from base_experiments import cfg
 from stucco.env import arm
 from base_experiments.env import pybullet_env as env_base
 from base_experiments.env.env import Visualizer

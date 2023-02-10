@@ -4,7 +4,7 @@ from arm_pytorch_utilities import load_data
 from arm_pytorch_utilities.optim import get_device
 from stucco import tracking
 from stucco.env import poke
-from stucco.env_getters.getter import EnvGetter
+from base_experiments.env_getters.getter import EnvGetter
 import math
 
 
