@@ -9,7 +9,7 @@ import torch
 from stucco import cfg
 from stucco import icp
 from stucco.icp import methods
-from stucco.env.pybullet_env import make_sphere
+from base_experiments.env.pybullet_env import make_sphere
 from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_dir_for_method
 from stucco.icp import costs as icp_costs, volumetric
 from stucco.icp.medial_constraints import MedialBall

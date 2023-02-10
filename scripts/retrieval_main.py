@@ -13,12 +13,11 @@ from sklearn.cluster import Birch, DBSCAN, KMeans
 
 import stucco.icp
 import stucco.icp.initialization
-from window_recorder.recorder import WindowRecorder
 
 from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
 from stucco.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
-from stucco.env.env import InfoKeys
+from base_experiments.env.env import InfoKeys
 
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
@@ -27,7 +26,7 @@ from stucco import icp, tracking, exploration
 from stucco.env import arm
 from stucco.env.arm import Levels
 from stucco.env_getters.arm import RetrievalGetter
-from stucco.env.pybullet_env import state_action_color_pairs
+from base_experiments.env.pybullet_env import state_action_color_pairs
 
 from stucco.retrieval_controller import rot_2d_mat_to_angle, \
     sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
@@ -200,7 +199,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
     guess_pose = None
     pose_error_per_step = {}
 
-    pt_to_config = arm.ArmPointToConfig(env)
+    pt_to_config = arm.ArmMovableSDF(env)
 
     contact_id = []
 
@@ -363,9 +362,9 @@ def main(env, method_name, seed=0):
         return exploration.ICPEVExplorationPolicy(testObjId)
 
     methods_to_run = {
-        'ours': OurSoftTrackingMethod(env, RetrievalGetter.contact_parameters(env), arm.ArmPointToConfig(env)),
+        'ours': OurSoftTrackingMethod(env, RetrievalGetter.contact_parameters(env), arm.ArmMovableSDF(env)),
         'ours-rummage': OurSoftTrackingWithRummagingMethod(env, RetrievalGetter.contact_parameters(env),
-                                                           arm.ArmPointToConfig(env),
+                                                           arm.ArmMovableSDF(env),
                                                            policy_factory=icpev_policy_factory),
         'online-birch': SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
                                               inertia_ratio=0.2,
@@ -382,7 +381,7 @@ def main(env, method_name, seed=0):
 def keyboard_control(env):
     print("waiting for arrow keys to be pressed to command a movement")
     contact_params = RetrievalGetter.contact_parameters(env)
-    pt_to_config = arm.ArmPointToConfig(env)
+    pt_to_config = arm.ArmMovableSDF(env)
     contact_set = tracking.ContactSetSoft(pt_to_config, contact_params)
     ctrl = KeyboardController(env.contact_detector, contact_set, nu=2)
 

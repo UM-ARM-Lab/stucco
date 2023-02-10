@@ -2,7 +2,7 @@
 import typing
 
 import torch
-from stucco.env.env import Visualizer
+from base_experiments.env.env import Visualizer
 from stucco.registration_util import apply_similarity_transform
 from stucco.icp.costs import RegistrationCost
 from stucco import sdf

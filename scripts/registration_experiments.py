@@ -1000,7 +1000,7 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
 
 def create_tracking_method(env, method_name) -> TrackingMethod:
     if method_name == "ours":
-        return OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmPointToConfig(env), dim=3)
+        return OurSoftTrackingMethod(env, PokeGetter.contact_parameters(env), poke.ArmMovableSDF(env), dim=3)
     elif method_name == 'online-birch':
         return SklearnTrackingMethod(env, OnlineAgglomorativeClustering, Birch, n_clusters=None,
                                      inertia_ratio=0.2,

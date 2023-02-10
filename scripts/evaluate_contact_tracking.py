@@ -28,8 +28,9 @@ from arm_pytorch_utilities.optim import get_device
 
 from stucco import cfg
 from stucco import tracking
-from stucco.env import arm, pybullet_env as env_base
-from stucco.env.env import InfoKeys
+from stucco.env import arm
+from base_experiments.env import pybullet_env as env_base
+from base_experiments.env.env import InfoKeys
 from stucco.env_getters.arm import ArmGetter
 
 from stucco.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
@@ -165,7 +166,7 @@ class OurMethodSoft(OurMethodFactory):
     def _pt_to_config_dist(self, configs, pts):
         if self.env is None:
             self.env = self.env_class(mode=p.GUI if self.visualize else p.DIRECT)
-            self._dist_calc = arm.ArmPointToConfig(self.env)
+            self._dist_calc = arm.ArmMovableSDF(self.env)
         return self._dist_calc(configs, pts)
 
     def create_contact_set(self, contact_params, hard_contact_params) -> tracking.ContactSet:

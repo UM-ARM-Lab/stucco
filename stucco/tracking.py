@@ -10,7 +10,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 import matplotlib.pyplot as plt
 from arm_pytorch_utilities import tensor_utils, optim, serialization, linalg, draw
 from stucco.filters.ukf import EnvConditionedUKF
-from stucco.env.env import InfoKeys
+from base_experiments.env.env import InfoKeys
 
 logger = logging.getLogger(__name__)
 

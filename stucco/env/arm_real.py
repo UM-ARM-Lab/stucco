@@ -21,13 +21,13 @@ from stucco import tracking
 from stucco.detection_impl import PybulletResidualPlanarContactSensor
 from stucco.detection import ContactSensor
 from stucco import cfg
-from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, Env, PlanarPointToConfig, \
-    InfoKeys
+from stucco.env.movable_sdf import PlanarMovableSDF
+from base_experiments.env.env import InfoKeys, TrajectoryLoader, Env, handle_data_format_for_state_diff, EnvDataSource
 
 from stucco.detection import ContactDetector
 from geometry_msgs.msg import Pose
 
-from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, DebugDrawer, state_action_color_pairs
+from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, DebugDrawer, state_action_color_pairs
 from stucco.env.real_env import CombinedVisualizer
 
 from victor_hardware_interface_msgs.msg import ControlMode, MotionStatus
@@ -1007,13 +1007,13 @@ class ContactDetectorPlanarRealArmBubble(ContactDetector):
         return pt, dx
 
 
-class RealArmPointToConfig(PlanarPointToConfig):
+class RealArmMovableSDF(PlanarMovableSDF):
     def __init__(self, env: RealArmEnv):
         # try loading cache
         # assume that each class has its own configuration, so only need 1 cache per class
         fullname = os.path.join(cfg.DATA_DIR, f'{env.__class__.__name__}_point_to_config.pkl')
         if os.path.exists(fullname):
-            super(RealArmPointToConfig, self).__init__(*torch.load(fullname))
+            super(RealArmMovableSDF, self).__init__(*torch.load(fullname))
         else:
             robot_id, gripper_id, pos, orientation, filler_body_ids = env.create_sim_robot_and_gripper(
                 visualizer=env.vis)
@@ -1060,4 +1060,4 @@ class RealArmPointToConfig(PlanarPointToConfig):
             max_y -= pos[1]
             data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
             torch.save(data, fullname)
-            super(RealArmPointToConfig, self).__init__(*data)
+            super(RealArmMovableSDF, self).__init__(*data)

@@ -14,7 +14,7 @@ from window_recorder.recorder import WindowRecorder
 from stucco.env import poke_real
 from stucco.env import poke_real_nonros
 from stucco import cfg, icp
-from stucco.env.env import draw_AABB
+from base_experiments.env.env import draw_AABB
 from stucco.env.real_env import DebugRvizDrawer
 import numpy as np
 import torch

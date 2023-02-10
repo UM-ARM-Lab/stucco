@@ -14,9 +14,10 @@ from pytorch_kinematics import transforms as tf
 from sklearn import metrics
 
 from stucco import cfg
-from stucco.env import arm, pybullet_env as env_base
-from stucco.env.env import Visualizer
-from stucco.env.pybullet_env import ContactInfo, closest_point_on_surface
+from stucco.env import arm
+from base_experiments.env import pybullet_env as env_base
+from base_experiments.env.env import Visualizer
+from base_experiments.env.pybullet_env import ContactInfo
 from stucco.sdf import ObjectFactory
 
 logger = logging.getLogger(__name__)

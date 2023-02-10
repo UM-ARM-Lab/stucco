@@ -570,7 +570,7 @@ def main():
     env = arm_real.RealArmEnvMedusa(residual_precision=np.diag(residual_precision), residual_threshold=5., vel=0.25)
     contact_params = RealRetrievalGetter.contact_parameters(env)
 
-    pt_to_config = arm_real.RealArmPointToConfig(env)
+    pt_to_config = arm_real.RealArmMovableSDF(env)
 
     methods_to_run = {
         'ours': RealOurSoftTrackingMethod(env, contact_params, pt_to_config),

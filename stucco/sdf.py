@@ -9,11 +9,11 @@ import open3d as o3d
 import torch
 from arm_pytorch_utilities import tensor_utils, rand
 from multidim_indexing import torch_view
-from stucco.env.env import Visualizer
+from base_experiments.env.env import Visualizer
 
 from stucco.voxel import VoxelGrid, get_divisible_range_by_resolution, get_coordinates_and_points_in_grid
 from stucco import cfg
-from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
+from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo
 from typing import NamedTuple, Union
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ from stucco import detection, tracking
 from stucco import exploration
 from stucco.defines import NO_CONTACT_ID
 from stucco import cfg
-from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
+from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
 
 from stucco.baselines.cluster import process_labels_with_noise
 from stucco.baselines.gmphd import GMPHDWrapper
@@ -26,7 +26,7 @@ import subprocess
 import glob
 
 from base_experiments.util import move_figure
-from stucco.env.env import Visualizer, InfoKeys
+from base_experiments.env.env import InfoKeys, Visualizer
 
 
 class RetrievalController(Controller):

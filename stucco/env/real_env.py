@@ -14,12 +14,12 @@ from window_recorder.recorder import WindowRecorder
 
 from arm_video_recorder.srv import TriggerVideoRecording, TriggerVideoRecordingRequest
 from stucco import cfg
-from stucco.env.env import Visualizer
+from base_experiments.env.env import Visualizer
 import logging
 from pytorch_kinematics.transforms import quaternion_to_matrix, matrix_to_quaternion, xyzw_to_wxyz, wxyz_to_xyzw
 from arm_pytorch_utilities import tensor_utils
 
-from stucco.env.pybullet_env import DebugDrawer
+from base_experiments.env.pybullet_env import DebugDrawer
 
 logger = logging.getLogger(__name__)
 

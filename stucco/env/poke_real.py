@@ -26,7 +26,7 @@ import torch
 from arm_pytorch_utilities import tensor_utils
 from sensor_msgs.msg import Image
 from stucco import cfg
-from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
+from base_experiments.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource
 from stucco.detection import ContactDetector
 from stucco.env.arm_real import BubbleCameraContactSensor, RealArmEnv
 from stucco.env.poke_real_nonros import Levels

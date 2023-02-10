@@ -6,7 +6,7 @@ from arm_pytorch_utilities import controller
 from arm_pytorch_utilities import simulation
 from matplotlib import pyplot as plt
 from stucco import cfg
-from stucco.env.pybullet_env import PybulletEnv, logger
+from base_experiments.env.pybullet_env import PybulletEnv, logger
 
 
 class PybulletSim(simulation.Simulation):

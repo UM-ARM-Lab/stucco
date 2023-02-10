@@ -15,7 +15,7 @@ from arm_pytorch_utilities.grad import jacobian
 from pytorch_kinematics import transforms as tf
 
 from stucco import cfg
-from stucco.env.env import Visualizer
+from base_experiments.env.env import Visualizer
 from stucco.icp.initialization import random_upright_transforms
 from stucco.icp import methods
 from stucco.sdf import ObjectFrameSDF

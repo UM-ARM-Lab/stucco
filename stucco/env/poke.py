@@ -13,11 +13,12 @@ import matplotlib.cm as cmx
 
 from arm_pytorch_utilities import tensor_utils
 
-from stucco.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
+from base_experiments.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
     ContactInfo, closest_point_on_surface, pybullet_obj_range
-from stucco.env.env import TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, InfoKeys, \
-    PlanarPointToConfig, draw_AABB
-from stucco.env.panda import PandaJustGripperID
+from stucco.env.movable_sdf import PlanarMovableSDF
+from base_experiments.env.env import InfoKeys, TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, \
+    draw_AABB
+from base_experiments.env.panda import PandaJustGripperID
 from stucco.env.pybullet_sim import PybulletSim
 from stucco import cfg
 from stucco import tracking
@@ -1045,12 +1046,12 @@ def pt_to_config_dist(env, max_robot_radius, configs, pts):
 
 
 # TODO remove old SDF handler
-class ArmPointToConfig(PlanarPointToConfig):
+class ArmMovableSDF(PlanarMovableSDF):
     def __init__(self, env):
         # try loading cache
         fullname = os.path.join(cfg.DATA_DIR, f'arm_point_to_config.pkl')
         if os.path.exists(fullname):
-            super(ArmPointToConfig, self).__init__(*torch.load(fullname))
+            super(ArmMovableSDF, self).__init__(*torch.load(fullname))
         else:
             import trimesh
             hand = trimesh.load(os.path.join(cfg.ROOT_DIR, "meshes/collision/hand.obj"))
@@ -1083,7 +1084,7 @@ class ArmPointToConfig(PlanarPointToConfig):
             d_cache = d.reshape(-1)
             data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
             torch.save(data, fullname)
-            super(ArmPointToConfig, self).__init__(*data)
+            super(ArmMovableSDF, self).__init__(*data)
 
 
 class YCBObjectFactory(sdf.ObjectFactory):
