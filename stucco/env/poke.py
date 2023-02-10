@@ -26,7 +26,7 @@ from stucco.detection import ContactDetector, ContactSensor
 from stucco import sdf, voxel
 
 from view_animator import animate_view_in_background
-from view_animator.pybullet_animator import PybulletOrbitter
+from view_animator.pybullet_animator import PybulletOrbiter
 
 import pytorch_kinematics.transforms as tf
 
@@ -855,7 +855,7 @@ class PokeEnv(PybulletEnv):
         self.target_pose = p.getBasePositionAndOrientation(self._target_object_id)
         self.draw_mesh("base_object", self.target_pose, (1.0, 1.0, 0., 0.5), object_id=self.vis.USE_DEFAULT_ID_FOR_NAME)
         if self.rotating and self.orbitter is None:
-            self.orbitter = PybulletOrbitter(offset_yaw=-80, dist=0.7, target=self.target_pose[0], period=6)
+            self.orbitter = PybulletOrbiter(offset_yaw=-80, dist=0.7, target=self.target_pose[0], period=6)
             animate_view_in_background(self.orbitter)
 
         # ranges is in object frame, centered on 0; our experiment workspace takes on x > 0 and z > 0 mostly
