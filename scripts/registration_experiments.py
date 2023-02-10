@@ -1,6 +1,8 @@
 import typing
 import re
 import time
+
+import base_experiments.util
 import pandas as pd
 from timeit import default_timer as timer
 
@@ -38,7 +40,6 @@ from stucco.env.poke import obj_factory_map, level_to_obj_map
 from stucco.env_getters.poke import PokeGetter
 from stucco.evaluation import evaluate_chamfer_distance
 from stucco.icp import costs as icp_costs
-from stucco import util
 from stucco import serialization
 from stucco.sdf import draw_pose_distribution, sample_mesh_points
 
@@ -473,7 +474,7 @@ class PokeRunner:
         logger.info(f"chamfer distance {self.pokes}: {torch.mean(errors_per_batch)}")
 
         # draw mesh at where our best guess is
-        guess_pose = util.matrix_to_pos_rot(best_T)
+        guess_pose = base_experiments.util.matrix_to_pos_rot(best_T)
         # self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
         #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
 
@@ -942,9 +943,9 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
                 for b in range(B):
                     p = best_per_sampled.indices[b]
                     self.env.draw_user_text(f"{best_per_sampled.values[b].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                    self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                    self.env.draw_mesh("sampled", base_experiments.util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                    self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                    self.env.draw_mesh("plausible", base_experiments.util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
                     time.sleep(self.sleep_between_plots)
 
@@ -952,9 +953,9 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
                 for p in range(P):
                     b = best_per_plausible.indices[p]
                     self.env.draw_user_text(f"{best_per_plausible.values[p].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                    self.env.draw_mesh("sampled", util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                    self.env.draw_mesh("sampled", base_experiments.util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                    self.env.draw_mesh("plausible", util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                    self.env.draw_mesh("plausible", base_experiments.util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
                     time.sleep(self.sleep_between_plots)
 

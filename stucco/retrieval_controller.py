@@ -25,7 +25,7 @@ import os
 import subprocess
 import glob
 
-from stucco.util import move_figure
+from base_experiments.util import move_figure
 from stucco.env.env import Visualizer, InfoKeys
 
 

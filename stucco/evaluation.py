@@ -6,14 +6,14 @@ import typing
 import logging
 from typing import Type
 
+import base_experiments.util
 import numpy as np
 import pybullet as p
-import torch
 from matplotlib import pyplot as plt
 from pytorch_kinematics import transforms as tf
 from sklearn import metrics
 
-from stucco import cfg, util
+from stucco import cfg
 from stucco.env import arm, pybullet_env as env_base
 from stucco.env.env import Visualizer
 from stucco.env.pybullet_env import ContactInfo, closest_point_on_surface
@@ -204,7 +204,7 @@ def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Opti
     if vis is not None:
         m = link_to_world.get_matrix()
         for b in range(B):
-            pos, rot = util.matrix_to_pos_rot(m[b])
+            pos, rot = base_experiments.util.matrix_to_pos_rot(m[b])
             obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.1),
                                   object_id=vis.USE_DEFAULT_ID_FOR_NAME)
             vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"avgerr: {round(errors_per_batch[b].item())}")

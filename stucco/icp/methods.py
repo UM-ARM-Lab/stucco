@@ -1,4 +1,6 @@
 import math
+
+import base_experiments.util
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
 import torch
@@ -11,7 +13,6 @@ from stucco.env.env import draw_AABB
 from stucco.icp.sgd import iterative_closest_point_sgd
 from stucco.icp import volumetric
 from stucco.icp.medial_constraints import MedialConstraintCost
-from stucco import util
 from stucco.sdf import draw_pose_distribution, ObjectFrameSDF
 from stucco.icp import quality_diversity
 import logging
@@ -688,7 +689,7 @@ def icp_mpc(A, B, cost_func, given_init_pose=None, batch=30, horizon=10, num_sam
         rollout = ctrl.get_rollouts(obs.view(-1)).squeeze()
         # visualize current state after each MPC step
         if draw_mesh is not None:
-            pos, rot = util.matrix_to_pos_rot(obs.view(4, 4).inverse())
+            pos, rot = base_experiments.util.matrix_to_pos_rot(obs.view(4, 4).inverse())
             id = visual_obj_id_map.get(i, None)
             visual_obj_id_map[i] = draw_mesh("state", (pos, rot), (0., i / steps, i / steps, 0.5),
                                              object_id=id)

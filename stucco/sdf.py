@@ -3,6 +3,7 @@ import os
 import logging
 import time
 
+import base_experiments.util
 import numpy as np
 import open3d as o3d
 import torch
@@ -11,7 +12,7 @@ from multidim_indexing import torch_view
 from stucco.env.env import Visualizer
 
 from stucco.voxel import VoxelGrid, get_divisible_range_by_resolution, get_coordinates_and_points_in_grid
-from stucco import util, cfg
+from stucco import cfg
 from stucco.env.pybullet_env import closest_point_on_surface, ContactInfo
 from typing import NamedTuple, Union
 
@@ -374,7 +375,7 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
 
     for b in range(len(m)):
         mm = m[b]
-        pos, rot = util.matrix_to_pos_rot(mm)
+        pos, rot = base_experiments.util.matrix_to_pos_rot(mm)
         # if we're given a sequential delay, then instead of drawing the distribution simultaneously, we render them
         # sequentially
         if show_only_latest:

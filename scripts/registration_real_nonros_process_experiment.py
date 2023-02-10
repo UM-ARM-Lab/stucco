@@ -22,7 +22,6 @@ from stucco.icp import costs as icp_costs, quality_diversity
 from stucco.experiments import registration
 from stucco.experiments import registration_nopytorch3d
 from stucco import serialization
-from stucco import util
 from stucco.icp import initialization
 from pytorch3d.ops.points_alignment import SimilarityTransform
 

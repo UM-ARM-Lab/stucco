@@ -14,7 +14,7 @@ from threading import Lock
 
 import numpy as np
 from pytorch_kinematics import transforms as tf
-from stucco.util import move_figure
+from base_experiments.util import move_figure
 
 from mmint_camera_utils.camera_utils.camera_utils import bilinear_interpolate, project_depth_points
 from stucco import tracking

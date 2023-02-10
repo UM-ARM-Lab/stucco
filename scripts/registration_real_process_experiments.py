@@ -23,7 +23,7 @@ import scipy
 from stucco import serialization
 from stucco.experiments import registration_nopytorch3d
 from stucco.icp import initialization
-from stucco.util import matrix_to_pos_rot
+from base_experiments.util import matrix_to_pos_rot
 from stucco import voxel
 
 try:
