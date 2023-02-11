@@ -77,7 +77,7 @@ The tracking is performed through the `ContactSetSoft` object, created like:
 
 ```python
 from stucco.tracking import ContactSetSoft, ContactParameters, LinearTranslationalDynamics
-from stucco.env.movable_sdf import PlanarMovableSDF
+from stucco.movable_sdf import PlanarMovableSDF
 
 # tune through maximizing median FMI and minimizing median contact error on a training set
 contact_params = ContactParameters(length=0.02,
@@ -132,7 +132,7 @@ Here are some tips for how to create this discretized SDF:
 import os
 import torch
 import numpy as np
-from stucco.env.movable_sdf import PlanarMovableSDF
+from stucco.movable_sdf import PlanarMovableSDF
 
 
 # note that this is for a planar environment with fixed orientation; 
@@ -140,44 +140,44 @@ from stucco.env.movable_sdf import PlanarMovableSDF
 # the extension to free rotations will require a parallel way to perform rigid body transforms 
 # on multiple points, which can be provided by pytorch_kinematics.transforms
 class SamplePointToConfig(PlanarMovableSDF):
-   def __init__(self):
-      # save cache to file for easy loading (use your own path)
-      fullname = 'sample_point_to_config.pkl'
-      if os.path.exists(fullname):
-         super().__init__(*torch.load(fullname))
-      else:
-         # first time creating cache
-         # we need some environment where we can get its bounding box and query an SDF
-         # create robot in simulation (use your own function)
-         robot_id, gripper_id, pos = create_sim_robot()
-         # get axis-aligned bounding box values
-         aabb_min, aabb_max = get_aabb()
-         min_x, min_y = aabb_min[:2]
-         max_x, max_y = aabb_max[:2]
+    def __init__(self):
+        # save cache to file for easy loading (use your own path)
+        fullname = 'sample_point_to_config.pkl'
+        if os.path.exists(fullname):
+            super().__init__(*torch.load(fullname))
+        else:
+            # first time creating cache
+            # we need some environment where we can get its bounding box and query an SDF
+            # create robot in simulation (use your own function)
+            robot_id, gripper_id, pos = create_sim_robot()
+            # get axis-aligned bounding box values
+            aabb_min, aabb_max = get_aabb()
+            min_x, min_y = aabb_min[:2]
+            max_x, max_y = aabb_max[:2]
 
-         # select a cache resolution (doesn't have to be very small)
-         cache_resolution = 0.001
-         # create mesh grid
-         x = np.arange(min_x, max_x + cache_resolution, cache_resolution)
-         y = np.arange(min_y, max_y + cache_resolution, cache_resolution)
-         cache_y_len = len(y)
+            # select a cache resolution (doesn't have to be very small)
+            cache_resolution = 0.001
+            # create mesh grid
+            x = np.arange(min_x, max_x + cache_resolution, cache_resolution)
+            y = np.arange(min_y, max_y + cache_resolution, cache_resolution)
+            cache_y_len = len(y)
 
-         d = np.zeros((len(x), len(y)))
-         for i, xi in enumerate(x):
-            for j, yj in enumerate(y):
-               pt = [xi, yj, pos[2]]
-               # point query of SDF (use your own function)
-               d[i, j] = closest_point_on_surface(robot_id, pt)
-         # flatten to allow parallel query of multiple indices
-         d_cache = d.reshape(-1)
-         # save things in (rotated) link frame
-         min_x -= pos[0]
-         max_x -= pos[0]
-         min_y -= pos[1]
-         max_y -= pos[1]
-         data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
-         torch.save(data, fullname)
-         super().__init__(*data)
+            d = np.zeros((len(x), len(y)))
+            for i, xi in enumerate(x):
+                for j, yj in enumerate(y):
+                    pt = [xi, yj, pos[2]]
+                    # point query of SDF (use your own function)
+                    d[i, j] = closest_point_on_surface(robot_id, pt)
+            # flatten to allow parallel query of multiple indices
+            d_cache = d.reshape(-1)
+            # save things in (rotated) link frame
+            min_x -= pos[0]
+            max_x -= pos[0]
+            min_y -= pos[1]
+            max_y -= pos[1]
+            data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
+            torch.save(data, fullname)
+            super().__init__(*data)
 ```
 
 ## Reproduce Paper

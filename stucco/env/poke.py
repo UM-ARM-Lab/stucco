@@ -16,7 +16,7 @@ from arm_pytorch_utilities import tensor_utils
 import pytorch_volumetric.sdf
 from base_experiments.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
     ContactInfo, closest_point_on_surface, pybullet_obj_range
-from stucco.env.movable_sdf import PlanarMovableSDF
+from stucco.movable_sdf import PlanarMovableSDF
 from base_experiments.env.env import InfoKeys, TrajectoryLoader, handle_data_format_for_state_diff, EnvDataSource, \
     draw_AABB
 from base_experiments.env.panda import PandaJustGripperID

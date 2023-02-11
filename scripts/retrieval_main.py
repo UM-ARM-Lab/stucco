@@ -16,7 +16,7 @@ import stucco.icp.initialization
 
 from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.defines import NO_CONTACT_ID
-from stucco.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
+from stucco_experiments.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
 from base_experiments.env.env import InfoKeys
 
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
