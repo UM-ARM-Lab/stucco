@@ -114,13 +114,14 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
 
     vis.draw_point("seed", (0, 0, 0.4), (1, 0, 0), label=f"seed {seed}")
 
+    dbpath = os.path.join(cfg.DATA_DIR, "model_points_cache.pkl")
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=obj_name, seed=0,
-                                                                  device=env.device)
+                                                                  dbpath=dbpath, device=env.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
-    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+    model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points, dbpath=dbpath,
                                                                           name=obj_name, seed=0, device=env.device)
 
     # # test ICP using fixed set of points
@@ -134,7 +135,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
 
     for num_points in num_points_list:
         model_points, model_normals, _ = sample_mesh_points(num_points=num_points, name=obj_name, seed=seed,
-                                                            device=env.device)
+                                                            dbpath=dbpath, device=env.device)
 
         pose = p.getBasePositionAndOrientation(target_obj_id)
         link_to_current_tf_gt = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
@@ -321,15 +322,17 @@ class PokeRunner:
 
         model_name = self.env.target_model_name
         # get a fixed number of model points to evaluate against (this will be independent on points used to register)
+        dbpath = os.path.join(cfg.DATA_DIR, "model_points_cache.pkl")
         self.model_points_eval, self.model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points,
                                                                                 name=model_name,
-                                                                                seed=0,
+                                                                                seed=0, dbpath=dbpath,
                                                                                 device=env.device)
         self.device, self.dtype = self.model_points_eval.device, self.model_points_eval.dtype
 
         # get a large number of model points to register to
         self.model_points_register, self.model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
-                                                                                        name=model_name, seed=0,
+                                                                                        name=model_name,
+                                                                                        seed=0, dbpath=dbpath,
                                                                                         device=env.device)
 
         # need to get these after

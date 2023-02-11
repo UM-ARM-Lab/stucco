@@ -47,13 +47,16 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     for _ in range(1000):
         p.stepSimulation()
 
+    dbpath = os.path.join(cfg.DATA_DIR, "model_points_cache.pkl"),
     # get a fixed number of model points to evaluate against (this will be independent on points used to register)
     model_points_eval, model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points, name=model_name, seed=0,
+                                                                  dbpath=dbpath,
                                                                   device=exp.device)
     device, dtype = model_points_eval.device, model_points_eval.dtype
 
     # get a large number of model points to register to
     model_points_register, model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
+                                                                          dbpath=dbpath,
                                                                           name=model_name, seed=0, device=exp.device)
 
     # # test ICP using fixed set of points
@@ -61,7 +64,8 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     errors = []
     B = 30
 
-    best_tsf_guess = None if upright_bias == 0 else stucco.icp.initialization.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = None if upright_bias == 0 else stucco.icp.initialization.random_upright_transforms(B, dtype,
+                                                                                                        device)
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
     pose = p.getBasePositionAndOrientation(target_obj_id)
@@ -160,6 +164,7 @@ class ShapeExplorationExperiment(abc.ABC):
         model_points, model_normals, _ = sample_mesh_points(self.obj_factory, num_points=500,
                                                             seed=0, clean_cache=build_model,
                                                             name=model_name,
+                                                            dbpath=os.path.join(cfg.DATA_DIR, "model_points_cache.pkl"),
                                                             device=self.device)
         pose = p.getBasePositionAndOrientation(target_obj_id)
 

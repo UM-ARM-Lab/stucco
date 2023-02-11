@@ -9,10 +9,8 @@ import open3d as o3d
 import torch
 from arm_pytorch_utilities import tensor_utils, rand
 from multidim_indexing import torch_view
-from base_experiments.env.env import Visualizer
 
 from stucco.voxel import VoxelGrid, get_divisible_range_by_resolution, get_coordinates_and_points_in_grid
-from base_experiments import cfg
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo
 from typing import NamedTuple, Union
 
@@ -55,7 +53,7 @@ class ObjectFactory(abc.ABC):
         """Return the path to the high poly mesh resource file"""
         return self.get_mesh_resource_filename()
 
-    def draw_mesh(self, dd: Visualizer, name, pose, rgba, object_id=None):
+    def draw_mesh(self, dd, name, pose, rgba, object_id=None):
         frame_pos = np.array(self.vis_frame_pos) * self.scale
         return dd.draw_mesh(name, self.get_mesh_resource_filename(), pose, scale=self.scale, rgba=rgba,
                             object_id=object_id, vis_frame_pos=frame_pos, vis_frame_rot=self.vis_frame_rot)
@@ -253,8 +251,7 @@ class MeshSDF(ObjectFrameSDF):
 
 class CachedSDF(ObjectFrameSDF):
     def __init__(self, object_name, resolution, range_per_dim, gt_sdf, device="cpu", clean_cache=False,
-                 debug_check_sdf=False):
-        fullname = os.path.join(cfg.DATA_DIR, f'sdf_cache.pkl')
+                 debug_check_sdf=False, cache_path="sdf_cache.pkl"):
         self.device = device
         # cache for signed distance field to object
         self.voxels = None
@@ -273,13 +270,13 @@ class CachedSDF(ObjectFrameSDF):
         self.name = f"{object_name} {resolution} {tuple(range_per_dim)}"
         self.debug_check_sdf = debug_check_sdf
 
-        if os.path.exists(fullname):
-            data = torch.load(fullname) or {}
+        if os.path.exists(cache_path):
+            data = torch.load(cache_path) or {}
             try:
                 cached_underlying_sdf, cached_underlying_sdf_grad = data[self.name]
-                logger.info("cached sdf for %s loaded from %s", self.name, fullname)
+                logger.info("cached sdf for %s loaded from %s", self.name, cache_path)
             except (ValueError, KeyError):
-                logger.info("cached sdf invalid %s from %s, recreating", self.name, fullname)
+                logger.info("cached sdf invalid %s from %s, recreating", self.name, cache_path)
         else:
             data = {}
 
@@ -302,8 +299,8 @@ class CachedSDF(ObjectFrameSDF):
 
             data[self.name] = cached_underlying_sdf, cached_underlying_sdf_grad
 
-            torch.save(data, fullname)
-            logger.info("caching sdf for %s to %s", self.name, fullname)
+            torch.save(data, cache_path)
+            logger.info("caching sdf for %s to %s", self.name, cache_path)
 
         cached_underlying_sdf = cached_underlying_sdf.to(device=device)
         cached_underlying_sdf_grad = cached_underlying_sdf_grad.to(device=device)
@@ -388,14 +385,13 @@ def draw_pose_distribution(link_to_world_tf_matrix, obj_id_map, dd, obj_factory:
         obj_id_map[b] = object_id
 
 
-def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, init_factor=5, seed=0, name="",
+def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, seed=0, name="",
                        clean_cache=False, dtype=torch.float, min_init_sample_points=200,
-                       dbname='model_points_cache.pkl', device="cpu", cache=None):
+                       dbpath='model_points_cache.pkl', device="cpu", cache=None):
     given_cache = cache is not None
-    fullname = os.path.join(cfg.DATA_DIR, dbname)
-    if cache is not None or os.path.exists(fullname):
+    if cache is not None or os.path.exists(dbpath):
         if cache is None:
-            cache = torch.load(fullname)
+            cache = torch.load(dbpath)
 
         if name not in cache:
             cache[name] = {}
@@ -436,6 +432,6 @@ def sample_mesh_points(obj_factory: ObjectFactory = None, num_points=100, init_f
     cache[name][seed][num_points] = points, normals.cpu(), None
     # otherwise assume will be saved by the user
     if not given_cache:
-        torch.save(cache, fullname)
+        torch.save(cache, dbpath)
 
     return points.to(device=device, dtype=dtype), normals.to(device=device, dtype=dtype), cache

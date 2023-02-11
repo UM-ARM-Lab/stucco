@@ -108,10 +108,11 @@ class PokeRunner:
         self.init_method = init_method
 
         model_name = self.env.obj_factory.name
+        dbpath = os.path.join(cfg.DATA_DIR, model_points_dbname),
         # get a fixed number of model points to evaluate against (this will be independent on points used to register)
         self.model_points_eval, self.model_normals_eval, _ = sample_mesh_points(num_points=eval_num_points,
                                                                                 name=model_name,
-                                                                                seed=0, dbname=model_points_dbname,
+                                                                                seed=0, dbpath=dbpath,
                                                                                 device=self.env.device)
         self.dtype = self.model_points_eval.dtype
         self.device = self.env.device
@@ -119,7 +120,7 @@ class PokeRunner:
         # get a large number of model points to register to
         self.model_points_register, self.model_normals_register, _ = sample_mesh_points(num_points=register_num_points,
                                                                                         name=model_name, seed=0,
-                                                                                        dbname=model_points_dbname,
+                                                                                        dbpath=dbpath,
                                                                                         device=self.env.device)
 
         # need to get these after
