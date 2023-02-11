@@ -2,6 +2,8 @@
 import typing
 
 import torch
+
+import pytorch_volumetric.sdf
 from base_experiments.env.env import Visualizer
 from stucco.registration_util import apply_similarity_transform
 from stucco.icp.costs import RegistrationCost
@@ -25,7 +27,7 @@ MedialBallType = torch.tensor
 class MedialConstraintCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace medial balls"""
 
-    def __init__(self, medial_balls: MedialBallType, obj_sdf: sdf.ObjectFrameSDF,
+    def __init__(self, medial_balls: MedialBallType, obj_sdf: pytorch_volumetric.sdf.ObjectFrameSDF,
                  model_surface_points_world_frame: torch.tensor, scale=1,
                  vis: typing.Optional[Visualizer] = None, scale_medial_ball_penetration=1., scale_surface_points_sdf=1.,
                  obj_factory=None,

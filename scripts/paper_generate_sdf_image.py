@@ -1,7 +1,6 @@
 from stucco.env import poke_real_nonros
-from stucco import voxel
+from pytorch_volumetric import voxel
 import numpy as np
-import matplotlib.cm
 import matplotlib.colors
 from matplotlib import pyplot as plt
 from stucco.icp.costs import KnownSDFLookupCost, FreeSpaceLookupCost, OccupiedLookupCost

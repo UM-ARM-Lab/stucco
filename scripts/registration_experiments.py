@@ -2,6 +2,8 @@ import typing
 import re
 import time
 
+import pytorch_kinematics.transforms.rotation_conversions
+
 import base_experiments.util
 import pandas as pd
 from timeit import default_timer as timer
@@ -21,7 +23,7 @@ from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, sav
 
 from stucco.icp import quality_diversity, registration_method_uses_only_contact_points
 from stucco.icp.initialization import initialize_transform_estimates
-from stucco import voxel
+from pytorch_volumetric import voxel
 from stucco.poking_controller import PokingController
 
 import torch
@@ -39,10 +41,11 @@ from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklear
 from stucco.env import poke
 from stucco.env.poke import obj_factory_map, level_to_obj_map
 from stucco.env_getters.poke import PokeGetter
-from stucco.evaluation import evaluate_chamfer_distance
+from pytorch_volumetric.chamfer import batch_chamfer_dist
 from stucco.icp import costs as icp_costs
 from stucco import serialization
-from stucco.sdf import draw_pose_distribution, sample_mesh_points
+from stucco.sdf import draw_pose_distribution
+from pytorch_volumetric.sdf import sample_mesh_points
 
 from arm_pytorch_utilities.controller import Controller
 from stucco.retrieval_controller import TrackingMethod, OurSoftTrackingMethod, \
@@ -187,9 +190,9 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
                                        volumetric_cost,
                                        icp_method)
 
-        errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval,
-                                                     vis if env.mode == p.GUI else None,
-                                                     env.obj_factory, viewing_delay)
+        errors_per_batch = batch_chamfer_dist(T, model_points_world_frame_eval,
+                                              env.obj_factory, viewing_delay,
+                                              vis=vis if env.mode == p.GUI else None)
         errors.append(errors_per_batch)
 
         df = pd.DataFrame(
@@ -456,16 +459,17 @@ class PokeRunner:
         self.env.draw_mesh("base_object", ([0, 0, 100], [0, 0, 0, 1]), (0.0, 0.0, 1., 0.5),
                            object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
         if self.draw_pose_distribution_separately:
-            evaluate_chamfer_dist_extra_args = [self.env.vis if self.env.mode == p.GUI else None, self.env.obj_factory,
+            evaluate_chamfer_dist_extra_args = [self.env.obj_factory,
                                                 0.05,
                                                 False]
         else:
             draw_pose_distribution(T.inverse(), self.pose_obj_map, self.env.vis, self.env.obj_factory)
-            evaluate_chamfer_dist_extra_args = [None, self.env.obj_factory, 0., False]
+            evaluate_chamfer_dist_extra_args = [self.env.obj_factory, 0., False]
 
         # evaluate with chamfer distance
-        errors_per_batch = evaluate_chamfer_distance(T, self.model_points_world_frame_eval,
-                                                     *evaluate_chamfer_dist_extra_args)
+        errors_per_batch = batch_chamfer_dist(T, self.model_points_world_frame_eval,
+                                              *evaluate_chamfer_dist_extra_args,
+                                              vis=self.env.vis if self.env.mode == p.GUI else None)
         self.env.unpause()
 
         link_to_current_tf = tf.Transform3d(matrix=T)
@@ -478,7 +482,7 @@ class PokeRunner:
         logger.info(f"chamfer distance {self.pokes}: {torch.mean(errors_per_batch)}")
 
         # draw mesh at where our best guess is
-        guess_pose = base_experiments.util.matrix_to_pos_rot(best_T)
+        guess_pose = pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(best_T)
         # self.env.draw_mesh("base_object", guess_pose, (0.0, 0.0, 1., 0.5),
         #                    object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
 
@@ -919,8 +923,8 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         Iapprox = T.view(-1, 1, 4, 4) @ Tp.view(1, -1, 4, 4)
 
         B, P = Iapprox.shape[:2]
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
-                                                     self.env.obj_factory, 0)
+        errors_per_batch = batch_chamfer_dist(Iapprox.view(B * P, 4, 4), self.model_points_eval,
+                                              self.env.obj_factory, 0, vis=None)
         errors_per_batch = errors_per_batch.view(B, P)
 
         # when evaluating, move the best guess pose far away to improve clarity
@@ -947,9 +951,9 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
                 for b in range(B):
                     p = best_per_sampled.indices[b]
                     self.env.draw_user_text(f"{best_per_sampled.values[b].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                    self.env.draw_mesh("sampled", base_experiments.util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                    self.env.draw_mesh("sampled", pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                    self.env.draw_mesh("plausible", base_experiments.util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                    self.env.draw_mesh("plausible", pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
                     time.sleep(self.sleep_between_plots)
 
@@ -957,9 +961,9 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
                 for p in range(P):
                     b = best_per_plausible.indices[p]
                     self.env.draw_user_text(f"{best_per_plausible.values[p].item():.0f}", xy=[-0.1, -0.2, -0.5])
-                    self.env.draw_mesh("sampled", base_experiments.util.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
+                    self.env.draw_mesh("sampled", pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(Tinv[b]), (0.0, 1.0, 0., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
-                    self.env.draw_mesh("plausible", base_experiments.util.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
+                    self.env.draw_mesh("plausible", pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(Tp[p]), (0.0, 0.0, 1., 0.5),
                                        object_id=self.env.vis.USE_DEFAULT_ID_FOR_NAME)
                     time.sleep(self.sleep_between_plots)
 

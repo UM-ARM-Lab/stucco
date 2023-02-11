@@ -3,8 +3,9 @@ import enum
 import pybullet as p
 import numpy as np
 import torch
-from stucco import voxel
-from stucco import sdf
+
+import pytorch_volumetric.sdf
+from pytorch_volumetric import voxel
 
 from stucco.env.poke import YCBObjectFactory
 
@@ -68,10 +69,10 @@ class PokeRealNoRosEnv:
 
         self.obj_factory = obj_factory_map(level_to_obj_map[self.level])
         _, ranges = self.obj_factory.make_collision_obj(0)
-        obj_frame_sdf = sdf.MeshSDF(self.obj_factory)
+        obj_frame_sdf = pytorch_volumetric.sdf.MeshSDF(self.obj_factory)
         sdf_resolution = 0.005
-        self.target_sdf = sdf.CachedSDF(self.obj_factory.name, sdf_resolution, ranges, obj_frame_sdf,
-                                        device=device, clean_cache=clean_cache)
+        self.target_sdf = pytorch_volumetric.sdf.CachedSDF(self.obj_factory.name, sdf_resolution, ranges, obj_frame_sdf,
+                                                           device=device, clean_cache=clean_cache)
 
     def reset(self):
         self.free_voxels = voxel.VoxelGrid(self.freespace_resolution, self.freespace_ranges, device=self.device)

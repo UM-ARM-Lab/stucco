@@ -14,8 +14,8 @@ import pytorch_kinematics as tf
 from stucco import registration_util
 from base_experiments import cfg
 from stucco import icp
-from stucco import voxel
-from stucco.evaluation import evaluate_chamfer_distance
+from pytorch_volumetric import voxel
+from pytorch_volumetric.chamfer import batch_chamfer_dist
 from stucco.env import poke_real_nonros
 from stucco.icp import costs as icp_costs, quality_diversity
 from stucco.experiments import registration
@@ -27,7 +27,7 @@ from pytorch3d.ops.points_alignment import SimilarityTransform
 from datetime import datetime
 
 from stucco.icp.methods import init_random_transform_with_given_init
-from stucco.sdf import sample_mesh_points
+from pytorch_volumetric.sdf import sample_mesh_points
 import logging
 
 ch = logging.StreamHandler()
@@ -228,8 +228,8 @@ class PokeRunner:
 
         # evaluate with chamfer distance
         if self.model_points_world_frame_eval is not None:
-            errors_per_batch = evaluate_chamfer_distance(T, self.model_points_world_frame_eval, vis=None,
-                                                         obj_factory=self.env.obj_factory, viewing_delay=0)
+            errors_per_batch = batch_chamfer_dist(T, self.model_points_world_frame_eval, vis=None,
+                                                  obj_factory=self.env.obj_factory, viewing_delay=0)
 
             link_to_current_tf = tf.Transform3d(matrix=T)
             interior_pts = link_to_current_tf.transform_points(self.volumetric_cost.model_interior_points_orig)
@@ -672,8 +672,8 @@ class EvaluatePlausibleSetRunner(PlausibleSetRunner):
         Iapprox = T_est.view(-1, 1, 4, 4) @ T_p.view(1, -1, 4, 4)
 
         B, P = Iapprox.shape[:2]
-        errors_per_batch = evaluate_chamfer_distance(Iapprox.view(B * P, 4, 4), self.model_points_eval, None,
-                                                     self.env.obj_factory, 0)
+        errors_per_batch = batch_chamfer_dist(Iapprox.view(B * P, 4, 4), self.model_points_eval,
+                                              self.env.obj_factory, 0, vis=None)
         errors_per_batch = errors_per_batch.view(B, P)
         return errors_per_batch
 

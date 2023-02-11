@@ -4,6 +4,8 @@ import math
 
 import os
 
+import pytorch_kinematics.transforms.rotation_conversions
+
 import base_experiments.util
 import gpytorch
 import numpy as np
@@ -18,9 +20,8 @@ from base_experiments import cfg
 from base_experiments.env.env import Visualizer
 from stucco.icp.initialization import random_upright_transforms
 from stucco.icp import methods
-from stucco.sdf import ObjectFrameSDF
 
-from stucco.sdf import ObjectFactory
+from pytorch_volumetric.sdf import ObjectFactory, ObjectFrameSDF
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +394,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
         # plot distribution of poses and the candidate points in terms of their information metric
         m = self._link_to_world_tf().get_matrix()
         for b in range(self.B):
-            pos, rot = base_experiments.util.matrix_to_pos_rot(m[b])
+            pos, rot = pytorch_kinematics.transforms.rotation_conversions.matrix_to_pos_rot(m[b])
             object_id = self.debug_obj_ids.get(b, None)
             object_id = self.debug_obj_factory.draw_mesh(self.dd, "icp_distribution", (pos, rot), object_id=object_id,
                                                          rgba=(0, 0.8, 0.2, 0.2))

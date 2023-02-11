@@ -6,6 +6,7 @@ import open3d as o3d
 import torch
 from torchmcubes import marching_cubes
 
+import pytorch_volumetric.sdf
 from stucco import sdf
 
 
@@ -28,7 +29,7 @@ def export_transform(f, T):
     f.write("\n")
 
 
-def export_pc_register_against(point_cloud_file: str, target_sdf: sdf.ObjectFrameSDF, surface_thresh=0.005):
+def export_pc_register_against(point_cloud_file: str, target_sdf: pytorch_volumetric.sdf.ObjectFrameSDF, surface_thresh=0.005):
     os.makedirs(os.path.dirname(point_cloud_file), exist_ok=True)
     with open(point_cloud_file, 'w') as f:
         pc_surface = target_sdf.get_filtered_points(

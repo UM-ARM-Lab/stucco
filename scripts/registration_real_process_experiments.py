@@ -24,8 +24,8 @@ import scipy
 from stucco import serialization
 from stucco.experiments import registration_nopytorch3d
 from stucco.icp import initialization
-from base_experiments.util import matrix_to_pos_rot
-from stucco import voxel
+from pytorch_kinematics.transforms.rotation_conversions import matrix_to_pos_rot
+from pytorch_volumetric import voxel
 
 try:
     import rospy

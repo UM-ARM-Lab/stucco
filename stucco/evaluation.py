@@ -1,24 +1,18 @@
 import os
 import pickle
 import re
-import time
 import typing
 import logging
-from typing import Type
 
-import base_experiments.util
 import numpy as np
 import pybullet as p
 from matplotlib import pyplot as plt
-from pytorch_kinematics import transforms as tf
 from sklearn import metrics
 
 from base_experiments import cfg
 from stucco_experiments.env import arm
 from base_experiments.env import pybullet_env as env_base
-from base_experiments.env.env import Visualizer
 from base_experiments.env.pybullet_env import ContactInfo
-from stucco.sdf import ObjectFactory
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +101,7 @@ def load_runs_results():
 
 def compute_contact_error(before_moving_pts, moved_pts,
                           # have either env or the env class and object poses
-                          env_cls: Type[arm.ArmEnv] = None, level=None, obj_poses=None,
+                          env_cls, level=None, obj_poses=None,
                           env=None,
                           visualize=False, contact_points_instead_of_contact_config=True):
     contact_error = []
@@ -181,46 +175,3 @@ def object_robot_penetration_score(pt_to_config, config, object_transform, model
     return -d
 
 
-def evaluate_chamfer_distance(T, model_points_world_frame_eval, vis: typing.Optional[Visualizer],
-                              obj_factory: ObjectFactory, viewing_delay, print_err=False):
-    # due to inherent symmetry, can't just use the known correspondence to measure error, since it's ok to mirror
-    # we're essentially measuring the chamfer distance (acts on 2 point clouds), where one point cloud is the
-    # evaluation model points on the ground truth object surface, and the surface points of the object transformed
-    # by our estimated pose (which is infinitely dense)
-    # this is the unidirectional chamfer distance since we're only measuring dist of eval points to surface
-    B = T.shape[0]
-    eval_num_points = model_points_world_frame_eval.shape[0]
-    world_to_link = tf.Transform3d(matrix=T)
-    link_to_world = world_to_link.inverse()
-    model_points_object_frame_eval = world_to_link.transform_points(model_points_world_frame_eval)
-
-    res = obj_factory.object_frame_closest_point(model_points_object_frame_eval)
-    closest_pt_world_frame = link_to_world.transform_points(res.closest)
-    # closest_pt_world_frame = closest_pt_object_frame
-    # convert to mm**2
-    chamfer_distance = (1000 * res.distance) ** 2
-    # average across the evaluation points
-    errors_per_batch = chamfer_distance.mean(dim=-1)
-
-    if vis is not None:
-        m = link_to_world.get_matrix()
-        for b in range(B):
-            pos, rot = base_experiments.util.matrix_to_pos_rot(m[b])
-            obj_factory.draw_mesh(vis, "chamfer evaluation", (pos, rot), rgba=(0, 0.1, 0.8, 0.1),
-                                  object_id=vis.USE_DEFAULT_ID_FOR_NAME)
-            vis.draw_point("avgerr", [0, 0, 0], (1, 0, 0), label=f"avgerr: {round(errors_per_batch[b].item())}")
-
-            if print_err:
-                for i in range(eval_num_points):
-                    query = model_points_world_frame_eval[i].cpu()
-                    closest = closest_pt_world_frame[b, i].cpu()
-                    vis.draw_point(f"query.{i}", query, (0, 1, 0))
-                    vis.draw_point(f"closest.{i}", closest, (0, 1, 1))
-                    vis.draw_2d_line(f"qc.{i}", query, closest - query, (0, 1, 0), scale=1)
-
-            time.sleep(viewing_delay)
-
-        # move somewhere far away
-        obj_factory.draw_mesh(vis, "chamfer evaluation", ([0, 0, 100], [0, 0, 0, 1]), rgba=(0, 0.2, 0.8, 0.2),
-                              object_id=vis.USE_DEFAULT_ID_FOR_NAME)
-    return errors_per_batch

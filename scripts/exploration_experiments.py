@@ -12,6 +12,7 @@ import pybullet_data
 import pymeshlab
 import torch
 
+import pytorch_volumetric.sdf
 import stucco.icp
 import stucco.icp.initialization
 from arm_pytorch_utilities import tensor_utils, rand
@@ -26,9 +27,9 @@ from stucco.env.poke import obj_factory_map
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point
 from base_experiments.env.env import draw_AABB
 from base_experiments.env.real_env import CombinedVisualizer
-from stucco.evaluation import evaluate_chamfer_distance
+from pytorch_volumetric.chamfer import batch_chamfer_dist
 from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
-from stucco.sdf import sample_mesh_points
+from pytorch_volumetric.sdf import sample_mesh_points
 
 
 def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
@@ -91,7 +92,7 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
                                      batch=B)
 
-    errors_per_batch = evaluate_chamfer_distance(T, model_points_world_frame_eval, vis, exp.obj_factory, viewing_delay)
+    errors_per_batch = batch_chamfer_dist(T, model_points_world_frame_eval, exp.obj_factory, viewing_delay, vis=vis)
 
 
 class ShapeExplorationExperiment(abc.ABC):
@@ -252,14 +253,14 @@ class ICPEVExperiment(ShapeExplorationExperiment):
         super(ICPEVExperiment, self).__init__(**kwargs)
 
         # test object needs collision shape to test against, so we can't use visual only object
-        obj_frame_sdf = stucco.sdf.MeshSDF(self.obj_factory)
+        obj_frame_sdf = pytorch_volumetric.sdf.MeshSDF(self.obj_factory)
         range_per_dim = copy.copy(self.obj_factory.ranges)
         if clean_cache:
             # draw the bounding box of the object frame SDF
             draw_AABB(self.dd, range_per_dim)
 
-        self.sdf = stucco.sdf.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
-                                        obj_frame_sdf, device=self.device, clean_cache=clean_cache)
+        self.sdf = pytorch_volumetric.sdf.CachedSDF(self.obj_factory.name, sdf_resolution, range_per_dim,
+                                                    obj_frame_sdf, device=self.device, clean_cache=clean_cache)
         self.set_policy(
             policy_factory(self.sdf, vis=self.dd, debug_obj_factory=self.obj_factory, **policy_args))
 

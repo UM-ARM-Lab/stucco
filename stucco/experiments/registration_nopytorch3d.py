@@ -8,9 +8,10 @@ import torch
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
-from stucco import sdf, voxel
+import pytorch_volumetric.sdf
+from pytorch_volumetric import voxel
 from base_experiments import cfg
-from stucco.sdf import sample_mesh_points
+from pytorch_volumetric.sdf import sample_mesh_points
 
 
 def saved_traj_dir_base(level, experiment_name="poke"):
@@ -75,7 +76,7 @@ def read_offline_output(reg_method, level, seed: int, pokes: int, experiment_nam
     return T, distances, elapsed
 
 
-def build_model(obj_factory: sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
+def build_model(obj_factory: pytorch_volumetric.sdf.ObjectFactory, vis, model_name, seed, num_points, pause_at_end=False,
                 device="cpu", **kwargs):
     points, normals, cache = sample_mesh_points(obj_factory, num_points=num_points,
                                                 seed=seed, clean_cache=True,
@@ -98,7 +99,7 @@ def plot_sdf(obj_factory, target_sdf, vis, filter_pts=None):
     obj_factory.draw_mesh(vis, "objframe", ([0, 0, 0], [0, 0, 0, 1]), (0.3, 0.3, 0.3, 0.5),
                           object_id=vis.USE_DEFAULT_ID_FOR_NAME)
     s = target_sdf
-    assert isinstance(s, sdf.CachedSDF)
+    assert isinstance(s, pytorch_volumetric.sdf.CachedSDF)
     coords, pts = voxel.get_coordinates_and_points_in_grid(s.resolution, s.ranges, device=s.device)
     if filter_pts is not None:
         pts = filter_pts(pts)

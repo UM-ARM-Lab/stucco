@@ -3,8 +3,8 @@ import torch
 from torch.nn import MSELoss
 from pytorch3d.ops.knn import knn_gather, _KNN
 
-from stucco import sdf
-from stucco import voxel
+import pytorch_volumetric.sdf
+from pytorch_volumetric import voxel
 from stucco.registration_util import apply_similarity_transform
 from typing import Any
 
@@ -88,7 +88,7 @@ class FreeSpaceLookupCost(torch.autograd.Function):
     interior_threshold = -0.01
 
     @staticmethod
-    def forward(ctx: Any, sdf: sdf.ObjectFrameSDF, model_frame_free_pos: torch.tensor) -> torch.tensor:
+    def forward(ctx: Any, sdf: pytorch_volumetric.sdf.ObjectFrameSDF, model_frame_free_pos: torch.tensor) -> torch.tensor:
         definitely_not_violating = sdf.outside_surface(model_frame_free_pos,
                                                        surface_level=FreeSpaceLookupCost.interior_threshold)
         violating = ~definitely_not_violating
@@ -124,7 +124,7 @@ class OccupiedLookupCost(torch.autograd.Function):
     interior_threshold = -0.01
 
     @staticmethod
-    def forward(ctx: Any, sdf: sdf.ObjectFrameSDF, model_frame_occ_pos: torch.tensor) -> torch.tensor:
+    def forward(ctx: Any, sdf: pytorch_volumetric.sdf.ObjectFrameSDF, model_frame_occ_pos: torch.tensor) -> torch.tensor:
         violating = sdf.outside_surface(model_frame_occ_pos, surface_level=-FreeSpaceLookupCost.interior_threshold)
         # this full lookup is much, much slower than the cached version with points, but are about equivalent
         sdf_value, sdf_grad = sdf(model_frame_occ_pos[violating])
@@ -156,7 +156,7 @@ class OccupiedLookupCost(torch.autograd.Function):
 
 class KnownSDFLookupCost(torch.autograd.Function):
     @staticmethod
-    def forward(ctx: Any, sdf: sdf.ObjectFrameSDF, model_frame_positions: torch.tensor,
+    def forward(ctx: Any, sdf: pytorch_volumetric.sdf.ObjectFrameSDF, model_frame_positions: torch.tensor,
                 expected_sdf_values: torch.tensor) -> torch.tensor:
         # should be fast since they should be in cache
         sdf_value, sdf_grad = sdf(model_frame_positions)
@@ -220,7 +220,7 @@ class KnownSDFVoxelDiffCost:
 class VolumetricCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels"""
 
-    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
+    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: pytorch_volumetric.sdf.ObjectFrameSDF, scale=1,
                  vis=None, scale_known_freespace=1., scale_known_sdf=1.,
                  obj_factory=None,
                  debug=False, debug_known_sgd=False, debug_freespace=False):
@@ -457,7 +457,7 @@ class VolumetricDoubleDirectCost(RegistrationCost):
     """Cost of transformed model pose intersecting with known freespace voxels
     (slower than the voxelized version above)"""
 
-    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
+    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: pytorch_volumetric.sdf.ObjectFrameSDF, scale=1,
                  vis=None, scale_known_freespace=1., scale_known_sdf=1.,
                  obj_factory=None,
                  debug=False, debug_known_sgd=False, debug_freespace=False):
@@ -537,7 +537,7 @@ class VolumetricDoubleDirectCost(RegistrationCost):
 class DiscreteNondifferentiableCost(RegistrationCost):
     """Flat high cost for any known free space point violations"""
 
-    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: sdf.ObjectFrameSDF, scale=1,
+    def __init__(self, free_voxels: voxel.Voxels, sdf_voxels: voxel.Voxels, obj_sdf: pytorch_volumetric.sdf.ObjectFrameSDF, scale=1,
                  vis=None, cmax=20., penetration_tolerance=0.01,
                  obj_factory=None):
         """

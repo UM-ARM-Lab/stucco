@@ -13,6 +13,7 @@ import matplotlib.cm as cmx
 
 from arm_pytorch_utilities import tensor_utils
 
+import pytorch_volumetric.sdf
 from base_experiments.env.pybullet_env import PybulletEnv, get_total_contact_force, make_box, state_action_color_pairs, \
     ContactInfo, closest_point_on_surface, pybullet_obj_range
 from stucco.env.movable_sdf import PlanarMovableSDF
@@ -23,7 +24,8 @@ from base_experiments import cfg
 from stucco import tracking
 from stucco.defines import NO_CONTACT_ID
 from stucco.detection import ContactDetector, ContactSensor
-from stucco import sdf, voxel
+from stucco import sdf
+from pytorch_volumetric import voxel
 
 from view_animator import animate_view_in_background
 from view_animator.pybullet_animator import PybulletOrbiter
@@ -276,7 +278,7 @@ class PokeEnv(PybulletEnv):
 
         # poke target information
         self.obj_factory: YCBObjectFactory = None
-        self.target_sdf: sdf.ObjectFrameSDF = None
+        self.target_sdf: pytorch_volumetric.sdf.ObjectFrameSDF = None
         self.free_voxels: voxel.VoxelGrid = None
 
         self.target_model_name = None
@@ -880,9 +882,9 @@ class PokeEnv(PybulletEnv):
         p.resetBasePositionAndOrientation(self.robot_id, self.LINK_FRAME_POS, self.LINK_FRAME_ORIENTATION)
 
         # SDF for the object
-        obj_frame_sdf = sdf.MeshSDF(self.obj_factory)
-        self.target_sdf = sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
-                                        obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        obj_frame_sdf = pytorch_volumetric.sdf.MeshSDF(self.obj_factory)
+        self.target_sdf = pytorch_volumetric.sdf.CachedSDF(self.obj_factory.name, self.sdf_resolution, self.ranges,
+                                                           obj_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         if self.clean_cache:
             draw_AABB(self.vis, self.ranges)
             # display the voxels created for this sdf
@@ -898,8 +900,8 @@ class PokeEnv(PybulletEnv):
         robot_frame_sdf = sdf.PyBulletNaiveSDF(self.robot_id)
         robot_range = pybullet_obj_range(self.robot_id, 0.02)
         # TODO consider if need the fingers of the gripper to sweep out freespace, or if that's too close
-        self.robot_sdf = sdf.CachedSDF("floating_gripper", 0.005, robot_range,
-                                       robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
+        self.robot_sdf = pytorch_volumetric.sdf.CachedSDF("floating_gripper", 0.005, robot_range,
+                                                          robot_frame_sdf, device=self.device, clean_cache=self.clean_cache)
         self.robot_interior_points_orig = self.robot_sdf.get_filtered_points(lambda voxel_sdf: voxel_sdf < -0.01)
 
         if self.clean_cache:
@@ -1080,7 +1082,7 @@ class ArmMovableSDF(PlanarMovableSDF):
             super(ArmMovableSDF, self).__init__(*data)
 
 
-class YCBObjectFactory(sdf.ObjectFactory):
+class YCBObjectFactory(pytorch_volumetric.sdf.ObjectFactory):
     def __init__(self, name, ycb_name, ranges=None, **kwargs):
         # specify ranges=None to infer the range from the object's bounding box
         super(YCBObjectFactory, self).__init__(name, **kwargs)
