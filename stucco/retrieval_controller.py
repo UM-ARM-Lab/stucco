@@ -15,8 +15,8 @@ from stucco.defines import NO_CONTACT_ID
 from base_experiments import cfg
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, state_action_color_pairs
 
-from stucco.baselines.cluster import process_labels_with_noise
-from stucco.baselines.gmphd import GMPHDWrapper
+from stucco_experiments.baselines.cluster import process_labels_with_noise
+from stucco_experiments.baselines import GMPHDWrapper
 
 from arm_pytorch_utilities.draw import clear_ax_content
 from datetime import datetime

@@ -14,7 +14,7 @@ from arm_pytorch_utilities import tensor_utils
 from geometry_msgs.msg import PoseStamped
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
-from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.evaluation import object_robot_penetration_score
 from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
     SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed, \

@@ -4,7 +4,6 @@ import time
 
 import pytorch_kinematics.transforms.rotation_conversions
 
-import base_experiments.util
 import pandas as pd
 from timeit import default_timer as timer
 
@@ -37,7 +36,7 @@ from arm_pytorch_utilities import tensor_utils, rand
 
 from stucco import icp
 from base_experiments import cfg
-from stucco.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
+from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco.env import poke
 from stucco.env.poke import obj_factory_map, level_to_obj_map
 from stucco.env_getters.poke import PokeGetter

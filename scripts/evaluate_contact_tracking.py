@@ -33,9 +33,9 @@ from base_experiments.env import pybullet_env as env_base
 from base_experiments.env.env import InfoKeys
 from stucco_experiments.env_getters.arm import ArmGetter
 
-from stucco.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
+from stucco_experiments.baselines.cluster import process_labels_with_noise, OnlineSklearnFixedClusters, \
     OnlineAgglomorativeClustering
-from stucco.baselines.gmphd import GMPHDWrapper
+from stucco_experiments.baselines import GMPHDWrapper
 
 ch = logging.StreamHandler()
 fh = logging.FileHandler(os.path.join(cfg.ROOT_DIR, "logs", "{}.log".format(datetime.now())))
