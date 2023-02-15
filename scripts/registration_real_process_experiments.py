@@ -11,8 +11,8 @@ from mmint_camera_utils.camera_utils.point_cloud_utils import tr_pointcloud
 from arm_pytorch_utilities import rand
 from window_recorder.recorder import WindowRecorder
 
-from stucco.env import poke_real
-from stucco.env import poke_real_nonros
+from chsel_experiments.env import poke_real
+from chsel_experiments.env import poke_real_nonros
 from stucco import icp
 from base_experiments import cfg
 from base_experiments.env.env import draw_AABB

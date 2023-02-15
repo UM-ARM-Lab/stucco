@@ -16,7 +16,7 @@ from base_experiments import cfg
 from stucco import icp
 from pytorch_volumetric import voxel
 from pytorch_volumetric.chamfer import batch_chamfer_dist
-from stucco.env import poke_real_nonros
+from chsel_experiments.env import poke_real_nonros
 from stucco.icp import costs as icp_costs, quality_diversity
 from stucco.experiments import registration
 from stucco.experiments import registration_nopytorch3d

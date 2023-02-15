@@ -37,9 +37,9 @@ from arm_pytorch_utilities import tensor_utils, rand
 from stucco import icp
 from base_experiments import cfg
 from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
-from stucco.env import poke
-from stucco.env.poke import obj_factory_map, level_to_obj_map
-from stucco.env_getters.poke import PokeGetter
+from chsel_experiments.env import poke
+from chsel_experiments.env import obj_factory_map, level_to_obj_map
+from chsel_experiments.env_getters.poke import PokeGetter
 from pytorch_volumetric.chamfer import batch_chamfer_dist
 from stucco.icp import costs as icp_costs
 from stucco import serialization

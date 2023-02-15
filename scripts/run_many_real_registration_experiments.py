@@ -1,7 +1,7 @@
 import argparse
 import subprocess
 
-from stucco.env import poke_real_nonros
+from chsel_experiments.env import poke_real_nonros
 from base_experiments import cfg
 from stucco import icp
 import logging

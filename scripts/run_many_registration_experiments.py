@@ -1,7 +1,7 @@
 import argparse
 import subprocess
 
-from stucco.env import poke
+from chsel_experiments.env import poke
 from base_experiments import cfg
 import logging
 import os

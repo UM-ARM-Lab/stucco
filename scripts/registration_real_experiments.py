@@ -4,7 +4,7 @@ import numpy as np
 import logging
 
 from bubble_utils.bubble_data_collection.controller_base import ControllerBase
-from stucco.env.poke_real import RealPokeEnv
+from chsel_experiments.env.poke_real import RealPokeEnv
 from stucco.poking_controller import PokingController
 from bubble_utils.bubble_data_collection.env_data_collection import ReferencedEnvDataCollector
 
@@ -14,8 +14,8 @@ import os
 from datetime import datetime
 
 from base_experiments import cfg
-from stucco.env import poke_real
-from stucco.env import poke_real_nonros
+from chsel_experiments.env import poke_real
+from chsel_experiments.env import poke_real_nonros
 from stucco import tracking
 from stucco.tracking import ContactSet
 from victor_hardware_interface_msgs.msg import ControlMode

@@ -1,4 +1,4 @@
-from stucco.env import poke_real_nonros
+from chsel_experiments.env import poke_real_nonros
 from pytorch_volumetric import voxel
 import numpy as np
 import matplotlib.colors
