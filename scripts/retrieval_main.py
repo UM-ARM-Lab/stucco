@@ -21,7 +21,8 @@ from base_experiments.env.env import InfoKeys
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
 from base_experiments import cfg
-from stucco import tracking, exploration
+from stucco import tracking
+from itar import exploration
 from chsel_experiments import registration
 from stucco_experiments.env import arm
 from stucco_experiments.env.arm import Levels

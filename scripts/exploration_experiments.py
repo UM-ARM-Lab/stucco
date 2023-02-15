@@ -26,7 +26,7 @@ from base_experiments.env.pybullet_env import closest_point_on_surface, ContactI
 from base_experiments.env.env import draw_AABB
 from base_experiments.env.real_env import CombinedVisualizer
 from pytorch_volumetric.chamfer import batch_chamfer_dist
-from stucco.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
+from itar.exploration import PlotPointType, ShapeExplorationPolicy, ICPEVExplorationPolicy, GPVarianceExploration
 from pytorch_volumetric.sdf import sample_mesh_points
 
 
