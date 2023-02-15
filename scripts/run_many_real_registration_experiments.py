@@ -3,7 +3,7 @@ import subprocess
 
 from chsel_experiments.env import poke_real_nonros
 from base_experiments import cfg
-from stucco import icp
+from chsel_experiments import registration
 import logging
 import os
 from datetime import datetime
@@ -23,7 +23,7 @@ nonros_exps = ['build', 'register', 'plot-poke-ce', 'plot-poke-pd', 'generate-pl
                'trim-plausible-set', 'evaluate-plausible-diversity']
 parser.add_argument('--experiment', choices=ros_exps + nonros_exps, default=['register'], nargs='+',
                     help='which experiment to run')
-registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+registration_map = {m.name.lower().replace('_', '-'): m for m in registration.ICPMethod}
 parser.add_argument('--registration', nargs='+',
                     choices=registration_map.keys(),
                     default=['volumetric'],

@@ -6,7 +6,7 @@ import os.path
 import pybullet as p
 import re
 
-from stucco.defines import NO_CONTACT_ID
+from base_experiments.defines import NO_CONTACT_ID
 from stucco_experiments.evaluation import get_file_metainfo
 
 from base_experiments import cfg

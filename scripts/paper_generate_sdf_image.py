@@ -3,7 +3,7 @@ from pytorch_volumetric import voxel
 import numpy as np
 import matplotlib.colors
 from matplotlib import pyplot as plt
-from stucco.icp.costs import KnownSDFLookupCost, FreeSpaceLookupCost, OccupiedLookupCost
+from chsel.costs import KnownSDFLookupCost, FreeSpaceLookupCost, OccupiedLookupCost
 import torch
 
 plt.switch_backend('Qt5Agg')

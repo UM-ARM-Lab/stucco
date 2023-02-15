@@ -11,24 +11,24 @@ from datetime import datetime
 
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
-import stucco.icp
-import stucco.icp.initialization
+import chsel.initialization
 
 from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
-from stucco.defines import NO_CONTACT_ID
+from base_experiments.defines import NO_CONTACT_ID
 from stucco_experiments.evaluation import compute_contact_error, clustering_metrics, object_robot_penetration_score
 from base_experiments.env.env import InfoKeys
 
 from arm_pytorch_utilities import rand, tensor_utils, math_utils
 
 from base_experiments import cfg
-from stucco import icp, tracking, exploration
+from stucco import tracking, exploration
+from chsel_experiments import registration
 from stucco_experiments.env import arm
 from stucco_experiments.env.arm import Levels
 from stucco_experiments.env_getters.arm import RetrievalGetter
 from base_experiments.env.pybullet_env import state_action_color_pairs
 
-from stucco.retrieval_controller import rot_2d_mat_to_angle, \
+from stucco_experiments.retrieval_controller import rot_2d_mat_to_angle, \
     sample_model_points, pose_error, TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, KeyboardController, PHDFilterTrackingMethod, OurSoftTrackingWithRummagingMethod
 
@@ -84,13 +84,13 @@ def test_icp(env):
         env.vis.draw_point(f"mpt.{i}", pt, color=(0, 0, 1), length=0.003)
 
     # perform ICP and visualize the transformed points
-    # history, transformed_contact_points = icp.icp(model_points[:, :2], contact_points,
+    # history, transformed_contact_points = registration.registration(model_points[:, :2], contact_points,
     #                                               point_pairs_threshold=len(contact_points), verbose=True)
 
     # better to have few A than few B and then invert the transform
-    T, distances, i = icp.icp_2(contact_points, model_points[:, :2])
+    T, distances, i = registration.icp_2(contact_points, model_points[:, :2])
     # transformed_contact_points = np.dot(np.c_[contact_points, np.ones((contact_points.shape[0], 1))], T.T)
-    # T, distances, i = icp.icp_2(model_points[:, :2], contact_points)
+    # T, distances, i = registration.icp_2(model_points[:, :2], contact_points)
     transformed_model_points = np.dot(np.c_[model_points[:, :2], np.ones((model_points.shape[0], 1))],
                                       np.linalg.inv(T).T)
     for i, pt in enumerate(transformed_model_points):
@@ -195,7 +195,7 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
 
     B = 30
     device = model_points.device
-    best_tsf_guess = stucco.icp.initialization.random_upright_transforms(B, dtype, device)
+    best_tsf_guess = chsel.initialization.random_upright_transforms(B, dtype, device)
     guess_pose = None
     pose_error_per_step = {}
 
@@ -219,8 +219,8 @@ def run_retrieval(env, method: TrackingMethod, seed=0, ctrl_noise_max=0.005):
             best_segment_idx = 0
             for k, this_pts in enumerate(method):
                 this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
-                T, distances, _ = icp.icp_3(this_pts.view(-1, 2), model_points[:, :2],
-                                            given_init_pose=best_tsf_guess, batch=B)
+                T, distances, _ = registration.icp_3(this_pts.view(-1, 2), model_points[:, :2],
+                                                     given_init_pose=best_tsf_guess, batch=B)
                 transforms_per_object.append(T)
                 T = T.inverse()
                 penetration = [object_robot_penetration_score(pt_to_config, all_configs, T[b], mph) for b in

@@ -13,17 +13,16 @@ from window_recorder.recorder import WindowRecorder
 
 from chsel_experiments.env import poke_real
 from chsel_experiments.env import poke_real_nonros
-from stucco import icp
-from base_experiments import cfg
+from chsel_experiments import registration
+from base_experiments import cfg, serialization
 from base_experiments.env.env import draw_AABB
 from base_experiments.env.real_env import DebugRvizDrawer
 import numpy as np
 import torch
 import logging
 import scipy
-from stucco import serialization
-from stucco.experiments import registration_nopytorch3d
-from stucco.icp import initialization
+from chsel_experiments.experiments import registration_nopytorch3d
+from chsel import initialization
 from pytorch_kinematics.transforms.rotation_conversions import matrix_to_pos_rot
 from pytorch_volumetric import voxel
 
@@ -500,7 +499,7 @@ if __name__ == "__main__":
                                  'plot-plausible-set', 'plot-estimate-set'],
                         default='extract-known-points',
                         help='which experiment to run')
-    registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+    registration_map = {m.name.lower().replace('_', '-'): m for m in registration.ICPMethod}
     parser.add_argument('--registration',
                         choices=registration_map.keys(),
                         default='volumetric',

@@ -6,7 +6,6 @@ import os
 
 import pytorch_kinematics.transforms.rotation_conversions
 
-import base_experiments.util
 import gpytorch
 import numpy as np
 import torch
@@ -18,8 +17,8 @@ from pytorch_kinematics import transforms as tf
 
 from base_experiments import cfg
 from base_experiments.env.env import Visualizer
-from stucco.icp.initialization import random_upright_transforms
-from stucco.icp import methods
+from chsel.initialization import random_upright_transforms
+from chsel_experiments.registration import methods
 
 from pytorch_volumetric.sdf import ObjectFactory, ObjectFrameSDF
 
@@ -266,7 +265,7 @@ class ICPEVExplorationPolicy(ShapeExplorationPolicy):
                 # do ICP
                 self.T, self.icp_rmse = methods.icp_pytorch3d_sgd(this_pts, self.model_points,
                                                                   given_init_pose=self.best_tsf_guess, batch=self.B)
-                # self.T, self.icp_rmse = icp.icp_stein(this_pts, self.model_points,
+                # self.T, self.icp_rmse = registration.icp_stein(this_pts, self.model_points,
                 #                                       given_init_pose=self.T.inverse(),
                 #                                       batch=self.B)
 

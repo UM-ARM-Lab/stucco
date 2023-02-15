@@ -5,7 +5,7 @@ import logging
 
 from bubble_utils.bubble_data_collection.controller_base import ControllerBase
 from chsel_experiments.env.poke_real import RealPokeEnv
-from stucco.poking_controller import PokingController
+from chsel_experiments.poking_controller import PokingController
 from bubble_utils.bubble_data_collection.env_data_collection import ReferencedEnvDataCollector
 
 # from stucco.env.real_env import VideoLogger

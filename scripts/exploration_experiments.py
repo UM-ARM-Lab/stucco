@@ -13,15 +13,13 @@ import pymeshlab
 import torch
 
 import pytorch_volumetric.sdf
-import stucco.icp
-import stucco.icp.initialization
+import chsel.initialization
 from arm_pytorch_utilities import tensor_utils, rand
 from matplotlib import pyplot as plt
 from pytorch_kinematics import transforms as tf
 from torchmcubes import marching_cubes
 
-import stucco.sdf
-from stucco import icp
+from chsel_experiments import registration
 from base_experiments import cfg
 from chsel_experiments.env import obj_factory_map
 from base_experiments.env.pybullet_env import closest_point_on_surface, ContactInfo, surface_normal_at_point
@@ -65,8 +63,8 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     errors = []
     B = 30
 
-    best_tsf_guess = None if upright_bias == 0 else stucco.icp.initialization.random_upright_transforms(B, dtype,
-                                                                                                        device)
+    best_tsf_guess = None if upright_bias == 0 else chsel.initialization.random_upright_transforms(B, dtype,
+                                                                                                   device)
 
     # for mustard bottle there's a hole in the model inside, we restrict it to avoid sampling points nearby
     pose = p.getBasePositionAndOrientation(target_obj_id)
@@ -89,8 +87,8 @@ def test_icp_on_experiment_run(exp, seed=0, viewing_delay=0.1,
     rand.seed(seed)
     # perform ICP and visualize the transformed points
     # -- try out pytorch3d
-    T, distances = icp.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
-                                     batch=B)
+    T, distances = registration.icp_pytorch3d(model_points_world_frame, model_points_register, given_init_pose=best_tsf_guess,
+                                              batch=B)
 
     errors_per_batch = batch_chamfer_dist(T, model_points_world_frame_eval, exp.obj_factory, viewing_delay, vis=vis)
 

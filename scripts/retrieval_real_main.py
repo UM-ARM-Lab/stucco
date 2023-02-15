@@ -16,7 +16,7 @@ from sklearn.cluster import Birch, DBSCAN, KMeans
 
 from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from stucco_experiments.evaluation import object_robot_penetration_score
-from stucco.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
+from stucco_experiments.retrieval_controller import RetrievalPredeterminedController, sample_model_points, rot_2d_mat_to_angle, \
     SklearnTrackingMethod, TrackingMethod, OurSoftTrackingMethod, SklearnPredeterminedController, KeyboardDirPressed, \
     PHDFilterTrackingMethod, PHDPredeterminedController
 from base_experiments.env.real_env import VideoLogger
@@ -27,7 +27,8 @@ from datetime import datetime
 
 from base_experiments import cfg
 from stucco_experiments.env import arm_real
-from stucco import tracking, icp
+from stucco import tracking
+from chsel_experiments import registration
 from arm_pytorch_utilities.math_utils import rotate_wrt_origin
 
 try:
@@ -287,8 +288,8 @@ def run_retrieval(env, level, pt_to_config, method: TrackingMethod, control_wait
                 dist_per_est_obj = []
                 for this_pts in method:
                     this_pts = tensor_utils.ensure_tensor(model_points.device, dtype, this_pts)
-                    T, distances, _ = icp.icp_3(this_pts.view(-1, 2), model_points[:, :2],
-                                                given_init_pose=best_tsf_guess, batch=50)
+                    T, distances, _ = registration.icp_3(this_pts.view(-1, 2), model_points[:, :2],
+                                                         given_init_pose=best_tsf_guess, batch=50)
                     T = T.inverse()
                     penetration = [object_robot_penetration_score(pt_to_config, all_configs, T[b], mph) for b in
                                    range(T.shape[0])]

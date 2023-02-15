@@ -6,27 +6,23 @@ import torch
 import numpy as np
 from timeit import default_timer as timer
 
-import stucco.icp.initialization
+import chsel.initialization
 from arm_pytorch_utilities import tensor_utils, rand
 
 import pytorch_kinematics as tf
 
-from stucco import registration_util
-from base_experiments import cfg
-from stucco import icp
+from chsel import registration_util, costs as icp_costs, initialization, quality_diversity
+from base_experiments import cfg, serialization
+from chsel_experiments import registration
 from pytorch_volumetric import voxel
 from pytorch_volumetric.chamfer import batch_chamfer_dist
 from chsel_experiments.env import poke_real_nonros
-from stucco.icp import costs as icp_costs, quality_diversity
-from stucco.experiments import registration
-from stucco.experiments import registration_nopytorch3d
-from stucco import serialization
-from stucco.icp import initialization
+from chsel_experiments.experiments import registration, registration_nopytorch3d
 from pytorch3d.ops.points_alignment import SimilarityTransform
 
 from datetime import datetime
 
-from stucco.icp.methods import init_random_transform_with_given_init
+from chsel_experiments.registration.methods import init_random_transform_with_given_init
 from pytorch_volumetric.sdf import sample_mesh_points
 import logging
 
@@ -94,7 +90,7 @@ class PokeRunner:
 
     def __init__(self, env: poke_real_nonros.PokeRealNoRosEnv, reg_method, B=30,
                  read_stored=False, ground_truth_initialization=False,
-                 init_method=stucco.icp.initialization.InitMethod.RANDOM,
+                 init_method=chsel.initialization.InitMethod.RANDOM,
                  register_num_points=500, start_at_num_pts=2, eval_num_points=200,
                  ):
 
@@ -167,16 +163,16 @@ class PokeRunner:
             self.r.best_tsf_guess = self.r.link_to_current_tf_gt.get_matrix().repeat(self.B, 1, 1)
 
         # avoid giving methods that don't use freespace more training iterations
-        if icp.registration_method_uses_only_contact_points(self.reg_method) and N in self.r.num_points_to_T_cache:
+        if registration.registration_method_uses_only_contact_points(self.reg_method) and N in self.r.num_points_to_T_cache:
             T, distances = self.r.num_points_to_T_cache[N]
         else:
-            if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
+            if self.read_stored or self.reg_method == registration.ICPMethod.CVO:
                 T, distances, self.r.elapsed = registration_nopytorch3d.read_offline_output(
                     self.reg_method, self.env.level, seed,
                     self.r.pokes, experiment_name=experiment_name)
                 T = T.to(device=self.env.device, dtype=self.dtype)
                 distances = distances.to(device=self.env.device, dtype=self.dtype)
-            elif self.reg_method in [icp.ICPMethod.MEDIAL_CONSTRAINT, icp.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
+            elif self.reg_method in [registration.ICPMethod.MEDIAL_CONSTRAINT, registration.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
                 T, distances, self.r.elapsed = registration.do_medial_constraint_registration(self.reg_method,
                                                                                               self.r.contact_pts,
                                                                                               self.volumetric_cost.sdf,
@@ -214,8 +210,8 @@ class PokeRunner:
         self.r.best_tsf_guess = T[best_tsf_index]
 
     def reinitialize_best_tsf_guess(self):
-        self.r.best_tsf_guess = stucco.icp.initialization.reinitialize_transform_estimates(self.B,
-                                                                                           self.r.best_tsf_guess)
+        self.r.best_tsf_guess = chsel.initialization.reinitialize_transform_estimates(self.B,
+                                                                                      self.r.best_tsf_guess)
         return self.r.best_tsf_guess
 
     def evaluate_registrations(self):
@@ -941,7 +937,7 @@ if __name__ == "__main__":
                                  ],
                         default='generate-plausible-set',
                         help='which experiment to run')
-    registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+    registration_map = {m.name.lower().replace('_', '-'): m for m in registration.ICPMethod}
     parser.add_argument('--registration',
                         choices=registration_map.keys(),
                         default='volumetric',

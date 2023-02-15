@@ -18,7 +18,7 @@ import typing
 from arm_pytorch_utilities import tensor_utils, rand
 from sklearn.cluster import KMeans, DBSCAN, Birch
 
-from stucco.defines import NO_CONTACT_ID, RunKey, CONTACT_RES_FILE, RUN_AMBIGUITY, CONTACT_ID, CONTACT_POINT_CACHE
+from base_experiments.defines import NO_CONTACT_ID, RunKey, CONTACT_RES_FILE, RUN_AMBIGUITY, CONTACT_ID, CONTACT_POINT_CACHE
 from stucco_experiments.evaluation import dict_to_namespace_str, plot_cluster_res, load_runs_results, get_file_metainfo, \
     clustering_metrics, compute_contact_error
 from stucco.detection_impl import PybulletResidualPlanarContactSensor

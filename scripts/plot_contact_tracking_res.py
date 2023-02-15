@@ -5,7 +5,7 @@ import typing
 import numpy as np
 
 from stucco_experiments.evaluation import load_runs_results
-from stucco.defines import RunKey, RUN_INFO_KEYWORDS, RUN_AMBIGUITY, CONTACT_ID, NO_CONTACT_ID
+from base_experiments.defines import RunKey, RUN_INFO_KEYWORDS, RUN_AMBIGUITY, CONTACT_ID, NO_CONTACT_ID
 
 logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',

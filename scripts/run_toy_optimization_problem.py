@@ -10,8 +10,8 @@ import torch
 from arm_pytorch_utilities.rand import seed
 from arm_pytorch_utilities import grad
 
-from stucco.registration_util import plot_poke_losses
-from stucco.svgd import RBF, SVGD
+from chsel.registration_util import plot_poke_losses
+from chsel_experiments.svgd import RBF, SVGD
 import cma
 from ribs.archives import GridArchive
 from ribs.emitters import EvolutionStrategyEmitter, GradientArborescenceEmitter

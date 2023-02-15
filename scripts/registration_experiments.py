@@ -10,20 +10,19 @@ from timeit import default_timer as timer
 import argparse
 import numpy as np
 
-from stucco.icp import initialization
-from stucco import registration_util
+from chsel import registration_util, costs as icp_costs, initialization, quality_diversity
 from pytorch_kinematics import transforms as tf
 from sklearn.cluster import Birch, DBSCAN, KMeans
 
-from stucco.experiments.registration import do_registration, do_medial_constraint_registration
-from stucco.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_file, read_offline_output, \
+from chsel_experiments.experiments.registration import do_registration, do_medial_constraint_registration
+from chsel_experiments.experiments.registration_nopytorch3d import saved_traj_dir_base, saved_traj_file, read_offline_output, \
     build_model, plot_sdf, plot_poke_chamfer_err, plot_poke_plausible_diversity
 # marching cubes free surface extraction
 
-from stucco.icp import quality_diversity, registration_method_uses_only_contact_points
-from stucco.icp.initialization import initialize_transform_estimates
+from chsel_experiments.registration import registration_method_uses_only_contact_points
+from chsel.initialization import initialize_transform_estimates
 from pytorch_volumetric import voxel
-from stucco.poking_controller import PokingController
+from chsel_experiments.poking_controller import PokingController
 
 import torch
 import pybullet as p
@@ -34,20 +33,18 @@ from datetime import datetime
 from matplotlib import pyplot as plt
 from arm_pytorch_utilities import tensor_utils, rand
 
-from stucco import icp
-from base_experiments import cfg
+from chsel_experiments import registration
+from base_experiments import cfg, serialization
 from stucco_experiments.baselines.cluster import OnlineAgglomorativeClustering, OnlineSklearnFixedClusters
 from chsel_experiments.env import poke
 from chsel_experiments.env import obj_factory_map, level_to_obj_map
 from chsel_experiments.env_getters.poke import PokeGetter
 from pytorch_volumetric.chamfer import batch_chamfer_dist
-from stucco.icp import costs as icp_costs
-from stucco import serialization
-from stucco.sdf import draw_pose_distribution
+from base_experiments.sdf import draw_pose_distribution
 from pytorch_volumetric.sdf import sample_mesh_points
 
 from arm_pytorch_utilities.controller import Controller
-from stucco.retrieval_controller import TrackingMethod, OurSoftTrackingMethod, \
+from stucco_experiments.retrieval_controller import TrackingMethod, OurSoftTrackingMethod, \
     SklearnTrackingMethod, PHDFilterTrackingMethod
 
 plt.switch_backend('Qt5Agg')
@@ -102,7 +99,7 @@ def test_icp(env: poke.PokeEnv, seed=0, name="", clean_cache=False, viewing_dela
              surface_delta=0.025,
              freespace_cost_scale=20,
              ground_truth_initialization=False,
-             icp_method=icp.ICPMethod.VOLUMETRIC,
+             icp_method=registration.ICPMethod.VOLUMETRIC,
              debug=False):
     obj_name = env.obj_factory.name
     fullname = os.path.join(cfg.DATA_DIR, f'icp_comparison_{obj_name}.pkl')
@@ -401,11 +398,11 @@ class PokeRunner:
             if registration_method_uses_only_contact_points(self.reg_method) and N in self.num_points_to_T_cache:
                 T, distances = self.num_points_to_T_cache[N]
             else:
-                if self.read_stored or self.reg_method == icp.ICPMethod.CVO:
+                if self.read_stored or self.reg_method == registration.ICPMethod.CVO:
                     T, distances, self.elapsed = read_offline_output(self.reg_method, self.env.level, seed, self.pokes)
                     T = T.to(device=self.device, dtype=self.dtype)
                     distances = distances.to(device=self.device, dtype=self.dtype)
-                elif self.reg_method in [icp.ICPMethod.MEDIAL_CONSTRAINT, icp.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
+                elif self.reg_method in [registration.ICPMethod.MEDIAL_CONSTRAINT, registration.ICPMethod.MEDIAL_CONSTRAINT_CMAME]:
                     T, distances, self.elapsed = do_medial_constraint_registration(self.reg_method, this_pts,
                                                                                    self.volumetric_cost.sdf,
                                                                                    self.best_tsf_guess, self.B,
@@ -611,7 +608,7 @@ class ExportProblemRunner(PokeRunner):
 
     def __init__(self, *args, export_freespace_surface=True, **kwargs):
         super(ExportProblemRunner, self).__init__(*args, **kwargs)
-        self.reg_method = icp.ICPMethod.NONE
+        self.reg_method = registration.ICPMethod.NONE
         self.pc_to_register_file = None
         self.free_surface_file = None
         self.transform_file = None
@@ -1106,7 +1103,7 @@ def main(args):
         env.close()
     elif args.experiment == "poke":
         env = PokeGetter.env(level=level, mode=p.DIRECT if args.no_gui else p.GUI, clean_cache=False, device="cuda")
-        if registration_method == icp.ICPMethod.NONE:
+        if registration_method == registration.ICPMethod.NONE:
             runner = ExportProblemRunner(env, tracking_method_name, registration_method, read_stored=False)
         else:
             runner = PokeRunner(env, tracking_method_name, registration_method, ground_truth_initialization=False,
@@ -1157,7 +1154,7 @@ if __name__ == "__main__":
                                  'generate-plausible-set', 'plot-plausible-set', 'evaluate-plausible-diversity',
                                  'debug'],
                         help='which experiment to run')
-    registration_map = {m.name.lower().replace('_', '-'): m for m in icp.ICPMethod}
+    registration_map = {m.name.lower().replace('_', '-'): m for m in registration.ICPMethod}
     parser.add_argument('--registration',
                         choices=registration_map.keys(),
                         default='volumetric',
