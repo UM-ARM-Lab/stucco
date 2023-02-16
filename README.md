@@ -1,24 +1,31 @@
-# Soft Tracking Using Contacts for Cluttered Objects (STUCCO) to Perform Blind Object Retrieval
+# STUCCO
+This is the official library code for the paper [Soft Tracking Using Contacts for Cluttered Objects (STUCCO) to Perform Blind Object Retrieval](https://ieeexplore.ieee.org/document/9696372).
+If you use it, please cite
 
-![real_bubble_min](https://user-images.githubusercontent.com/5508542/145291731-1b17c313-16d8-4003-90da-be2fa1756c6c.png)
-
-## Requirements
-
-- python 3.6+
-- pytorch 1.5+
+```
+@article{zhong2022soft,
+  title={Soft tracking using contacts for cluttered objects to perform blind object retrieval},
+  author={Zhong, Sheng and Fazeli, Nima and Berenson, Dmitry},
+  journal={IEEE Robotics and Automation Letters},
+  volume={7},
+  number={2},
+  pages={3507--3514},
+  year={2022},
+  publisher={IEEE}
+}
+```
 
 ## Installation
+```pip install stucco```
 
-1. install required libraries (clone then cd and `pip install -e .`)
-   [pytorch utilities](https://github.com/UM-ARM-Lab/arm_pytorch_utilities),
-   [pytorch kinematics](https://github.com/UM-ARM-Lab/pytorch_kinematics),
-   [YCB object models](https://github.com/eleramp/pybullet-object-models) (only for testing envs)
-2. `pip install -e .`
 
 ## Usage
+This package is meant as a light-weight library for usage in your projects. 
+See the [website](https://johnsonzhong.me/projects/stucco/) for videos and a high level introduction.
+To reproduce the results from the paper, see [stucco_experiments](https://github.com/UM-ARM-Lab/stucco_experiments).
 
 This library provides code for both 1) contact detection and isolation, and 2) contact tracking. However, they can be
-used indepedently of each other; i.e. you can supply the contact point manually to update the tracker instead of getting
+used independently of each other; i.e. you can supply the contact point manually to update the tracker instead of getting
 it from the detector.
 
 This section describes how to use each component, and provide implementation tips. The `pxpen` function measuring
@@ -76,7 +83,7 @@ The tracking is performed through the `ContactSetSoft` object, created like:
 
 ```python
 from stucco.tracking import ContactSetSoft, ContactParameters, LinearTranslationalDynamics
-from stucco.env.env import PlanarPointToConfig
+from stucco.movable_sdf import PlanarMovableSDF
 
 # tune through maximizing median FMI and minimizing median contact error on a training set
 contact_params = ContactParameters(length=0.02,
@@ -87,7 +94,7 @@ contact_params = ContactParameters(length=0.02,
 # need an efficient implementation of pxpen; point to robot surface distance at a certain config
 # see section below for how to implement one
 # here we pass in a cached discretized signed distance field and its description
-pxpen = PlanarPointToConfig(d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len)
+pxpen = PlanarMovableSDF(d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len)
 
 # pxdyn is LinearTranslationalDynamics by default, here we are making it explicit
 contact_set = ContactSetSoft(pxpen, contact_params, pxdyn=LinearTranslationalDynamics())
@@ -131,14 +138,14 @@ Here are some tips for how to create this discretized SDF:
 import os
 import torch
 import numpy as np
-from stucco.env.env import PlanarPointToConfig
+from stucco.movable_sdf import PlanarMovableSDF
 
 
 # note that this is for a planar environment with fixed orientation; 
 # however, it is very easy to extend to 3D and free rotations; 
 # the extension to free rotations will require a parallel way to perform rigid body transforms 
 # on multiple points, which can be provided by pytorch_kinematics.transforms
-class SamplePointToConfig(PlanarPointToConfig):
+class SamplePointToConfig(PlanarMovableSDF):
     def __init__(self):
         # save cache to file for easy loading (use your own path)
         fullname = 'sample_point_to_config.pkl'
@@ -177,53 +184,4 @@ class SamplePointToConfig(PlanarPointToConfig):
             data = [d_cache, min_x, min_y, max_x, max_y, cache_resolution, cache_y_len]
             torch.save(data, fullname)
             super().__init__(*data)
-```
-
-## Reproduce Paper
-
-1. collect training data
-
-```shell
-python collect_tracking_training_data.py --task SELECT1 --gui
-python collect_tracking_training_data.py --task SELECT2 --gui
-python collect_tracking_training_data.py --task SELECT3 --gui
-python collect_tracking_training_data.py --task SELECT4 --gui
-```
-
-2. evaluate all tracking methods on this data; you can find the clustering result and ground truth for each trial
-   in `data/cluster_res`
-
-```shell
-python evaluate_contact_tracking.py
-```
-
-3. plot tracking method performances on the training data
-
-```shell
-python plot_contact_tracking_res.py
-```
-
-4. run simulated BOR tasks (there is a visual bug after resetting environment 8 times, so we split up the runs for
-   different seeds)
-
-```shell
-python retrieval_main.py ours --task FB --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task FB --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task FB --seed 16 17 18 19
-python retrieval_main.py ours --task BC --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task BC --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task BC --seed 16 17 18 19
-python retrieval_main.py ours --task IB --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task IB --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task IB --seed 16 17 18 19
-python retrieval_main.py ours --task TC --seed 0 1 2 3 4 5 6 7; python retrieval_main.py ours --task TC --seed 8 9 10 11 12 13 14 15; python retrieval_main.py ours --task TC --seed 16 17 18 19
-```
-
-repeat with baselines by replacing `ours` with `online-birch` and other baselines
-
-## Citation
-```
-@ARTICLE{9696372,
-  author={Zhong, Sheng and Fazeli, Nima and Berenson, Dmitry},
-  journal={IEEE Robotics and Automation Letters}, 
-  title={Soft Tracking Using Contacts for Cluttered Objects to Perform Blind Object Retrieval}, 
-  year={2022},
-  volume={7},
-  number={2},
-  pages={3507-3514},
-  doi={10.1109/LRA.2022.3146915}}
 ```
