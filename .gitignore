@@ -25,3 +25,4 @@ backup_data
 !checkpoints/peg_REX_EXTRACT_saved_peg_0_i5_o5_s1_pd1_pa1_a0_e0_y0.10800*
 data/fixed_consistency_rollout.mat
 bagfiles
+dist
