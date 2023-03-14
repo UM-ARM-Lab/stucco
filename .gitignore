@@ -3,7 +3,6 @@ __pycache__
 .idea
 examples
 *.mp4
-*.png
 !urdf/**/*.png
 !meshes/**/*.png
 *.pyc
