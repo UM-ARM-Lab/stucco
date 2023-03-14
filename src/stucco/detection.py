@@ -4,13 +4,21 @@ import abc
 import typing
 from collections import deque
 
-import pytorch_kinematics.transforms as tf
-from arm_pytorch_utilities import math_utils, tensor_utils
+import pytorch_kinematics as pk
+import pytorch_volumetric as pv
+from arm_pytorch_utilities import math_utils, tensor_utils, linalg
 import numpy as np
 
 point = torch.tensor
 points = torch.tensor
 normals = torch.tensor
+
+
+class ContactPointScoring(typing.NamedTuple):
+    link_frame_pts: torch.Tensor
+    world_frame_pts: torch.Tensor
+    valid: torch.Tensor
+    error: torch.Tensor
 
 
 class ContactSensor:
@@ -40,6 +48,168 @@ class ContactSensor:
     @abc.abstractmethod
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
         """Return contact point in link frame that most likely explains the observed residual"""
+
+
+class ResidualContactSensor(ContactSensor):
+    """Contact sensor based on generalized momentum residual measurements only, in principle
+    following the Contact Particle Filter, except with densely sampled points without any iteration"""
+    INVALID_ERROR = 1e6
+
+    def __init__(self, surface_points, surface_normals, residual_precision, residual_threshold,
+                 max_friction_cone_angle=50 * math.pi / 180,
+                 dtype=torch.float, device='cpu'):
+        """
+        :param surface_points: N x 3 sampled points on the robot surface in link frame
+        :param surface_normals: N x 3 corresponding surface normals to the surface points, only necessary for
+        visualization
+        :param residual_precision: precision of the residual measurement
+        :param residual_threshold: contact threshold for residual^T sigma_meas^-1 residual to count as being in contact
+        :param max_friction_cone_angle: max angular difference (radian) from surface normal that a contact is possible
+        note that 90 degrees is the weakest assumption that the force is from a push and not a pull
+        """
+        self._cached_points = surface_points
+        self._cached_normals = surface_normals
+
+        self._residual_precision = residual_precision
+        self._residual_threshold = residual_threshold
+        self.max_friction_cone_angle = max_friction_cone_angle
+
+        super().__init__(dtype=dtype, device=device)
+
+    def observe_residual(self, residual):
+        self.in_contact = residual > self._residual_threshold
+
+    @tensor_utils.handle_batch_input
+    def force_at_point_to_wrench_at_measuring_frame(self, locations, q=None):
+        """Get J^T in the equation: wrench at end effector = J^T * wrench at contact point.
+        In general the Jacobian is dependent on configuration.
+
+        Locations are specified wrt the end effector frame."""
+
+        # consider the rotation of the frames to be the same as the measuring frame, so R is identity
+        # then we only need to consider the measured torque at the end effector
+        # the 3x3 skew symmetric matrix that transforms force at the locations to measured torque at the end effector
+        return torch.stack(
+            [torch.tensor([[0., -loc[2], loc[1]],
+                           [loc[2], 0., -loc[0]],
+                           [-loc[1], loc[0], 0.]], device=self.device,
+                          dtype=self.dtype) for loc in locations])
+
+    def score_contact_points(self, ee_force_torque, pose, q=None, visualizer=None):
+        """
+        :param ee_force_torque: 6D force torque at the end effector
+        :param pose: (pos, rot in xyzw unit quaternions) tuple of transform from link frame to world frame; multiple
+        poses can be given as a batch with stacked pos and rot inside the tuple
+        :param q: joint positions
+        :param visualizer: visualizer to draw the contact point
+        :return: contact point in link frame that most likely explains the observed residual
+        """
+        # 3D
+        link_frame_pts, pts, normals = self.sample_robot_surface_points(pose, visualizer=visualizer)
+        F_c = ee_force_torque[:, :3]
+        T_ee = ee_force_torque[:, 3:]
+
+        # TODO handle when a batch of poses is given
+        while True:
+            # reject points where force is sufficiently away from surface normal
+            from_normal = math_utils.angle_between(normals, -F_c)
+            valid = from_normal < self.max_friction_cone_angle
+            # validity has to hold across all experienced forces
+            valid = valid.all(dim=1)
+            # remove a single element of the constraint if we don't have any satisfying them
+            if valid.any():
+                break
+            else:
+                F_c = F_c[:-1]
+                T_ee = T_ee[:-1]
+
+        # no valid point
+        if F_c.numel() == 0:
+            return None
+
+        pts = pts[valid]
+        link_frame_pts = link_frame_pts[valid]
+
+        # transform pts using pose and pytorch_kinematics.Transform3d
+        link_to_world = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+        rel_pts = link_to_world.transform_points(link_frame_pts)
+        J = self.force_at_point_to_wrench_at_measuring_frame(rel_pts, q=q)
+
+        # assume no torques occur at the contact points and that force is directly transmuted
+        # so we only need to compare the torque produced by a contact at that point and the observed torque
+        # J_{r_c}^T F_c
+        expected_torque = J @ F_c.transpose(-1, -2)
+
+        # the below is the case for full residual; however we can shortcut since we only need to compare torque
+        # error = ee_force_torque - expected_residual
+        # combined_error = linalg.batch_quadratic_product(error, self.residual_precision)
+
+        error = expected_torque - T_ee
+        # only need the torque dimensions
+        combined_error = linalg.batch_quadratic_product(error, self._residual_precision[3:, 3:])
+        error[~valid] = self.INVALID_ERROR
+        return ContactPointScoring(link_frame_pts, pts, valid, combined_error)
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+        scoring = self.score_contact_points(ee_force_torque, pose, q=q, visualizer=visualizer)
+        # choose lowest error point as the most likely one to be in contact
+        min_err_i = torch.argmin(scoring.error, dim=-1)
+        return scoring.link_frame_pts[min_err_i]
+
+    def sample_robot_surface_points(self, pose, visualizer=None) -> typing.Tuple[points, points, normals]:
+        """Get points on the surface of the robot that could be possible contact locations
+        pose[0] and pose[1] are the position and orientation (xyzw unit quaternion) of the end effector, respectively.
+        Also return the correspnoding surface normals for each of the points.
+        """
+        if self._cached_points.dtype != self.dtype or self._cached_points.device != self.device:
+            self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
+            self._cached_normals = self._cached_normals.to(device=self.device, dtype=self.dtype)
+
+        # number of transforms corresponds to the number of poses
+        N = len(pose[0])
+        link_to_current_tf = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+        link_frame_pts = self._cached_points
+        if N > 1:
+            link_frame_pts = link_frame_pts.repeat(N, 1, 1)
+        pts = link_to_current_tf.transform_points(self._cached_points)
+        normals = link_to_current_tf.transform_normals(self._cached_normals)
+        if visualizer is not None:
+            for i, pt in enumerate(pts):
+                visualizer.draw_point(f't.{i}', pt, color=(1, 0, 0), height=pt[2])
+                visualizer.draw_2d_line(f'n.{i}', pt, normals[i], color=(0.5, 0, 0), size=2., scale=0.1)
+
+        return link_frame_pts, pts, normals
+
+
+class RobotResidualContactSensor(ResidualContactSensor):
+    """CPF with surface points densely sampled from a robot description file (URDF, SDF, MJCF, and so on)"""
+
+    def __init__(self, robot_sdf: pv.RobotSDF, residual_precision, residual_threshold,
+                 surface_point_resolution=0.001, max_num_points=1000,
+                 **kwargs):
+        query_range = robot_sdf.surface_bounding_box(0.05)
+        # M x 3 points
+        coords, pts = pv.get_coordinates_and_points_in_grid(surface_point_resolution, query_range,
+                                                            device=robot_sdf.device)
+        sdf_val, sdf_grad = robot_sdf(pts)
+
+        surface = sdf_val.abs() < (surface_point_resolution / 2)
+
+        surface_pts = pts[surface]
+        surface_normals = sdf_grad[surface]
+
+        # sample at most max_num_points points
+        if surface_pts.shape[0] > max_num_points:
+            take_pts = torch.randperm(surface_pts.shape[0])[:max_num_points]
+            surface_pts = surface_pts[take_pts]
+            surface_normals = surface_normals[take_pts]
+
+        super().__init__(surface_pts, surface_normals,
+                         residual_precision,
+                         residual_threshold,
+                         dtype=robot_sdf.dtype, device=robot_sdf.device, **kwargs)
 
 
 class ResidualPlanarContactSensor(ContactSensor):
@@ -142,7 +312,7 @@ class ResidualPlanarContactSensor(ContactSensor):
             self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
             self._cached_normals = self._cached_normals.to(device=self.device, dtype=self.dtype)
 
-        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(
+        link_to_current_tf = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
             tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
         pts = link_to_current_tf.transform_points(self._cached_points)
         normals = link_to_current_tf.transform_normals(self._cached_normals)
@@ -283,6 +453,6 @@ class ContactDetector:
         if last_contact_point is None:
             return None, None
 
-        link_to_current_tf = tf.Transform3d(pos=pose[0], rot=tf.xyzw_to_wxyz(torch.tensor(pose[1])),
+        link_to_current_tf = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(torch.tensor(pose[1])),
                                             dtype=self.dtype, device=self.device)
         return link_to_current_tf.transform_points(last_contact_point), dx
