@@ -184,7 +184,8 @@ class ResidualContactSensor(ContactSensor):
 
 
 class RobotResidualContactSensor(ResidualContactSensor):
-    """CPF with surface points densely sampled from a robot description file (URDF, SDF, MJCF, and so on)"""
+    """CPF with surface points densely sampled from a robot description file (URDF, SDF, MJCF, and so on)
+    This assumes the measuring frame is at the object origin."""
 
     def __init__(self, robot_sdf: pv.RobotSDF, residual_precision, residual_threshold,
                  surface_point_resolution=0.002, max_num_points=1000,
@@ -194,6 +195,7 @@ class RobotResidualContactSensor(ResidualContactSensor):
         coords, pts = pv.get_coordinates_and_points_in_grid(surface_point_resolution, query_range,
                                                             device=robot_sdf.device)
         sdf_val, sdf_grad = robot_sdf(pts)
+        # TODO take a measuring frame name in then transform the points to be relative to the measuring frame
 
         # have to be outside surface within a small margin
         surface = (sdf_val < surface_point_resolution) & (sdf_val >= 0)
