@@ -97,7 +97,7 @@ class ResidualContactSensor(ContactSensor):
 
     def score_contact_points(self, ee_force_torque, pose, q=None, visualizer=None):
         """
-        :param ee_force_torque: 6D force torque at the end effector
+        :param ee_force_torque: 6D force torque at the end effector represented in the end effector frame
         :param pose: (pos, rot in xyzw unit quaternions) tuple of transform from link frame to world frame; multiple
         poses can be given as a batch with stacked pos and rot inside the tuple
         :param q: joint positions
@@ -106,26 +106,34 @@ class ResidualContactSensor(ContactSensor):
         """
         # 3D
         link_frame_pts, pts, normals = self.sample_robot_surface_points(pose, visualizer=visualizer)
+        # reshape link_frame_pts, pts, normals to be 2D
+        # link_frame_pts = link_frame_pts.reshape(-1, 3)
+        # pts = pts.reshape(-1, 3)
+        # normals = normals.reshape(-1, 3)
         F_c = ee_force_torque[:, :3]
         T_ee = ee_force_torque[:, 3:]
+       
 
         # TODO handle when a batch of poses is given
         while True:
             # reject points where force is sufficiently away from surface normal
-            from_normal = math_utils.angle_between(normals, -F_c)
+            from_normal = math_utils.angle_between(normals, -F_c)   
+
             valid = from_normal < self.max_friction_cone_angle
             # validity has to hold across all experienced forces
             valid = valid.all(dim=1)
+
             # remove a single element of the constraint if we don't have any satisfying them
             if valid.any():
                 break
+
             else:
                 F_c = F_c[:-1]
                 T_ee = T_ee[:-1]
 
-        # no valid point
-        if F_c.numel() == 0:
-            return None
+            # no valid point
+            if F_c.numel() == 0:
+                return None
 
         pts = pts[valid]
         link_frame_pts = link_frame_pts[valid]
@@ -133,6 +141,7 @@ class ResidualContactSensor(ContactSensor):
         # transform pts using pose and pytorch_kinematics.Transform3d
         link_to_world = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
             tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+
         rel_pts = link_to_world.transform_points(link_frame_pts)
         J = self.force_at_point_to_wrench_at_measuring_frame(rel_pts, q=q)
 
@@ -145,10 +154,19 @@ class ResidualContactSensor(ContactSensor):
         # error = ee_force_torque - expected_residual
         # combined_error = linalg.batch_quadratic_product(error, self.residual_precision)
 
-        error = expected_torque - T_ee
+        error = expected_torque - T_ee.unsqueeze(-1)
+        # import pdb; pdb.set_trace()
+        # reshape error to be 2D for batch_quadratic_product
+        batch_shape = error.shape
+        error = error.reshape(-1, 3)
+        
         # only need the torque dimensions
-        combined_error = linalg.batch_quadratic_product(error, self._residual_precision[3:, 3:])
-        error[~valid] = self.INVALID_ERROR
+        combined_error = linalg.batch_quadratic_product(error, torch.tensor(self._residual_precision[3:, 3:], device=self.device, dtype=self.dtype))
+        # reshape back to 3D
+        combined_error = combined_error.reshape(batch_shape[0], batch_shape[-1])
+
+        # error[~valid] = self.INVALID_ERROR
+        # error[valid] = combined_error
         return ContactPointScoring(link_frame_pts, pts, valid, combined_error)
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
@@ -165,6 +183,7 @@ class ResidualContactSensor(ContactSensor):
         if self._cached_points.dtype != self.dtype or self._cached_points.device != self.device:
             self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
             self._cached_normals = self._cached_normals.to(device=self.device, dtype=self.dtype)
+    
 
         # number of transforms corresponds to the number of poses
         N = len(pose[0])
