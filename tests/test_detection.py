@@ -7,6 +7,8 @@ from pytorch_seed import seed
 import matplotlib.pyplot as plt
 import open3d as o3d
 import logging
+from pytorch_kinematics.transforms.transform3d import _broadcast_bmm
+
 
 from pytorch_volumetric.visualization import get_transformed_meshes
 from stucco import detection
@@ -24,20 +26,20 @@ TEST_DIR = os.path.dirname(__file__)
 def test_3d_contact_detection():
     visualize = True
     first_rotate = False
-    seed(1)
+    seed(181)
 
-    def rotate_view(vis):
+    def rotate_view(vis, speed = 0.0):
         nonlocal first_rotate
         ctr = vis.get_view_control()
         if first_rotate is False:
             ctr.rotate(0.0, -540.0)
             first_rotate = True
-        ctr.rotate(5.0, 0.0)
+        ctr.rotate(speed, 0.0)
         return False
 
-    def draw_mesh(robot_sdf, world_to_obj_tsf=None, positions=None, normals=None, errors=None, positions_gt=None, normals_gt=None):
+    def draw_mesh(robot_sdf, world_to_obj_tsf=None, positions=None, normals=None, errors=None, positions_gt=None, normals_gt=None, force = None):
         # visualize the robot in object frame and the cached surface points
-        obj_meshes = get_transformed_meshes(robot_sdf, world_to_obj_tsf)
+        obj_meshes = get_transformed_meshes(robot_sdf, world_to_obj_tsf)    # get the meshes of each link of the robot, transformed to the world frame
 
         # draw the surface points using PointCloud
         pc = o3d.geometry.PointCloud()
@@ -54,9 +56,6 @@ def test_3d_contact_detection():
             # plot the points with color
             pc.colors = o3d.utility.Vector3dVector(colors.cpu())
 
-
-
-
         # also draw the surface normals using LineSet
         length = 0.01
         end_points = positions + normals * length
@@ -69,14 +68,24 @@ def test_3d_contact_detection():
         )
         normals.paint_uniform_color([1, 0, 0])
 
+
+
         if positions_gt is not None:
             pc_gt = o3d.geometry.PointCloud()
             pc_gt.points = o3d.utility.Vector3dVector(positions_gt.cpu())
             pc_gt.paint_uniform_color([0, 0, 1])
             # size of the points
+            if force is not None:
+                # draw the force vector, at the gt position
+                # force should be a 3d vector, in measurement frame from pc_gt
+                force_line = o3d.geometry.LineSet(
+                    points=o3d.utility.Vector3dVector(torch.cat([positions_gt, positions_gt + force], dim=0).cpu()),
+                    lines=o3d.utility.Vector2iVector(torch.tensor([[0, 1]]).cpu())
+                )
+            
 
             obj_meshes.append(pc_gt)
-            geometries = obj_meshes + [pc, normals] + [pc_gt]
+            geometries = obj_meshes + [pc, normals] + [pc_gt, force_line]
         else:
             geometries = obj_meshes + [pc, normals]
 
@@ -106,52 +115,91 @@ def test_3d_contact_detection():
     positions = sensor._cached_points
     normals = sensor._cached_normals
 
-    if visualize:
-        draw_mesh(s, positions=positions, normals=normals)
+    # in the object frame
+    # if visualize:
+    #     draw_mesh(s, positions=positions, normals=normals)
 
-    # random pose
+    # random pose of the object in the world frame
     pos = torch.randn(3, device=d)
     rot = pk.random_rotation(device=d)
     gt_tf = pk.Transform3d(pos=pos, rot=rot, device=d)
     positions_world = gt_tf.transform_points(positions)
     normals_world = gt_tf.transform_normals(normals)
     
-    if visualize:
-        draw_mesh(s, world_to_obj_tsf=gt_tf, positions=positions_world, normals=normals_world)
+    # visualize the robot in world frame
+    # if visualize:
+    #     draw_mesh(s, world_to_obj_tsf=gt_tf, positions=positions_world, normals=normals_world)
 
     # choose a random point on the surface to make contact
     idx = torch.randint(0, len(positions_world), (1,)).item()
     # force direction has to be into the surface (negative dot product with surface normal)
     force_mag = 2
-    force = -normals_world[idx] * force_mag
-    import pdb; pdb.set_trace()
-    print(force.shape)
+    force_in_world = -normals_world[idx] * force_mag # force in world frame
+    # import pdb; pdb.set_trace()
     # assume the measuring frame is the robot origin
-    torque = torch.cross(positions_world[idx], force)
+    # import pdb; pdb.set_trace()
+    torque_in_world = torch.cross(positions_world[idx], force_in_world)
+    # concat the force and torque into a 6d vector in world frame
+    EE_W = torch.cat([force_in_world, torque_in_world], dim=0)
+    print('EE_W', EE_W)
     # transform the force and torque into the measurement frame (end effector frame)
-    force = gt_tf.inverse().transform_normals(force.unsqueeze(0))
-    torque = gt_tf.inverse().transform_normals(torque.unsqueeze(0))
+    EE_FT = transform_wrenches(gt_tf.inverse(),EE_W.unsqueeze(0))
+    # import pdb; pdb.set_trace()
 
-    EE_FT = torch.cat([force, torque], dim=0)
     EE_FT = EE_FT.reshape(1,6)
+
     pos = pos.unsqueeze(0)
     # rot to quat
-    rot = pk.matrix_to_quaternion(rot)
+    rot = pk.matrix_to_quaternion(rot)  # wxyz
     rot = rot.unsqueeze(0)
-    rot = pk.wxyz_to_xyzw(rot)
+    rot = pk.wxyz_to_xyzw(rot)  # xyzw
     # TODO feed force and torque into the contact detector
     score = sensor.score_contact_points(EE_FT, [pos, rot])
-    score.link_frame_pts
-    score.world_frame_pts
-    score.valid
-    score.error
+    # find lowest score.error idx:
+    lowest_error_idx = torch.argmin(score.error)
+    print('idx', idx)
+    print('lowest_error_idx', lowest_error_idx)
+    print(pos)
+    print(score.world_frame_pts[lowest_error_idx,:])
+    # import pdb; pdb.set_trace()
     # TODO score the surface points in terms of explaining the measured resdiual
     # TODO visualize the surface point scores with color indicating their score
     # import pdb; pdb.set_trace()
     if visualize:
 
-        draw_mesh(s, world_to_obj_tsf=gt_tf, positions=positions_world[score.valid], normals=normals_world[score.valid], errors=score.error, positions_gt=positions_world[idx].unsqueeze(0), normals_gt=normals_world[idx].unsqueeze(0))
+        draw_mesh(s, world_to_obj_tsf=gt_tf, positions=positions_world[score.valid], normals=normals_world[score.valid], errors=score.error, positions_gt=positions_world[idx].unsqueeze(0), normals_gt=normals_world[idx].unsqueeze(0), force = force_in_world/5)
 
+
+def transform_wrenches(transform, wrenches):
+        """
+        Use this transform to transform a set of wrench vectors.
+
+        Args:
+            wrenches: Tensor of shape (P, 6) or (N, P, 6)
+
+        Returns:
+            wrenches_out: Tensor of shape (P, 6) or (N, P, 6) depending
+            on the dimensions of the transform
+        """
+        ## TODO: check with the book, about the direction and order of the cross product
+        if wrenches.dim() not in [2, 3]:
+            msg = "Expected wrenches to have dim = 2 or dim = 3: got shape %r"
+            raise ValueError(msg % (wrenches.shape,))
+        composed_matrix = transform.get_matrix()
+        mat = composed_matrix[:, :3, :3]    # rotation matrix
+        vec = composed_matrix[:, :3, 3:]    # translation vector
+        # cross product as a matrix operator
+        mat_cross = torch.stack([torch.tensor([[0., -loc[2], loc[1]], [loc[2], 0., -loc[0]], [-loc[1], loc[0], 0.]], device=transform.device, dtype=transform.dtype) for loc in vec])
+        # adjoint matrix
+        mat_adjoint = torch.cat([torch.cat([mat, torch.bmm(mat_cross, mat)], dim=2), torch.cat([torch.zeros_like(mat), mat], dim=2)], dim=1)
+        wrenches = wrenches.unsqueeze(2)
+       
+        wrenches_out = _broadcast_bmm(mat_adjoint, wrenches)
+
+        if wrenches_out.shape[0] == 1 and wrenches.dim() == 2:
+            wrenches_out = wrenches_out.reshape(wrenches.shape)
+        
+        return wrenches_out
 
 if __name__ == "__main__":
     test_3d_contact_detection()

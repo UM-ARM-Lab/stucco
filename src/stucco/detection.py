@@ -9,6 +9,8 @@ import pytorch_volumetric as pv
 from arm_pytorch_utilities import math_utils, tensor_utils, linalg
 import numpy as np
 
+from pytorch_kinematics.transforms.transform3d import _broadcast_bmm
+
 point = torch.tensor
 points = torch.tensor
 normals = torch.tensor
@@ -94,6 +96,40 @@ class ResidualContactSensor(ContactSensor):
                            [loc[2], 0., -loc[0]],
                            [-loc[1], loc[0], 0.]], device=self.device,
                           dtype=self.dtype) for loc in locations])
+    
+    def transform_wrenches(self, transform, wrenches):
+        """
+        Use this transform to transform a set of wrench vectors.
+
+        Args:
+            transform: Transform3d object
+            wrenches: Tensor of shape (P, 6) or (N, P, 6)
+
+        Returns:
+            wrenches_out: Tensor of shape (P, 6) or (N, P, 6) depending
+            on the dimensions of the transform
+        """
+        ## TODO: check with the book, about the direction and order of the cross product
+        if wrenches.dim() not in [2, 3]:
+            msg = "Expected wrenches to have dim = 2 or dim = 3: got shape %r"
+            raise ValueError(msg % (wrenches.shape,))
+        composed_matrix = transform.get_matrix()
+        mat = composed_matrix[:, :3, :3]    # rotation matrix
+        vec = composed_matrix[:, :3, 3:]    # translation vector
+        # cross product as a matrix operator
+        mat_cross = torch.stack([torch.tensor([[0., -loc[2], loc[1]],
+                                               [loc[2], 0., -loc[0]], 
+                                               [-loc[1], loc[0], 0.]], device=transform.device, dtype=transform.dtype) for loc in vec])
+        # adjoint matrix
+        mat_adjoint = torch.cat([torch.cat([mat, torch.bmm(mat_cross, mat)], dim=2), torch.cat([torch.zeros_like(mat), mat], dim=2)], dim=1)
+        wrenches = wrenches.unsqueeze(2)
+       
+        wrenches_out = _broadcast_bmm(mat_adjoint, wrenches)
+
+        if wrenches_out.shape[0] == 1 and wrenches.dim() == 2:
+            wrenches_out = wrenches_out.reshape(wrenches.shape)
+        
+        return wrenches_out
 
     def score_contact_points(self, ee_force_torque, pose, q=None, visualizer=None):
         """
@@ -105,19 +141,24 @@ class ResidualContactSensor(ContactSensor):
         :return: contact point in link frame that most likely explains the observed residual
         """
         # 3D
+        # normals should be in the end effector frame
         link_frame_pts, pts, normals = self.sample_robot_surface_points(pose, visualizer=visualizer)
         # reshape link_frame_pts, pts, normals to be 2D
         # link_frame_pts = link_frame_pts.reshape(-1, 3)
         # pts = pts.reshape(-1, 3)
         # normals = normals.reshape(-1, 3)
-        F_c = ee_force_torque[:, :3]
+        # ge the normals in the end effector frame
+        # wrenches in the end effector frame
+        F_c_ee = ee_force_torque[:, :3]
         T_ee = ee_force_torque[:, 3:]
+        
+        # import pdb; pdb.set_trace()
        
 
         # TODO handle when a batch of poses is given
         while True:
             # reject points where force is sufficiently away from surface normal
-            from_normal = math_utils.angle_between(normals, -F_c)   
+            from_normal = math_utils.angle_between(normals, -F_c_ee)   
 
             valid = from_normal < self.max_friction_cone_angle
             # validity has to hold across all experienced forces
@@ -128,33 +169,38 @@ class ResidualContactSensor(ContactSensor):
                 break
 
             else:
-                F_c = F_c[:-1]
+                F_c_ee = F_c_ee[:-1]
                 T_ee = T_ee[:-1]
 
             # no valid point
-            if F_c.numel() == 0:
+            if F_c_ee.numel() == 0:
                 return None
 
-        pts = pts[valid]
-        link_frame_pts = link_frame_pts[valid]
+        pts = pts[valid]    # valid points in the world frame
+        link_frame_pts = link_frame_pts[valid]  # valid points in the end effector frame
 
         # transform pts using pose and pytorch_kinematics.Transform3d
         link_to_world = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
             tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
 
-        rel_pts = link_to_world.transform_points(link_frame_pts)
+        rel_pts = link_to_world.transform_points(link_frame_pts)    # the same wih pts? poses in world frame
         J = self.force_at_point_to_wrench_at_measuring_frame(rel_pts, q=q)
 
         # assume no torques occur at the contact points and that force is directly transmuted
         # so we only need to compare the torque produced by a contact at that point and the observed torque
         # J_{r_c}^T F_c
-        expected_torque = J @ F_c.transpose(-1, -2)
+        W_c_w = self.transform_wrenches(link_to_world, ee_force_torque)
+        # force in the world frame
+        F_c_w = W_c_w[:, :3].squeeze(-1)
+        T_c_w = W_c_w[:, 3:].squeeze(-1)
+        # import pdb; pdb.set_trace()
+        expected_torque = J @ F_c_w.transpose(-1, -2)
 
         # the below is the case for full residual; however we can shortcut since we only need to compare torque
         # error = ee_force_torque - expected_residual
         # combined_error = linalg.batch_quadratic_product(error, self.residual_precision)
 
-        error = expected_torque - T_ee.unsqueeze(-1)
+        error = expected_torque - T_c_w.unsqueeze(-1)
         # import pdb; pdb.set_trace()
         # reshape error to be 2D for batch_quadratic_product
         batch_shape = error.shape
@@ -178,7 +224,7 @@ class ResidualContactSensor(ContactSensor):
     def sample_robot_surface_points(self, pose, visualizer=None) -> typing.Tuple[points, points, normals]:
         """Get points on the surface of the robot that could be possible contact locations
         pose[0] and pose[1] are the position and orientation (xyzw unit quaternion) of the end effector, respectively.
-        Also return the correspnoding surface normals for each of the points.
+        Also return the corresponding surface normals for each of the points.
         """
         if self._cached_points.dtype != self.dtype or self._cached_points.device != self.device:
             self._cached_points = self._cached_points.to(device=self.device, dtype=self.dtype)
@@ -193,7 +239,8 @@ class ResidualContactSensor(ContactSensor):
         if N > 1:
             link_frame_pts = link_frame_pts.repeat(N, 1, 1)
         pts = link_to_current_tf.transform_points(self._cached_points)
-        normals = link_to_current_tf.transform_normals(self._cached_normals)
+        # normals = link_to_current_tf.transform_normals(self._cached_normals)
+        normals = self._cached_normals
         if visualizer is not None:
             for i, pt in enumerate(pts):
                 visualizer.draw_point(f't.{i}', pt, color=(1, 0, 0), height=pt[2])
