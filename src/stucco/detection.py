@@ -148,7 +148,7 @@ class ResidualContactSensor(ContactSensor):
         error = expected_torque - T_ee
         # only need the torque dimensions
         combined_error = linalg.batch_quadratic_product(error, self._residual_precision[3:, 3:])
-        error[~valid] = self.INVALID_ERROR
+        combined_error[~valid] = self.INVALID_ERROR
         return ContactPointScoring(link_frame_pts, pts, valid, combined_error)
 
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
@@ -250,8 +250,9 @@ class ResidualPlanarContactSensor(ContactSensor):
             [torch.tensor([[1., 0.], [0., 1.], [-loc[1], loc[0]]], device=self.device, dtype=self.dtype) for loc in
              locations])
 
-    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+    def score_contact_points(self, ee_force_torque, pose, q=None, visualizer=None):
         # 2D
+        # sample them in the world frame (transformed by pose)
         link_frame_pts, pts, normals = self.sample_robot_surface_points(pose, visualizer=visualizer)
         F_c = ee_force_torque[:, :2]
         T_ee = ee_force_torque[:, -1]
@@ -276,9 +277,15 @@ class ResidualPlanarContactSensor(ContactSensor):
         pts = pts[valid]
         link_frame_pts = link_frame_pts[valid]
 
+        # points relative to end effector origin
+        link_to_world = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(
+            tensor_utils.ensure_tensor(self.device, self.dtype, pose[1])), dtype=self.dtype, device=self.device)
+        origin = link_to_world.transform_points(torch.zeros(1, 3, device=self.device, dtype=self.dtype))
+        rel_pts = pts - origin
+
         # NOTE: if our system is able to rotate, would have to transform points by rotation too
         # get relative to end effector origin
-        rel_pts = pts - pose[0]
+        # rel_pts = pts - pose[0]
         J = self.get_jacobian(rel_pts, q=q)
         # J_{r_c}^T F_c
         expected_residual = J @ F_c.transpose(-1, -2)
@@ -291,20 +298,28 @@ class ResidualPlanarContactSensor(ContactSensor):
         # don't have to worry about normalization since it's just the torque dimension
         combined_error = error.abs().sum(dim=1)
 
-        min_err_i = torch.argmin(combined_error)
+        return ContactPointScoring(link_frame_pts, pts, valid, combined_error)
+
+    def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
+        scoring = self.score_contact_points(ee_force_torque, pose, q=q, visualizer=visualizer)
+        if scoring is None:
+            return None
+
+        min_err_i = torch.argmin(scoring.error)
 
         if visualizer is not None:
             # also draw some other likely points
-            likely_pt_index = torch.argsort(combined_error)
-            for i in reversed(range(1, min(10, len(pts)))):
-                pt = pts[likely_pt_index[i]]
+            likely_pt_index = torch.argsort(scoring.error)
+            for i in reversed(range(1, min(10, len(scoring.world_frame_pts)))):
+                pt = scoring.world_frame_pts[likely_pt_index[i]]
                 visualizer.draw_point(f'likely.{i}', pt, height=pt[2] + 0.001,
                                       color=(0, 1 - 0.8 * i / 10, 0))
-            visualizer.draw_point(f'most likely contact', pts[min_err_i], color=(0, 1, 0), scale=2)
-            visualizer.draw_2d_line('reaction', pts[min_err_i], ee_force_torque.mean(dim=0)[:3], color=(0, 0.2, 1.0),
+            visualizer.draw_point(f'most likely contact', scoring.world_frame_pts[min_err_i], color=(0, 1, 0), scale=2)
+            visualizer.draw_2d_line('reaction', scoring.world_frame_pts[min_err_i], ee_force_torque.mean(dim=0)[:3],
+                                    color=(0, 0.2, 1.0),
                                     scale=0.2)
 
-        return link_frame_pts[min_err_i]
+        return scoring.link_frame_pts[min_err_i]
 
     def sample_robot_surface_points(self, pose, visualizer=None) -> typing.Tuple[points, points, normals]:
         """Get points on the surface of the robot that could be possible contact locations
@@ -333,7 +348,8 @@ class ContactDetector:
 
     We additionally assume access to force torque sensors at the end effector, which is our residual."""
 
-    def __init__(self, residual_precision, window_size=5, dtype=torch.float, device='cpu'):
+    def __init__(self, residual_precision, window_size=50, require_number_of_contacts_in_window=10, dtype=torch.float,
+                 device='cpu'):
         """
         :param residual_precision: sigma_meas^-1 matrix that scales the different residual dimensions based on their
         expected precision
@@ -342,6 +358,7 @@ class ContactDetector:
         self.residual_precision = residual_precision
         self.observation_history = deque(maxlen=500)
         self._window_size = window_size
+        self._num_contact_in_window = require_number_of_contacts_in_window
         self.dtype = dtype
         self.device = device
 
@@ -395,8 +412,12 @@ class ContactDetector:
     def isolate_contact(self, ee_force_torque, pose, q=None, visualizer=None):
         """Return contact points in link frame that most likely explains the observed residual,
         and the change in config associated with that contact"""
-        pts = torch.stack(
-            [sensor.isolate_contact(ee_force_torque, pose, q=q, visualizer=visualizer) for sensor in self.sensors])
+        contacts = [sensor.isolate_contact(ee_force_torque, pose, q=q, visualizer=visualizer) for sensor in
+                    self.sensors]
+        # TODO hack for demo only 1 sensor
+        if contacts[0] is None:
+            return None, None
+        pts = torch.stack(contacts)
         dx = torch.stack([sensor.get_dx() for sensor in self.sensors])
         return pts, dx
 
@@ -421,14 +442,16 @@ class ContactDetector:
 
         # allow for being in contact anytime within the latest window
         start_i = -1
+        num_contacts = 0
         for i in range(0, min(len(self.observation_history), self._window_size)):
             in_contact, ee_force_torque, prev_pose = self.observation_history[-1 - i]
             if in_contact:
                 if pose is None:
                     pose = prev_pose
-                break
+                num_contacts += 1
             start_i -= 1
-        else:
+
+        if num_contacts < self._num_contact_in_window:
             return None, None
 
         # use history of points to handle jitter
@@ -456,6 +479,6 @@ class ContactDetector:
         if last_contact_point is None:
             return None, None
 
-        link_to_current_tf = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(torch.tensor(pose[1])),
-                                            dtype=self.dtype, device=self.device)
+        link_to_current_tf = pk.Transform3d(pos=pose[0], rot=pk.xyzw_to_wxyz(torch.tensor(pose[1]))).to(
+            device=self.device, dtype=self.dtype)
         return link_to_current_tf.transform_points(last_contact_point), dx
