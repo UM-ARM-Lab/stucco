@@ -348,7 +348,7 @@ class ContactDetector:
 
     We additionally assume access to force torque sensors at the end effector, which is our residual."""
 
-    def __init__(self, residual_precision, window_size=50, require_number_of_contacts_in_window=10, dtype=torch.float,
+    def __init__(self, residual_precision, window_size=50, require_number_of_contacts_in_window=2, dtype=torch.float,
                  device='cpu'):
         """
         :param residual_precision: sigma_meas^-1 matrix that scales the different residual dimensions based on their
@@ -414,8 +414,9 @@ class ContactDetector:
         and the change in config associated with that contact"""
         contacts = [sensor.isolate_contact(ee_force_torque, pose, q=q, visualizer=visualizer) for sensor in
                     self.sensors]
-        # TODO hack for demo only 1 sensor
-        if contacts[0] is None:
+        # remove None from individual sensors
+        contacts = [c for c in contacts if c is not None]
+        if len(contacts) == 0:
             return None, None
         pts = torch.stack(contacts)
         dx = torch.stack([sensor.get_dx() for sensor in self.sensors])
