@@ -1,6 +1,6 @@
 [project]
 name = "stucco"
-version = "1.2.0"
+version = "1.2.1"
 description = "Soft Tracking Using Contacts for Cluttered Objects"
 readme = "README.md" # Optional
 
@@ -54,7 +54,7 @@ classifiers = [# Optional
 dependencies = [# Optional
     'torch',
     'numpy',
-    'arm-pytorch-utilities',
+    'arm-pytorch-utilities>=0.4',
     'pytorch-kinematics',
     'pytorch-volumetric',
 ]

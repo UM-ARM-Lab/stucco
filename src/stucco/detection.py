@@ -79,7 +79,7 @@ class ResidualContactSensor(ContactSensor):
     def observe_residual(self, residual):
         self.in_contact = residual > self._residual_threshold
 
-    @tensor_utils.handle_batch_input
+    @tensor_utils.handle_batch_input(n=2)
     def force_at_point_to_wrench_at_measuring_frame(self, locations, q=None):
         """Get J^T in the equation: wrench at end effector = J^T * wrench at contact point.
         In general the Jacobian is dependent on configuration.
